@@ -102,6 +102,7 @@ BASE_JUDGE_PROMPT = """你是群聊机器人决策系统，判断机器人是否
 机器人名字：{bot_name}
 机器人别名：{bot_aliases}
 如果当前消息包含这些名字或别名，说明群友是在叫机器人，不是叫其他群友；relevance、continuity 必须给高分。
+{lover_hint}
 
 ## ⚠️ 最高优先级：关注机器人自己的发言
 对话历史（contexts）中，role 为 assistant 的消息是【机器人自己】之前说的话，role 为 user 的消息是群友说的话（带 [昵称] 前缀）。
@@ -738,7 +739,11 @@ class HeartflowEngine:
             logger.info("[心流] 身份：名字=%s | 别名=%s" % (self.bot_name or "未设置", "、".join(self.bot_aliases) or "无"))
 
     #: 恋人之间才用的爱称：只有发件人确实是恋人时才算「在叫你」（群里别人喊老婆不算）
-    LOVER_CALL_WORDS = ("老婆", "媳妇", "宝宝", "宝贝", "亲爱的", "老公", "先生")
+    LOVER_CALL_WORDS = ("老婆", "老婆子", "老婆大人", "媳妇", "媳妇儿", "婆娘", "宝宝", "宝贝",
+                        "亲爱的", "亲亲", "心肝", "乖乖", "憨憨", "小傻瓜", "傻宝", "阿宝",
+                        "老公", "先生", "对象")
+    #: 单字爱称单独放：只在整句很短或作为称呼出现时才算，避免「淘宝/支付宝」误命中
+    LOVER_SHORT_WORDS = ("宝", "乖", "猪", "臭宝")
 
     def _lover_calls_bot(self, event) -> str:
         """发件人是你的恋人，又用了爱称 → 这条就是对你说的。"""
@@ -747,11 +752,34 @@ class HeartflowEngine:
                 return ""
         except Exception:
             return ""
-        text = str(getattr(event, "message_str", "") or "")
+        text = str(getattr(event, "message_str", "") or "").strip()
+        if not text:
+            return ""
         for word in self.LOVER_CALL_WORDS:
             if word and word in text:
                 return word
+        short = re.sub(r"[\s，。！？!?、；;：:,.~～…\-]+", "", text)
+        for word in self.LOVER_SHORT_WORDS:
+            if word and word in short:
+                # 整句很短（「宝」「臭宝，过来」）或这个词出现在句首/句尾的称呼位置
+                if len(short) <= 8 or text.startswith(word) or text.rstrip("，。！？!?~～…").endswith(word):
+                    return word
         return ""
+
+    def _lover_hint(self, event) -> str:
+        """给裁决模型的「说话的人是你恋人」提示；不是恋人时返回空串。"""
+        try:
+            if not getattr(event, "amo_sender_is_lover", False):
+                return ""
+        except Exception:
+            return ""
+        return (
+            "\n## 说话的人是你恋人\n"
+            "这条消息是【你的恋人】说的（你们是相恋关系）。他管你叫 宝 / 憨憨 / 老婆 / 宝贝 / 亲爱的 "
+            "这类爱称时，就是在叫你，不是别人；他单纯跟你撒娇、说情话、嗔你一句、喊你一声，"
+            "也算在跟你说话——这种消息 target 必须是 bot、should_reply 必须是 true，"
+            "不要判成 other / unknown，也不要因为「没点名」就沉默。\n"
+        )
 
     def _addresses_bot(self, text: str) -> str:
         normalized = re.sub(r"[\s，。！？!?、；;：:,.~～…\-]+", "", str(text or "")).lower()
@@ -1557,6 +1585,7 @@ class HeartflowEngine:
             message_marks=self._current_message_marks(event),
             bot_name=self.bot_name or "机器人",
             bot_aliases="、".join(self.bot_aliases) or "无",
+            lover_hint=self._lover_hint(event),
             scoring_rules=scoring_rules,
             threshold=dynamic_threshold,
             reasoning_part=reasoning_part,
@@ -1706,6 +1735,7 @@ class HeartflowEngine:
 机器人名字：{self.bot_name or "机器人"}
 机器人别名：{"、".join(self.bot_aliases) or "无"}
 如果当前消息包含这些名字或别名，就是在叫机器人，不是叫其他群友。
+{lover_hint}
 
 ## ⚠️ 最高优先级：追踪机器人自己的发言
 对话历史（contexts）中，role 为 assistant 的消息是【机器人自己】之前说的话，role 为 user 的消息是群友说的话（带 [昵称] 前缀）。
