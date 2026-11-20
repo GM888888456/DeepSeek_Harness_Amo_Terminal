@@ -1,0 +1,15 @@
+{
+  "metadata": {
+    "display_name": "DeepSeek Harness Amo Terminal"
+  },
+  "views": {
+    "dashboard": {
+      "title": "我想永远陪着你-终端"
+    }
+  },
+  "pages": {
+    "dashboard": {
+      "title": "我想永远陪着你-终端"
+    }
+  }
+}
