@@ -544,9 +544,9 @@ except ImportError:  # pragma: no cover
         _mem_prepare = None
         _mem_commit = None
 try:
-    from ..text_clean import has_tool_markup, strip_pseudo_tags
+    from ..text_clean import has_tool_markup, strip_pseudo_tags, strip_tool_markup
 except ImportError:  # 直接按文件加载时
-    from text_clean import has_tool_markup, strip_pseudo_tags
+    from text_clean import has_tool_markup, strip_pseudo_tags, strip_tool_markup
 try:
     from ..guard_bridge import process_reply_text as _guard_process_reply
 except Exception:

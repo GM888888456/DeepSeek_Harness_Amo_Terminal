@@ -2384,9 +2384,25 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 text = _clean_text
                 _at_keep = [comp for comp in result.chain if isinstance(comp, Comp.At)]
                 result.chain = _at_keep + ([Comp.Plain(text)] if text else [])
-            if not text.strip() or has_tool_markup(text):
-                logger.warning("[amo] 清洗后仍只剩代码标记，整条不发：%s"
-                               % truncate(text, 80))
+            if has_tool_markup(text):
+                # 只有「剥完还剩人话」才继续发。以前只要命中标记就把整条丢掉，
+                # 2026-11-20 19:11 把一句正常的「？有没有影响？」也吞了。
+                try:
+                    _rest = strip_tool_markup(text).strip()
+                except Exception:
+                    _rest = ""
+                if _rest and re.search(r"[\u4e00-\u9fffA-Za-z0-9]", _rest):
+                    logger.info("[amo] 剥掉残留工具标记后继续发：%s" % truncate(_rest, 60))
+                    text = _rest
+                    _at_keep = [comp for comp in result.chain if isinstance(comp, Comp.At)]
+                    result.chain = _at_keep + ([Comp.Plain(text)] if text else [])
+                else:
+                    logger.warning("[amo] 清洗后仍只剩代码标记，整条不发：%r"
+                                   % truncate(text, 80))
+                    result.chain = []
+                    return
+            if not text.strip():
+                logger.warning("[amo] 清洗后是空的，整条不发")
                 result.chain = []
                 return
             try:

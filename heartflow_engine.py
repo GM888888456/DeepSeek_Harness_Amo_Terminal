@@ -1756,6 +1756,7 @@ class HeartflowEngine:
         immersive_reasoning_part = ', "reasoning": "简短原因"' if self.judge_include_reasoning else ""
         contexts = self._build_optimized_contexts(self._get_raw_history_for_context(event))
         
+        lover_hint = self._lover_hint(event)
         judge_prompt = f"""
 ## 机器人身份
 机器人名字：{self.bot_name or "机器人"}
