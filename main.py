@@ -14038,6 +14038,7 @@ class HumanCorePlugin(Star):
     async def _tick(self):
         if not self._ready or self.state is None:
             return
+        started_at = now_ts()
         # 数据插件可能在陪伴之后才装：每 5 分钟重新探测一次，装上就自动接管/迁移
         if (self._data_mem() is None and self._data_store() is None
                 and now_ts() - to_float(getattr(self, "_last_data_probe", 0), 0) > 300):
@@ -14114,6 +14115,34 @@ class HumanCorePlugin(Star):
             self._sync_finance()
         except Exception as exc:
             logger.debug("[amo] 财务同步失败: %s" % exc)
+        # 慢活儿（网络 / LLM / 发消息）整段丢到后台：出图中转站一次超时、语音合成慢、
+        # 日程生成卡住，都不许再把 30 秒一轮的心跳拖成十分钟（2026-11-20 实测停过 10 分钟，
+        # 心流/饥饿/精力跟着一起停）。上一轮没跑完就跳过这一轮，不会堆任务。
+        slow = getattr(self, "_tick_slow_task", None)
+        if slow is not None and not slow.done():
+            started = to_float(getattr(self, "_tick_slow_at", 0), 0)
+            if started and now_ts() - started > 300:
+                # 整段慢活儿卡了 5 分钟还没完（中转站长时间不回、模型一直重试）：
+                # 取消重来，别让后面每一轮都跳过。
+                logger.warning("[amo] 后台慢活儿卡了 %.0f 秒，取消重来" % (now_ts() - started))
+                try:
+                    slow.cancel()
+                except Exception:
+                    pass
+                slow = None
+        if slow is None or slow.done():
+            self._tick_slow_at = now_ts()
+            self._tick_slow_task = self._spawn(self._tick_slow())
+        took = now_ts() - started_at
+        if took > 10:
+            logger.warning("[amo] 心跳这一轮用了 %.0f 秒（慢活儿已挪到后台）" % took)
+
+    async def _tick_slow(self) -> None:
+        """心跳里所有会等网络 / LLM / 发消息的活儿。跑在后台任务里，不占心跳的 30 秒。
+
+        出图中转站超时、语音合成慢、日程生成的模型卡住 —— 这些都不该再拖死
+        ``_tick()``：以前它们是直接 await 在心跳里的。
+        """
         try:
             await self._maybe_notify_repay()
         except Exception as exc:
