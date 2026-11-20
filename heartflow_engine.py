@@ -690,17 +690,46 @@ class HeartflowEngine:
                 info["model"] = str(config.get("model") or "")
         return info
 
+    #: 姓氏前缀：人格名「沈晓沫」里的「沈」，拆短名时要一起去掉
+    _SURNAMES = "赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许何吕施张孔曹严华金魏陶姜戚谢邹喻柏水"
+
+    @classmethod
+    def _derived_aliases(cls, name: str) -> list:
+        """从人格名拆出可以叫她的短名：沈晓沫 → 晓沫。
+
+        2026-11-20 事故：他在群里说「晓沫越来越安静了」，判定模型答
+        「没有提到机器人名字」→ 跳过。因为别名表是空的，名字又只有全名「沈晓沫」，
+        「晓沫」这种最常用的叫法既不在硬证据里、也不在提示词的名单里。
+        """
+        text = str(name or "").strip()
+        out = []
+        if not text:
+            return out
+        if len(text) >= 3 and text[0] in cls._SURNAMES:
+            short = text[1:]
+            if len(short) >= 2:
+                out.append(short)
+        if len(text) >= 2:
+            out.append(text)
+        return out
+
     def set_identity(self, name: str = "", aliases=None) -> None:
-        """更新机器人名字/别名，用于识别群友是否在叫机器人。"""
+        """更新机器人名字/别名，用于识别群友是否在叫机器人。
+
+        别名表会自动补上人格名拆出来的短名（见 ``_derived_aliases``）。
+        """
         values = aliases if isinstance(aliases, (list, tuple, set)) else str(aliases or "").split(",")
         new_name = str(name or "").strip()
         new_aliases = [str(item).strip() for item in values if str(item).strip()]
+        for item in self._derived_aliases(new_name):
+            if item and item != new_name and item not in new_aliases:
+                new_aliases.append(item)
         if new_name == self.bot_name and new_aliases == self.bot_aliases:
             return
         self.bot_name = new_name
         self.bot_aliases = new_aliases
         if self.bot_name or self.bot_aliases:
-            logger.debug("[心流] 身份：名字=%s | 别名=%s" % (self.bot_name or "未设置", "、".join(self.bot_aliases) or "无"))
+            logger.info("[心流] 身份：名字=%s | 别名=%s" % (self.bot_name or "未设置", "、".join(self.bot_aliases) or "无"))
 
     def _addresses_bot(self, text: str) -> str:
         normalized = re.sub(r"[\s，。！？!?、；;：:,.~～…\-]+", "", str(text or "")).lower()
@@ -1573,28 +1602,26 @@ class HeartflowEngine:
                 except Exception:
                     pass
                 force = bool(getattr(event, "amo_force_reply", False))
+                muted_by_style = False
                 # 模型说“这次别说话”才压掉；如果是被点名/@，仍按对机器人说处理
                 if style == "none" and not force and not mention and target != "bot":
-                    # 2026-11-20：这一步以前是**静默**的 —— 日志上「裁决 0.65/0.50」看着过了，
-                    # 实际上被 style=none 压成不回，谁都看不出原因。现在把模型自己的理由打出来。
-                    logger.info(
-                        "[心流] 🤐 判定模型自己决定这次不开口（style=none，%.2f/%.2f）：%s"
-                        % (overall, dynamic_threshold,
-                           (thought or data.get("reasoning") or "（没给理由）")[:80])
-                    )
                     should_reply = False
+                    muted_by_style = True
                 avg_absolute_score = sum(scores.values()) / len(scores)
                 dim_order = ["relevance", "willingness", "social", "timing", "continuity"]
                 dim_scores = " | ".join([f"{dim}:{scores[dim]:.1f}" for dim in dim_order])
                 who = {"bot": "对机器人说", "other": "对某个群友说", "all": "对全群说", "unknown": "看不出对谁说"}.get(target, "未判定对象")
                 extra = " | 类型:%s | 话题:%s | 风格:%s" % (context_type or "?", topic or "?", style or "?")
 
-                # 详细日志开着的时候，触发/跳过都进 info：不然「裁决过了却不回」查不出来。
+                # 只留结论（2026-11-20 用户口径：日志不用写原因，✅说话/❌跳过 就够）。
                 _logf = logger.info if self.enable_detailed_log else logger.debug
                 if should_reply:
-                    _logf(f"[心流] 📊 评分模式: {overall:.3f}/{dynamic_threshold:.2f} (均分:{avg_absolute_score:.1f}分) | ✅触发 | {who}{extra} | 活跃度:{activity_desc}({activity:.0%}) | {thought or data.get('reasoning', '')} | 各维度: {dim_scores}")
+                    _logf("[心流] ✅说话 %.3f/%.3f" % (overall, dynamic_threshold))
+                elif muted_by_style:
+                    # 分数够但她自己说“这条不用开口”：单独标一下，否则看着像 bug
+                    _logf("[心流] ❌跳过·不必开口 %.3f/%.3f" % (overall, dynamic_threshold))
                 else:
-                    _logf(f"[心流] 📊 评分模式: {overall:.3f}/{dynamic_threshold:.2f} (均分:{avg_absolute_score:.1f}分) | ❌跳过 | {who}{extra} | 活跃度:{activity_desc}({activity:.0%}) | {thought or data.get('reasoning', '')} | 各维度: {dim_scores}")
+                    _logf("[心流] ❌跳过 %.3f/%.3f" % (overall, dynamic_threshold))
                 self._judge_ok()
                 return JudgeResult(
                     **scores, reasoning=data.get("reasoning", "") or thought,

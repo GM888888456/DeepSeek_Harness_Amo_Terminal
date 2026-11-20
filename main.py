@@ -5897,6 +5897,14 @@ class HumanCorePlugin(Star):
             if item.strip():
                 self.admin_uids.add(item.strip())
         self.db = AmoDB(self.plugin_dir)
+        # 配置里没写名字时先用上次记住的（人格要等第一条消息才解析得出来）
+        if not str(self.cfg_str("bot_name", "") or "").strip():
+            try:
+                stored_name = str(self.db.kv_get("bot_name_last", "") or "").strip()
+            except Exception:
+                stored_name = ""
+            if stored_name:
+                self.bot_name = stored_name
         self.state = None
         self.llm = LLMService(self)
         self.gate = ReplyGate(self)
@@ -6389,6 +6397,12 @@ class HumanCorePlugin(Star):
         changed = name != self.persona_name
         self.persona_name = name
         self.bot_name = name
+        try:
+            # 记住名字：下次重启、人格还没解析出来时先用这个，别让她几秒钟里叫不出名字
+            if str(self.db.kv_get("bot_name_last", "") or "") != name:
+                self.db.kv_set("bot_name_last", name)
+        except Exception:
+            pass
         if self.heartflow is not None:
             self.heartflow.set_identity(self.bot_name, self.bot_aliases)
         # 世界观挂在 HumanState 上，不是插件实例；这里以前写成了 self.worldview，
@@ -16552,7 +16566,28 @@ class HumanCorePlugin(Star):
 
     async def _apply_runtime_config(self):
         self._admin_cache = {}
-        self.bot_name = self.cfg_str("bot_name", self.bot_name) or "陪伴"
+        # 配置里的 bot_name 是空的就别拿「陪伴」把她名字盖掉（2026-11-20）：
+        # 名字应该优先跟着人格走，否则「晓沫」这种叫法永远匹配不上。
+        configured_name = str(self.cfg_str("bot_name", "") or "").strip()
+        if configured_name:
+            self.bot_name = configured_name
+        else:
+            try:
+                persona_name = await self._persona_name_for("")
+            except Exception:
+                persona_name = ""
+            if persona_name:
+                self.bot_name = persona_name
+            else:
+                # 人格还没解析出来（刚启动很常见）：用上次记住的名字，别再退回「陪伴」
+                try:
+                    stored = str(self.db.kv_get("bot_name_last", "") or "").strip()
+                except Exception:
+                    stored = ""
+                if stored:
+                    self.bot_name = stored
+                elif not str(getattr(self, "bot_name", "") or "").strip():
+                    self.bot_name = "陪伴"
         self._persona_name_cache.clear()
         self.bot_aliases = [
             item.strip() for item in self.cfg_str("bot_aliases", "").split(",") if item.strip()
