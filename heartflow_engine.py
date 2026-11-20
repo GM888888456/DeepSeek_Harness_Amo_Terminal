@@ -516,7 +516,11 @@ class HeartflowEngine:
         self.lover_names: Dict[str, List[str]] = {}
 
         # 基础配置
-        self.judge_provider_name: str = self.config.get("judge_provider_name", "")
+        self.judge_provider_name: str = str(
+            self.config.get("judge_provider_name")
+            or self.config.get("hf_judge_provider_name")
+            or ""
+        ).strip()
         self.reply_threshold: float = self.config.get("reply_threshold", 0.6)
         # 少而准式裁决：规则分与模型分的混合比例（0=只看模型，1=只看规则）
         self.rule_weights = dict(REPLY_WEIGHT_DEFAULTS)
@@ -621,6 +625,31 @@ class HeartflowEngine:
                 model = str(config.get("model") or "")
             items.append({"id": pid, "model": model, "provider": provider})
         return items
+
+    async def _resolve_judge_provider(self, event):
+        """判定用哪个模型：配置优先，配的 id 不在了就自动挑。
+
+        不写死任何 provider id——供应商改名、换模型、加小号都不该让心流瘫掉。
+        """
+        name = str(self.judge_provider_name or "").strip()
+        if name:
+            try:
+                provider = self.context.get_provider_by_id(name)
+            except Exception:
+                provider = None
+            if provider is not None:
+                return provider
+            if not getattr(self, "_judge_name_warned", False):
+                self._judge_name_warned = True
+                logger.warning(
+                    "[心流] 判官模型 %s 已经不在了（供应商改名/删掉了？），这次自动挑一个用", name)
+        provider = self._auto_pick_judge_provider()
+        if provider is not None:
+            return provider
+        try:
+            return await self.context.get_using_provider_async(event.unified_msg_origin)
+        except Exception:
+            return None
 
     def _auto_pick_judge_provider(self):
         """未配置判定模型时自动挑一个：优先便宜小模型，其次避开主对话模型。
@@ -1580,16 +1609,8 @@ class HeartflowEngine:
             )
         if self._judge_breaker_open():
             return self._judge_fallback(event, "熔断中")
-        provider = None
-        if self.judge_provider_name:
-            provider = self.context.get_provider_by_id(self.judge_provider_name)
-        if not provider:
-            provider = self._auto_pick_judge_provider()
-        if not provider:
-            try:
-                provider = await self.context.get_using_provider_async(event.unified_msg_origin)
-            except Exception:
-                provider = None
+        provider = await self._resolve_judge_provider(event)
+
         if not provider:
             return JudgeResult(should_reply=False, reasoning="提供商未配置或不存在")
 
@@ -1736,16 +1757,8 @@ class HeartflowEngine:
                 continuity=float(self.score_max), reasoning="消息直接呼叫机器人名字/别名",
                 should_reply=True, confidence=1.0, overall_score=1.0, target="bot",
             )
-        provider = None
-        if self.judge_provider_name:
-            provider = self.context.get_provider_by_id(self.judge_provider_name)
-        if not provider:
-            provider = self._auto_pick_judge_provider()
-        if not provider:
-            try:
-                provider = await self.context.get_using_provider_async(event.unified_msg_origin)
-            except Exception:
-                provider = None
+        provider = await self._resolve_judge_provider(event)
+
         if not provider:
             return JudgeResult(should_reply=False, reasoning="提供商未配置或不存在")
 
