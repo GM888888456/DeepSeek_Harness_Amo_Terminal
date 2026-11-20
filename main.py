@@ -5794,13 +5794,9 @@ class ReplyGate:
         probability *= {
             "月经期": 0.80, "黄体期": 0.90, "排卵期": 1.05,
         }.get(snap["period"]["phase"], 1.0)
-        rel = snap.get("feel_rel") or {}
-        if rel.get("anger", 50.0) > 62:
-            probability *= 0.70
-        if rel.get("sadness", 50.0) > 62:
-            probability *= 0.80
-        if rel.get("joy", 50.0) > 64:
-            probability *= 1.05
+        # 情绪一律不参与「要不要回私聊」（2026-11-20 用户口径：任何情绪只影响态度和语气，
+        # 不阻止她要不要说话）。以前怒 >62 打七折、哀 >62 打八折，等于她一难过就不理人。
+        # 语气、句子长短、要不要闹别扭，都在 tone_text() 和提示词里体现。
         try:
             if profile.get("uid") and self.p._depressed_active(str(profile.get("uid"))):
                 probability *= 0.35
