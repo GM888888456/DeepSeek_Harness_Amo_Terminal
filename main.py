@@ -13417,11 +13417,17 @@ class HumanCorePlugin(Star):
                 logger.info(
                     "[amo] 本轮用户明确要语音，已下硬要求：%s" % str(event.message_str or "")[:40]
                 )
-            elif urge >= self.cfg_float("voice_urge_threshold", 0.6):
-                body += (
-                    "\n【声音提示】这条对方更想听到你的声音（心流 %d/10）：挑一句最想说的，"
-                    "用 amo_speak 工具发成语音；只发一句，别把整段念一遍。" % int(round(urge * 10))
-                )
+            else:
+                # 语音由她自己判断（2026-11-20 用户口径：不该被推着发语音）。
+                # 只有冲动很高、而且这个会话最近 20 分钟没发过语音时，才给一句「可选」的话。
+                _last_voice = to_float(
+                    (getattr(self, "_voice_last", {}) or {}).get(str(event.unified_msg_origin), 0), 0)
+                if (urge >= self.cfg_float("voice_urge_threshold", 0.85)
+                        and now_ts() - _last_voice > 20 * 60):
+                    body += (
+                        "\n【声音·可选】这句你要是觉得念出来更合适（晚安、想你、哄人、撒娇），"
+                        "可以用 amo_speak 发成语音；平常聊天用文字就行，不用每轮都发。"
+                    )
             # 刚发过图 → 让她知道，别假装没发过
             try:
                 note = self.db.kv_get("image_share_note", {}) or {}
@@ -13913,6 +13919,13 @@ class HumanCorePlugin(Star):
             if _spoken_text and _spoken_text not in _spoken_all:
                 _spoken_all.append(_spoken_text)
             _voice_ok = bool(getattr(event, "amo_spoken_ok", False))
+            if _spoken_all:
+                # 记下这个会话最后一次发语音的时间：语音提示要靠它做冷却，别连着发
+                _last_map = getattr(self, "_voice_last", None)
+                if _last_map is None:
+                    _last_map = {}
+                    self._voice_last = _last_map
+                _last_map[str(event.unified_msg_origin)] = now_ts()
             _dup = ""
             for _item in _spoken_all:
                 if same_sentence(text, _item):

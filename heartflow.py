@@ -41,6 +41,12 @@ from __future__ import annotations
 import random
 from enum import Enum
 
+try:  # 诊断/日志用（heartflow.py 原来没有 logger，写日志会静默 NameError）
+    from astrbot.api import logger
+except Exception:  # pragma: no cover
+    import logging
+    logger = logging.getLogger("amo.heartflow")
+
 
 class _StrEnum(str, Enum):
     def __str__(self) -> str:  # pragma: no cover
@@ -489,13 +495,17 @@ class Heartflow:
             except (TypeError, ValueError):
                 return BASELINE
 
-        # 任何一项情绪/欲望很强，都会想开口；再叠一层整体浓度。
-        strong = max(_v("joy"), _v("sadness"), _v("anger"),
-                     _v("desire_ear"), _v("love"),
-                     _v("desire_body"), _v("desire_mind"))
-        average = (_v("desire_ear") + _v("love") + _v("desire_mind")
-                   + _v("joy") + _v("sadness") + _v("desire_body")) / 6.0
-        raw = 0.55 * strong + 0.45 * average
+        # 想用声音说话，主要看「想被哄 / 想被理解 / 想被抱 / 开心」这几项。
+        # 2026-11-20 改：以前把「哀」「怒」也算成想说话的理由，于是她只要心情不好，
+        # 每轮都会被推一句「更想听到你的声音」→ 语音连着发。
+        # 难过/生气的时候她更想要的其实是被哄，不是开口念一段。
+        strong = max(_v("desire_ear"), _v("love"), _v("desire_mind"),
+                     _v("desire_body"), _v("joy"))
+        average = (_v("desire_ear") + _v("love")
+                   + _v("desire_mind") + _v("joy")) / 4.0
+        heavy = (_v("anger") + _v("sadness")) / 2.0
+        penalty = max(0.0, heavy - 55.0) * 0.25
+        raw = 0.6 * strong + 0.4 * average - penalty
         return clamp(raw) / 100.0
 
     def get_prompt_summary(self) -> str:
