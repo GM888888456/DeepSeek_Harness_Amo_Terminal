@@ -39,6 +39,7 @@ __all__ = [
     "other_platform_bot_lines",
     "usage_cost",
     "uniq",
+    "proactive_pending_block_seconds",
 ]
 
 def clamp(value, low=0.0, high=100.0):
@@ -126,3 +127,15 @@ def uniq(items):
             seen.add(item)
             out.append(item)
     return out
+
+def proactive_pending_block_seconds(cfg_int) -> float:
+    """发过主动消息后，多久之内不再发下一条。
+
+    原来是写死 6 小时：他只要没在私聊回一句，她半天都不能再开口；
+    实际上他在群里聊得火热也算「人在」，这条要跟着放宽。
+    """
+    try:
+        minutes = max(0, int(cfg_int("proactive_pending_max_minutes", 120)))
+    except Exception:
+        minutes = 120
+    return minutes * 60

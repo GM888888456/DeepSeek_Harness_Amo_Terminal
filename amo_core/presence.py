@@ -34,17 +34,6 @@ from .shared import *
 
 _HIS_SLEEP_RE = re.compile(r"要睡|去睡|睡觉|睡了|想睡|困了|困死|眯一会|眯一会儿|躺一会|躺一会儿|晚安|闭眼")
 _HIS_AWAY_RE = re.compile(r"在外地|出差|不在家|回不去|放假|休假|年假|请假|不上班|不用上班|明天.{0,6}早起")
-def proactive_pending_block_seconds(cfg_int) -> float:
-    """发过主动消息后，多久之内不再发下一条。
-
-    原来是写死 6 小时：他只要没在私聊回一句，她半天都不能再开口；
-    实际上他在群里聊得火热也算「人在」，这条要跟着放宽。
-    """
-    try:
-        minutes = max(0, int(cfg_int("proactive_pending_max_minutes", 120)))
-    except Exception:
-        minutes = 120
-    return minutes * 60
 
 
 class PresenceMixin:
@@ -562,6 +551,5 @@ class PresenceMixin:
 __all__ = [
     "_HIS_SLEEP_RE",
     "_HIS_AWAY_RE",
-    "proactive_pending_block_seconds",
     "PresenceMixin",
 ]
