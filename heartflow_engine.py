@@ -721,6 +721,12 @@ class HeartflowEngine:
         values = aliases if isinstance(aliases, (list, tuple, set)) else str(aliases or "").split(",")
         new_name = str(name or "").strip()
         new_aliases = [str(item).strip() for item in values if str(item).strip()]
+        # 只增不减：别名可能来自人格、配置、上次记住的，任何一处先调用都不该把别的冲掉
+        # （2026-11-20：配置重载 / 人格暂时读不到时，「沫沫、沫酱、沫子」被冲成只剩「晓沫」）
+        for item in list(getattr(self, "bot_aliases", []) or []):
+            text = str(item or "").strip()
+            if text and text not in new_aliases:
+                new_aliases.append(text)
         for item in self._derived_aliases(new_name):
             if item and item != new_name and item not in new_aliases:
                 new_aliases.append(item)

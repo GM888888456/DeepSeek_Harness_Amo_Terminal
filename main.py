@@ -5257,6 +5257,33 @@ def extract_persona_name(persona):
     return ""
 
 
+def extract_persona_aliases(persona, name=""):
+    """从人格文本里抠出「别名 / 昵称」那一行，返回能叫她的称呼列表。
+
+    2026-11-20 用户口径：别名要用**人格里写的那一套**，不能只固定一个。
+    人格里是这样写的：``别名：晓沫；沫沫；沫酱；沫子``
+    """
+    prompt = ""
+    if persona:
+        try:
+            prompt = str(persona.get("prompt") or "")
+        except Exception:
+            prompt = str(getattr(persona, "prompt", "") or "")
+    if not prompt:
+        return []
+    out = []
+    pattern = re.compile(r"(?:别名|别称|昵称|小名|外号|称呼)\s*[:：]\s*([^\n]{1,140})")
+    for match in pattern.finditer(prompt):
+        for item in re.split(r"[；;、,，/|]+", match.group(1)):
+            text = str(item).strip(" 「」“”\"'。.·-—")
+            if not text or len(text) > 12 or text == name or text in out:
+                continue
+            out.append(text)
+            if len(out) >= 12:
+                return out
+    return out
+
+
 class LLMService:
     def __init__(self, plugin):
         self.p = plugin
@@ -5905,6 +5932,15 @@ class HumanCorePlugin(Star):
                 stored_name = ""
             if stored_name:
                 self.bot_name = stored_name
+        try:
+            stored_aliases = self.db.kv_get("bot_aliases_last", [])
+        except Exception:
+            stored_aliases = []
+        if isinstance(stored_aliases, list):
+            for item in stored_aliases:
+                text = str(item or "").strip()
+                if text and text not in self.bot_aliases:
+                    self.bot_aliases.append(text)
         self.state = None
         self.llm = LLMService(self)
         self.gate = ReplyGate(self)
@@ -6060,14 +6096,16 @@ class HumanCorePlugin(Star):
             "mention": bool(settings.get("reply_with_mention", False)),
         }
 
-    async def _persona_name_for(self, umo=""):
-        """读取当前会话的人格名；读不到时返回空字符串。"""
-        if not self.cfg_bool("use_persona_name", True):
-            return ""
+    async def _resolve_persona(self, umo=""):
+        """解析当前会话的人格对象（300 秒缓存）；读不到返回 None。"""
         key = str(umo or "default")
-        cached = self._persona_name_cache.get(key)
-        if cached and now_ts() - cached[0] < 300:
-            return cached[1]
+        cache = getattr(self, "_persona_obj_cache", None)
+        if cache is None:
+            cache = {}
+            self._persona_obj_cache = cache
+        hit = cache.get(key)
+        if hit and now_ts() - hit[0] < 300:
+            return hit[1]
         manager = getattr(self.context, "persona_manager", None)
         persona = None
         if manager is not None:
@@ -6093,9 +6131,32 @@ class HumanCorePlugin(Star):
                     persona = await manager.get_default_persona_v3(key or None)
                 except Exception as exc:
                     logger.debug("[amo] 读取默认人格失败: %s" % exc)
-        name = extract_persona_name(persona)
+        cache[key] = (now_ts(), persona)
+        return persona
+
+    async def _persona_name_for(self, umo=""):
+        """读取当前会话的人格名；读不到时返回空字符串。"""
+        if not self.cfg_bool("use_persona_name", True):
+            return ""
+        key = str(umo or "default")
+        cached = self._persona_name_cache.get(key)
+        if cached and now_ts() - cached[0] < 300:
+            return cached[1]
+        name = extract_persona_name(await self._resolve_persona(umo))
         self._persona_name_cache[key] = (now_ts(), name)
         return name
+
+    async def _persona_names_for(self, umo=""):
+        """返回 (名字, 别名列表)：别名取人格里「别名：…」那一行 + 配置里的 bot_aliases。"""
+        use = self.cfg_bool("use_persona_name", True)
+        persona = await self._resolve_persona(umo) if use else None
+        name = extract_persona_name(persona) if use else ""
+        aliases = extract_persona_aliases(persona, name) if use else []
+        for item in self.cfg_str("bot_aliases", "").split(","):
+            item = str(item or "").strip()
+            if item and item not in aliases:
+                aliases.append(item)
+        return name, aliases
 
     def _dialect_rows(self):
         region = self._dialect_region()
@@ -6388,7 +6449,7 @@ class HumanCorePlugin(Star):
     async def _sync_persona_name(self, event_or_umo):
         umo = getattr(event_or_umo, "unified_msg_origin", event_or_umo)
         try:
-            name = await self._persona_name_for(umo)
+            name, aliases = await self._persona_names_for(umo)
         except Exception as exc:
             logger.debug("[amo] 同步人格名失败: %s" % exc)
             return
@@ -6397,10 +6458,15 @@ class HumanCorePlugin(Star):
         changed = name != self.persona_name
         self.persona_name = name
         self.bot_name = name
+        if aliases:
+            # 别名以人格里写的那一套为准（2026-11-20 用户口径），不是写死一个短名
+            self.bot_aliases = aliases
         try:
-            # 记住名字：下次重启、人格还没解析出来时先用这个，别让她几秒钟里叫不出名字
+            # 记住名字和别名：下次重启、人格还没解析出来时先用这个，别让她几秒钟里叫不出名字
             if str(self.db.kv_get("bot_name_last", "") or "") != name:
                 self.db.kv_set("bot_name_last", name)
+            if aliases and self.db.kv_get("bot_aliases_last", []) != aliases:
+                self.db.kv_set("bot_aliases_last", aliases)
         except Exception:
             pass
         if self.heartflow is not None:
@@ -16589,9 +16655,19 @@ class HumanCorePlugin(Star):
                 elif not str(getattr(self, "bot_name", "") or "").strip():
                     self.bot_name = "陪伴"
         self._persona_name_cache.clear()
-        self.bot_aliases = [
+        # 别把人格里带来的别名冲掉：配置里的 + 上次从人格里提的，合起来
+        merged_aliases = [
             item.strip() for item in self.cfg_str("bot_aliases", "").split(",") if item.strip()
         ]
+        try:
+            stored_aliases = self.db.kv_get("bot_aliases_last", [])
+        except Exception:
+            stored_aliases = []
+        for item in (stored_aliases if isinstance(stored_aliases, list) else []):
+            text = str(item or "").strip()
+            if text and text not in merged_aliases:
+                merged_aliases.append(text)
+        self.bot_aliases = merged_aliases
         self.admin_uids = {
             item.strip() for item in self.cfg_str("admin_uids", "").split(",") if item.strip()
         }
