@@ -178,6 +178,14 @@ class MemoryOpsMixin:
 
             @staticmethod
             def get_plugin(names):
+                # 内嵌记忆不是按 AstrBot 插件名注册的：按通用名字找不到时，
+                # 必须退回 _data_plugin()（它还会试 self._embedded_data_plugin()），
+                # 否则 MemoryHub 永远拿不到 provider，每轮都报「记忆来源 none」。
+                wanted = {str(n).lower() for n in names}
+                if wanted & {"astr_amo_data", "astrbot_plugin_amo_data", "astramodata"}:
+                    plugin = star._data_plugin()
+                    if plugin is not None:
+                        return plugin
                 return star._plugin_by_names(names)
 
             @staticmethod
