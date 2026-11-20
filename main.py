@@ -975,6 +975,21 @@ def _norm_sentence(value) -> str:
     return re.sub(r"[\W_]+", "", str(value or ""))
 
 
+def _bigrams(text: str) -> set:
+    value = _norm_sentence(text)
+    if len(value) < 2:
+        return {value} if value else set()
+    return {value[index:index + 2] for index in range(len(value) - 1)}
+
+
+def _cover_ratio(short: str, longer: str) -> float:
+    """短句的 bigram 有多少出现在长句里（0~1）。"""
+    a, b = _bigrams(short), _bigrams(longer)
+    if not a or not b:
+        return 0.0
+    return len(a & b) / float(len(a))
+
+
 def same_sentence(a, b, threshold=0.8) -> bool:
     """两句是不是同一句。
 
@@ -992,6 +1007,10 @@ def same_sentence(a, b, threshold=0.8) -> bool:
     if len(short) < 8:
         return False
     if short in longer:
+        return True
+    # 换了个说法的同一句：语音念「小k这名字叫着倒顺口，你俩是早就认识的呀」，
+    # 正文写「小k这名字叫着倒挺顺口」—— difflib 只有 0.67，但短句几乎被完全覆盖。
+    if len(short) >= 6 and _cover_ratio(short, longer) >= 0.75:
         return True
     try:
         return difflib.SequenceMatcher(None, na, nb).ratio() >= threshold
@@ -13889,14 +13908,31 @@ class HumanCorePlugin(Star):
             # 语音插件在事件上留 amo_spoken_text / amo_spoken_ok，出声失败会撤回，
             # 撤回后这里照常发文字，所以不会出现「语音没成、文字也没了」。
             _spoken_text = str(getattr(event, "amo_spoken_text", "") or "").strip()
-            if _spoken_text and same_sentence(text, _spoken_text):
+            _spoken_all = [str(x) for x in (getattr(event, "amo_spoken_texts", None) or [])
+                           if str(x or "").strip()]
+            if _spoken_text and _spoken_text not in _spoken_all:
+                _spoken_all.append(_spoken_text)
+            _voice_ok = bool(getattr(event, "amo_spoken_ok", False))
+            _dup = ""
+            for _item in _spoken_all:
+                if same_sentence(text, _item):
+                    _dup = _item
+                    break
+            if not _dup and _spoken_all:
+                # 这一轮已经用语音说过话了，正文又是差不多长度的同一段话（模型换了个说法）：
+                # 也别再发一遍。只有正文明显更长（>1.8 倍）才认为它带了新内容。
+                # 注：合成要 3 秒左右，这里常常还在「合成中」；真要是合成失败，
+                # 语音插件会看到 amo_spoken_suppressed 自己把文字补发出去，不会丢话。
+                _longest = max(_spoken_all, key=len)
+                if len(_norm_sentence(text)) <= max(12, int(len(_norm_sentence(_longest)) * 1.8)):
+                    _dup = _longest
+            if _dup and _spoken_all:
                 try:
                     event.amo_spoken_suppressed = True
                 except Exception:
                     pass
                 logger.info("[amo] 这句已经用语音说过了（%s），文字不再重复：%s"
-                            % ("已发出" if getattr(event, "amo_spoken_ok", False) else "合成中",
-                               text[:40]))
+                            % ("已发出" if _voice_ok else "合成中", text[:40]))
                 result.chain = []
                 return
             if getattr(event, "amo_voice_reply_only", False):
