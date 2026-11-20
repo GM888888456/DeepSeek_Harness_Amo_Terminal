@@ -2800,8 +2800,9 @@
         if (item.external === "voice") {
           const input = control.querySelector("[data-config-key]");
           if (input) {
+            // 只加 voiceKey，不要删 configKey：data-config-type 靠它保留，
+            // 删了类型就变成 undefined，布尔开关读成空字符串->永远存成 false
             input.dataset.voiceKey = input.dataset.configKey;
-            delete input.dataset.configKey;
           }
         }
         row.appendChild(control);
