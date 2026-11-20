@@ -1575,6 +1575,13 @@ class HeartflowEngine:
                 force = bool(getattr(event, "amo_force_reply", False))
                 # 模型说“这次别说话”才压掉；如果是被点名/@，仍按对机器人说处理
                 if style == "none" and not force and not mention and target != "bot":
+                    # 2026-11-20：这一步以前是**静默**的 —— 日志上「裁决 0.65/0.50」看着过了，
+                    # 实际上被 style=none 压成不回，谁都看不出原因。现在把模型自己的理由打出来。
+                    logger.info(
+                        "[心流] 🤐 判定模型自己决定这次不开口（style=none，%.2f/%.2f）：%s"
+                        % (overall, dynamic_threshold,
+                           (thought or data.get("reasoning") or "（没给理由）")[:80])
+                    )
                     should_reply = False
                 avg_absolute_score = sum(scores.values()) / len(scores)
                 dim_order = ["relevance", "willingness", "social", "timing", "continuity"]
@@ -1582,11 +1589,12 @@ class HeartflowEngine:
                 who = {"bot": "对机器人说", "other": "对某个群友说", "all": "对全群说", "unknown": "看不出对谁说"}.get(target, "未判定对象")
                 extra = " | 类型:%s | 话题:%s | 风格:%s" % (context_type or "?", topic or "?", style or "?")
 
+                # 详细日志开着的时候，触发/跳过都进 info：不然「裁决过了却不回」查不出来。
+                _logf = logger.info if self.enable_detailed_log else logger.debug
                 if should_reply:
-                    # 静默：正常判定只进 debug，面板「记录」页才看得到
-                    logger.debug(f"[心流] 📊 评分模式: {overall:.3f}/{dynamic_threshold:.2f} (均分:{avg_absolute_score:.1f}分) | ✅触发 | {who}{extra} | 活跃度:{activity_desc}({activity:.0%}) | {thought or data.get('reasoning', '')} | 各维度: {dim_scores}")
+                    _logf(f"[心流] 📊 评分模式: {overall:.3f}/{dynamic_threshold:.2f} (均分:{avg_absolute_score:.1f}分) | ✅触发 | {who}{extra} | 活跃度:{activity_desc}({activity:.0%}) | {thought or data.get('reasoning', '')} | 各维度: {dim_scores}")
                 else:
-                    logger.debug(f"[心流] 📊 评分模式: {overall:.3f}/{dynamic_threshold:.2f} (均分:{avg_absolute_score:.1f}分) | ❌跳过 | {who}{extra} | 活跃度:{activity_desc}({activity:.0%}) | {thought or data.get('reasoning', '')} | 各维度: {dim_scores}")
+                    _logf(f"[心流] 📊 评分模式: {overall:.3f}/{dynamic_threshold:.2f} (均分:{avg_absolute_score:.1f}分) | ❌跳过 | {who}{extra} | 活跃度:{activity_desc}({activity:.0%}) | {thought or data.get('reasoning', '')} | 各维度: {dim_scores}")
                 self._judge_ok()
                 return JudgeResult(
                     **scores, reasoning=data.get("reasoning", "") or thought,
