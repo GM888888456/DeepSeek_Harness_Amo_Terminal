@@ -324,6 +324,29 @@ class MessagesMixin(_StoreBase):
         rows = [r for r in rows if start <= int(r.get("created_at") or 0) < end]
         rows = sorted(rows, key=lambda r: (int(r.get("created_at") or 0), int(r.get("id") or 0)))
         return rows[-limit:]
+    def graph_rows(self, bot_id: str, days: int = 7, limit: int = 4000) -> List[Dict[str, Any]]:
+        """关系图推测用：最近 N 天里带 @ 的消息（uid + content）。"""
+        where, params = _bot_filter(bot_id)
+        # 注意：存下来的正文里没有 @ 标记（At 组件不进 message_str），
+        # 所以这里取全部消息，靠「提到谁的名字」来推测人和人的关系。
+        sql = ("SELECT uid, content, created_at FROM messages "
+               "WHERE uid <> '' AND uid <> 'bot'" + where)
+        if days and int(days) > 0:
+            sql += " AND created_at >= ?"
+            params.append(int(time.time()) - int(days) * 86400)
+        sql += " ORDER BY id DESC LIMIT ?"
+        params.append(max(1, min(int(limit), 20000)))
+        with self.lock:
+            rows = self.conn.execute(sql, params).fetchall()
+        out = []
+        for row in rows:
+            try:
+                out.append({"uid": str(row["uid"]), "content": str(row["content"] or ""),
+                            "created_at": float(row["created_at"] or 0)})
+            except Exception:
+                continue
+        return out
+
     def interaction_stats(self, bot_id: str, days: int = 0) -> List[Dict[str, Any]]:
         """按 uid 统计互动量（条数 / 首末时间）。关系网沉淀要用。"""
         where, params = _bot_filter(bot_id)

@@ -789,6 +789,11 @@ class TickerMixin:
                 await self._sediment_relations()
             except Exception as exc:
                 logger.debug("[amo] 关系沉淀失败: %s" % exc)
+            try:
+                # 人↔人的边靠群聊里互相 @ 推测出来（低置信度，note 带「推测：」）
+                await self._infer_group_edges()
+            except Exception as exc:
+                logger.debug("[amo] 群聊关系推测失败: %s" % exc)
         if now - self._last_purge > 3600:
             self._last_purge = now
             self.db.purge_messages(self.cfg_int("chat_log_days", 14))

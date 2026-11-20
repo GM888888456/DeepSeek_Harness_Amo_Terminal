@@ -12,6 +12,8 @@
 
 from __future__ import annotations
 
+import re
+
 KEEP_RELATIONS = ("家人", "恋人", "仇人")
 CLOSE_RELATIONS = ("熟人", "朋友")
 HUMAN_TIER = {"陌生人": 0, "熟人": 1, "朋友": 2}
@@ -133,3 +135,61 @@ def plan_edges(stats, existing=None, names=None, infer_limit=5):
             made += 1
 
     return [(a, b, relation, note) for (a, b), (relation, note) in writes.items()]
+
+#: 群聊里 @ 别人的写法（aiocqhttp 把 @ 渲染进正文）
+_AT_RE = re.compile(r"\[At:(\d+)\]")
+
+
+def guess_person_edges(rows, existing=None, min_hits=5, limit=20, name_map=None):
+    """从群聊里「谁经常 @ 谁」推测人和人的边（低置信度）。
+
+    - 只做人↔人，不碰 bot 自己；
+    - 已经有的边（不管是手设还是自动）一律不覆盖；
+    - note 一律带「推测：」，面板里能一眼看出是猜的、也能删；
+    - 每次最多写 limit 条，避免一次刷爆关系图。
+
+    ``rows``：[{uid, content, ...}]，一条消息一行。
+    ``existing``：{(a_uid, b_uid)} 已经存在的边。
+    """
+    have = set()
+    for pair in existing or ():
+        try:
+            a, b = pair
+        except Exception:
+            continue
+        if a and b:
+            have.add(tuple(sorted([str(a), str(b)])))
+    # 名字 → uid：用于「这条消息提到了谁」的推测（存下来的正文没有 @ 标记）
+    names = {}
+    for name, target in (name_map or {}).items():
+        name = str(name or "").strip()
+        target = str(target or "").strip()
+        if len(name) >= 2 and target and target != "bot":
+            names[name] = target
+    counter = {}
+    for row in rows or []:
+        uid = str(row.get("uid") or "")
+        text = str(row.get("content") or "")
+        if not uid or uid == "bot" or not text:
+            continue
+        targets = set(_AT_RE.findall(text))
+        # 按名字提及：一条消息里出现谁的名字，就算跟谁互动一次
+        for name, target in names.items():
+            if target != uid and name in text:
+                targets.add(target)
+        for target in targets:
+            target = str(target)
+            if not target or target == uid or target == "bot":
+                continue
+            key = tuple(sorted([uid, target]))
+            counter[key] = counter.get(key, 0) + 1
+    writes = []
+    for pair, hits in sorted(counter.items(), key=lambda kv: -kv[1]):
+        if hits < max(1, int(min_hits or 1)):
+            continue
+        if pair in have:
+            continue
+        writes.append((pair[0], pair[1], "熟人", "推测：群里常互相提到 %d 次" % hits))
+        if len(writes) >= max(1, int(limit or 1)):
+            break
+    return writes

@@ -523,6 +523,14 @@ class MemoryAPI:
         except Exception:
             return {}
 
+    async def graph_rows(self, bot_id: str, days: int = 7) -> list:
+        """最近 N 天带 @ 的消息，给关系图「推测人↔人」用。"""
+        try:
+            return self._store.graph_rows(self._bot(bot_id), int(days or 7))
+        except Exception as exc:
+            logger.debug("[amo_data] 取关系图消息失败: %s" % exc)
+            return []
+
     async def interaction_stats(self, bot_id: str, days: int = 0) -> list:
         """按 uid 统计互动量，给终端的「关系网沉淀」用（本地 messages 表是空的）。"""
         try:

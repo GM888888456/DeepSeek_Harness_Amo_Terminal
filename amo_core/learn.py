@@ -173,6 +173,55 @@ class LearnMixin:
                         self.db.update_profile(target, alias=(current + "；" + plain).strip("；")[:80])
                     self.db.kv_set(seen_key, 0)
 
+    async def _infer_group_edges(self, days=7, min_hits=5, limit=20):
+        """从群聊里「谁经常 @ 谁」推测人和人的边（note 带「推测：」，面板可删）。
+
+        和 _sediment_relations 的区别：那条是按互动量算「bot ↔ 人」，
+        这条是人和人之间的边——有了它，两跳推断（经 A 认识 B）才有原料。
+        """
+        if guess_relation_edges is None:
+            return
+        try:
+            rows = await self._data_call("graph_rows", self._data_bot_id(), int(days)) or []
+        except Exception as exc:
+            logger.debug("[amo] 取群聊互动失败: %s" % exc)
+            return
+        if not rows:
+            return
+        existing = set()
+        try:
+            for edge in self.db.list_relations():
+                existing.add(tuple(sorted([str(edge.get("a_uid") or ""), str(edge.get("b_uid") or "")])))
+        except Exception:
+            pass
+        name_map = {}
+        try:
+            for item in self.db.list_profiles(limit=1000):
+                uid = str(item.get("uid") or "")
+                if not uid:
+                    continue
+                for key in ("name", "alias"):
+                    for piece in re.split(r"[;；,，、/|]", str(item.get(key) or "")):
+                        name = piece.strip()
+                        if len(name) >= 2:
+                            name_map.setdefault(name, uid)
+        except Exception:
+            name_map = {}
+        try:
+            writes = guess_relation_edges(rows, existing=existing, min_hits=min_hits,
+                                          limit=limit, name_map=name_map) or []
+        except Exception as exc:
+            logger.debug("[amo] 推测人↔人失败: %s" % exc)
+            return
+        for a, b, relation, note in writes:
+            try:
+                if not self.db.upsert_relation(a, b, relation, note):
+                    continue
+                await self._push_relation_to_data(a, b, relation, note)
+                logger.info("[amo] 推测关系：%s ↔ %s（%s）" % (a, b, note))
+            except Exception as exc:
+                logger.debug("[amo] 写推测关系失败: %s" % exc)
+
     async def _sediment_relations(self):
         """按真实互动量沉淀关系网：聊得多就是熟人/朋友，并让 bot 通过你认识你的人。
 

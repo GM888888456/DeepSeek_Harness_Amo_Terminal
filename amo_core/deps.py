@@ -491,11 +491,14 @@ except Exception:
         _rank_edges = None
 try:
     from ..relation_sediment import plan_edges as plan_relation_edges
+    from ..relation_sediment import guess_person_edges as guess_relation_edges
 except Exception:
     try:
         from relation_sediment import plan_edges as plan_relation_edges
+        from relation_sediment import guess_person_edges as guess_relation_edges
     except Exception:
         plan_relation_edges = None
+        guess_relation_edges = None
 try:
     from ..schedule_engine import ScheduleEngine
 except Exception:
