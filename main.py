@@ -23,6 +23,10 @@ try:
     from .amo_core.human_state import *  # noqa: F401,F403
     from .amo_core.llm_service import *  # noqa: F401,F403
     from .amo_core.reply_gate import *  # noqa: F401,F403
+    from .amo_core.usage import *  # noqa: F401,F403
+    from .amo_core.databridge import *  # noqa: F401,F403
+    from .amo_core.persona import *  # noqa: F401,F403
+    from .amo_core.config import *  # noqa: F401,F403
     from .amo_core.infra import *  # noqa: F401,F403
     from .amo_core.vitals import *  # noqa: F401,F403
     from .amo_core.memory_ops import *  # noqa: F401,F403
@@ -50,6 +54,10 @@ except ImportError:  # 非包方式加载时的回退
     from amo_core.human_state import *  # noqa: F401,F403
     from amo_core.llm_service import *  # noqa: F401,F403
     from amo_core.reply_gate import *  # noqa: F401,F403
+    from amo_core.usage import *  # noqa: F401,F403
+    from amo_core.databridge import *  # noqa: F401,F403
+    from amo_core.persona import *  # noqa: F401,F403
+    from amo_core.config import *  # noqa: F401,F403
     from amo_core.infra import *  # noqa: F401,F403
     from amo_core.vitals import *  # noqa: F401,F403
     from amo_core.memory_ops import *  # noqa: F401,F403
@@ -204,65 +212,10 @@ except Exception:
 DEFAULT_ADMIN = ""
 LEGACY_DEFAULT_ADMIN = "3261748099"
 
-CITY_DIALECT_RULES = (
-    (("贵阳", "贵州", "遵义", "安顺", "六盘水", "凯里"), "贵州话"),
-    (("成都", "四川", "重庆", "绵阳", "德阳", "宜宾"), "四川话"),
-    (("广州", "深圳", "东莞", "佛山", "珠海", "中山", "惠州", "江门", "汕头", "广东"), "广东话"),
-    (("上海", "苏州", "无锡", "常州", "昆山"), "上海话"),
-    (("天津",), "天津话"),
-    (("郑州", "河南", "洛阳", "开封"), "河南话"),
-    (("哈尔滨", "沈阳", "长春", "大连", "东北", "辽宁", "吉林", "黑龙江"), "东北话"),
-    (("台北", "台湾", "高雄", "台中"), "台湾腔"),
-)
 
 
-def dialect_for_city(city):
-    text = str(city or "")
-    if not text:
-        return ""
-    for keys, style in CITY_DIALECT_RULES:
-        if any(key in text for key in keys):
-            return style
-    return ""
 
 
-DIALECT_FALLBACK_ROWS = {
-    "东北话": [
-        ("咋整", "怎么办", "咋整啊"), ("唠嗑", "聊天", "来唠嗑"), ("得瑟", "显摆", "别得瑟"),
-        ("麻溜", "快点", "麻溜的"), ("贼拉", "非常", "贼拉冷"), ("嘎哈", "干什么", "你嘎哈呢"),
-        ("老铁", "哥们", "老铁没毛病"),
-    ],
-    "四川话": [
-        ("啥子", "什么", "你说啥子"), ("莫得", "没有", "莫得问题"), ("巴适", "舒服", "巴适得很"),
-        ("搞快些", "快点", "搞快些"), ("瓜娃子", "傻孩子", "你个瓜娃子"), ("雄起", "加油", "雄起"),
-        ("撇脱", "干脆", "撇脱点"),
-    ],
-    "广东话": [
-        ("唔该", "谢谢、劳驾", "唔该晒"), ("点解", "为什么", "点解啊"), ("得闲", "有空", "得闲饮茶"),
-        ("搞掂", "搞定", "搞掂啦"), ("靓仔", "帅哥", "靓仔"), ("靓女", "美女", "靓女"),
-        ("冇", "没有", "冇问题"),
-    ],
-    "台湾腔": [
-        ("酱紫", "这样", "酱紫啊"), ("蛮", "很", "蛮好的"), ("超赞", "非常棒", "超赞"),
-        ("拍谢", "不好意思", "拍谢啦"), ("机车", "麻烦、烦人", "很机车"), ("阿嬷", "奶奶", "阿嬷"),
-        ("龟毛", "挑剔", "别龟毛"),
-    ],
-    "天津话": [
-        ("嘛呢", "干什么", "嘛呢"), ("倍儿", "非常", "倍儿好"), ("哏儿", "有趣", "真哏儿"),
-        ("得嘞", "好的", "得嘞"), ("腻歪", "腻烦、黏人", "别腻歪"), ("幺蛾子", "麻烦", "出幺蛾子"),
-        ("耐人", "招人喜欢", "真耐人"),
-    ],
-    "河南话": [
-        ("弄啥嘞", "干什么", "你弄啥嘞"), ("中", "好", "中，就这么办"), ("得劲", "舒服", "真得劲"),
-        ("木有", "没有", "木有事"), ("恁", "你", "恁吃饭没"), ("俺", "我", "俺知道了"),
-        ("中不中", "行不行", "中不中"),
-    ],
-    "上海话": [
-        ("阿拉", "我、我们", "阿拉晓得"), ("侬", "你", "侬好"), ("哪能", "怎么", "哪能办"),
-        ("结棍", "厉害", "侬结棍"), ("老灵", "很好", "老灵额"), ("白相", "玩", "出去白相"),
-        ("适意", "舒服", "适意"),
-    ],
-}
 
 
 #: 真正算「生病」的状态；「疲惫」只是累，不该按病号排日程。
@@ -377,9 +330,6 @@ def same_sentence(a, b, threshold=0.8) -> bool:
 
 
 
-def looks_like_plain_command(text):
-    text = (text or "").strip()
-    return text.startswith("/") or text.startswith("／")
 
 
 
@@ -694,47 +644,6 @@ def typing_delay_ms(text, base=700, per_char=400, cap=20000):
 
 
 
-def fetch_deepseek_balance(api_key, base_url="https://api.deepseek.com", timeout=8.0):
-    """查 DeepSeek 余额；失败返回 {ok: False, error}，不抛异常。"""
-    api_key = str(api_key or "").strip()
-    if not api_key:
-        return {"ok": False, "error": "未配置 API Key"}
-    import urllib.request
-    url = str(base_url or "https://api.deepseek.com").rstrip("/") + "/user/balance"
-    request = urllib.request.Request(url, headers={
-        "Authorization": "Bearer " + api_key,
-        "Accept": "application/json",
-    })
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except Exception as exc:
-        return {"ok": False, "error": str(exc)[:120]}
-    infos = payload.get("balance_infos") or []
-    chosen = None
-    for item in infos:
-        if str(item.get("currency") or "").upper() == "CNY":
-            chosen = item
-            break
-    if chosen is None and infos:
-        chosen = infos[0]
-    if not isinstance(chosen, dict):
-        return {"ok": False, "error": "返回里没有余额信息"}
-
-    def money(value):
-        try:
-            return round(float(value), 2)
-        except (TypeError, ValueError):
-            return None
-
-    return {
-        "ok": True,
-        "available": bool(payload.get("is_available")),
-        "currency": str(chosen.get("currency") or "CNY"),
-        "amount": money(chosen.get("total_balance")),
-        "granted": money(chosen.get("granted_balance")),
-        "topped_up": money(chosen.get("topped_up_balance")),
-    }
 
 def merge_uid_alias_data(conn, alias_map):
     """把别名 uid 的档案/记忆/消息/关系/称呼并进主 uid（一次性、幂等）。
@@ -953,65 +862,8 @@ def merge_uid_alias_data(conn, alias_map):
 
 
 
-def extract_persona_name(persona):
-    """从 AstrBot Personality 的 name / system prompt 中取角色名。"""
-    if not persona:
-        return ""
-    name = ""
-    prompt = ""
-    try:
-        name = str(persona.get("name") or "").strip()
-        prompt = str(persona.get("prompt") or "")
-    except Exception:
-        name = str(getattr(persona, "name", "") or "").strip()
-        prompt = str(getattr(persona, "prompt", "") or "")
-    generic = {"default", "assistant", "系统默认", "默认", "bot", "ai"}
-    if name and name.lower() not in generic and not re.fullmatch(r"[0-9a-fA-F-]{8,}", name):
-        return name[:30]
-    patterns = (
-        r"你的名字(?:是|叫|为)\s*[「“\"']?([\u4e00-\u9fa5A-Za-z0-9_·]{1,16})",
-        r"你叫(?:做)?\s*[「“\"']?([\u4e00-\u9fa5A-Za-z0-9_·]{1,16})",
-        r"你名叫\s*[「“\"']?([\u4e00-\u9fa5A-Za-z0-9_·]{1,16})",
-        r"名为\s*[「“\"']?([\u4e00-\u9fa5A-Za-z0-9_·]{1,16})",
-        r"你是\s*[「“\"']?([\u4e00-\u9fa5A-Za-z0-9_·]{1,16})",
-    )
-    blocked = {"一个", "一名", "一位", "个人", "人", "你", "我", "他", "她", "这个", "那个"}
-    for pattern in patterns:
-        for match in re.finditer(pattern, prompt):
-            candidate = str(match.group(1) or "").strip("「」“”\"' ")
-            if (
-                candidate and candidate not in blocked
-                and not candidate.startswith(("一个", "一名", "一位", "个", "人"))
-            ):
-                return candidate[:30]
-    return ""
 
 
-def extract_persona_aliases(persona, name=""):
-    """从人格文本里抠出「别名 / 昵称」那一行，返回能叫她的称呼列表。
-
-    2026-11-20 用户口径：别名要用**人格里写的那一套**，不能只固定一个。
-    人格里是这样写的：``别名：晓沫；沫沫；沫酱；沫子``
-    """
-    prompt = ""
-    if persona:
-        try:
-            prompt = str(persona.get("prompt") or "")
-        except Exception:
-            prompt = str(getattr(persona, "prompt", "") or "")
-    if not prompt:
-        return []
-    out = []
-    pattern = re.compile(r"(?:别名|别称|昵称|小名|外号|称呼)\s*[:：]\s*([^\n]{1,140})")
-    for match in pattern.finditer(prompt):
-        for item in re.split(r"[；;、,，/|]+", match.group(1)):
-            text = str(item).strip(" 「」“”\"'。.·-—")
-            if not text or len(text) > 12 or text == name or text in out:
-                continue
-            out.append(text)
-            if len(out) >= 12:
-                return out
-    return out
 
 
 
@@ -1030,7 +882,7 @@ def extract_persona_aliases(persona, name=""):
 # 以前守卫按「methods 里有没有 GET」判断，而写接口全被注册成 GET+POST，于是守卫一次都没执行过。
 
 
-class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, ReplyMixin, SyncMixin, LearnMixin, EconomyMixin, WeatherMixin, OutfitMixin, PresenceMixin, RelationsMixin, MediaMixin, MemoryOpsMixin, VitalsMixin, InfraMixin, Star):
+class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, ReplyMixin, SyncMixin, LearnMixin, EconomyMixin, WeatherMixin, OutfitMixin, PresenceMixin, RelationsMixin, MediaMixin, MemoryOpsMixin, VitalsMixin, InfraMixin, ConfigMixin, PersonaMixin, DataBridgeMixin, UsageMixin, Star):
     def __init__(self, context: Context, config: dict = None):
         super().__init__(context)
         self.config = config or {}
@@ -1207,36 +1059,10 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         self._boot_task = self._spawn(self._ensure_ready())
 
     # ---------- 配置 ----------
-    def cfg(self, key, default=None):
-        try:
-            value = self.config.get(key, default)
-        except Exception:
-            value = default
-        return default if value is None else value
 
-    def cfg_bool(self, key, default=False):
-        value = self.cfg(key, default)
-        if isinstance(value, bool):
-            return value
-        return str(value).strip().lower() in ("1", "true", "yes", "on", "是")
 
-    def cfg_int(self, key, default=0):
-        try:
-            return int(float(self.cfg(key, default)))
-        except Exception:
-            return default
 
-    def cfg_float(self, key, default=0.0):
-        try:
-            return float(self.cfg(key, default))
-        except Exception:
-            return default
 
-    def cfg_str(self, key, default=""):
-        try:
-            return str(self.cfg(key, default))
-        except Exception:
-            return default
 
     def _core_decor_flags(self, umo=""):
         """AstrBot 核心会不会在插件 hook 之后再加「引用 / @」。
@@ -1260,187 +1086,17 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         }
 
 
-    async def _persona_name_for(self, umo=""):
-        """读取当前会话的人格名；读不到时返回空字符串。"""
-        if not self.cfg_bool("use_persona_name", True):
-            return ""
-        key = str(umo or "default")
-        cached = self._persona_name_cache.get(key)
-        if cached and now_ts() - cached[0] < 300:
-            return cached[1]
-        name = extract_persona_name(await self._resolve_persona(umo))
-        self._persona_name_cache[key] = (now_ts(), name)
-        return name
 
-    async def _persona_names_for(self, umo=""):
-        """返回 (名字, 别名列表)：别名取人格里「别名：…」那一行 + 配置里的 bot_aliases。"""
-        use = self.cfg_bool("use_persona_name", True)
-        persona = await self._resolve_persona(umo) if use else None
-        name = extract_persona_name(persona) if use else ""
-        aliases = extract_persona_aliases(persona, name) if use else []
-        for item in self.cfg_str("bot_aliases", "").split(","):
-            item = str(item or "").strip()
-            if item and item not in aliases:
-                aliases.append(item)
-        return name, aliases
 
-    def _dialect_rows(self):
-        region = self._dialect_region()
-        try:
-            rows = [row for row in self.db.list_dialects() if region in str(row.get("region") or "")]
-        except Exception:
-            rows = []
-        if rows:
-            return rows
-        style = self._dialect_style().strip()
-        return [
-            {"term": term, "meaning": meaning, "region": style, "example": example}
-            for term, meaning, example in DIALECT_FALLBACK_ROWS.get(style, [])
-        ]
 
-    def _dialect_region(self):
-        style = self._dialect_style().strip()
-        return DIALECT_REGIONS.get(style, style)
 
-    def scenic_spots(self):
-        if getattr(self, "_scenic_cache", None):
-            return self._scenic_cache
-        try:
-            path = os.path.join(self.plugin_dir, "scenic_spots.json")
-            with open(path, encoding="utf-8") as stream:
-                data = json.load(stream)
-            self._scenic_cache = data if isinstance(data, list) else []
-        except Exception as exc:
-            logger.warning("[amo] 读取景区数据失败: %s" % exc)
-            self._scenic_cache = []
-        return self._scenic_cache
 
-    def _scenic_kb_name(self):
-        name = self.cfg_str("scenic_kb_name", "旅游知识库-风景区").strip()
-        if not name or name in ("中国景区知识库", "景区知识库"):
-            return "旅游知识库-风景区"
-        return name
 
-    def _scenic_text_lines(self):
-        lines = []
-        for spot in self.scenic_spots():
-            if not isinstance(spot, dict):
-                continue
-            projects = spot.get("projects") if isinstance(spot.get("projects"), list) else []
-            lines.append(
-                "景区：%s\n城市：%s·%s\n等级：%s\n游玩项目：%s\n建议时长：%s\n区域：%s" % (
-                    spot.get("name", ""), spot.get("province", ""), spot.get("city", ""),
-                    spot.get("level", ""), "、".join(str(item) for item in projects),
-                    spot.get("duration", ""), spot.get("area", ""),
-                )
-            )
-        return lines
 
-    async def _ensure_scenic_kb(self):
-        if not self.cfg_bool("create_scenic_kb", True):
-            return None
-        try:
-            manager = getattr(self.context, "kb_manager", None)
-            if manager is None:
-                logger.warning("[amo] 当前 AstrBot 没有 kb_manager，景区知识库未创建")
-                return None
-            if callable(manager) and not hasattr(manager, "create_kb"):
-                manager = manager()
-            name = self._scenic_kb_name()
-            kb = await manager.get_kb_by_name(name)
-            if kb is None:
-                providers = list(self.context.get_all_embedding_providers() or [])
-                if not providers:
-                    logger.warning("[amo] 没有 Embedding 供应商，景区知识库未创建")
-                    return None
-                provider_id = str(getattr(providers[0], "provider_config", {}).get("id", "") or "")
-                if not provider_id:
-                    try:
-                        provider_id = str(providers[0].meta().id or "")
-                    except Exception:
-                        provider_id = ""
-                if not provider_id:
-                    logger.warning("[amo] Embedding 供应商没有有效 id，景区知识库未创建")
-                    return None
-                created = manager.create_kb(
-                    name,
-                    "中国 3A 级以上景区、所在城市与具体游玩项目",
-                    emoji="🏞️",
-                    embedding_provider_id=provider_id,
-                )
-                kb = await created if inspect.isawaitable(created) else created
-            lines = self._scenic_text_lines()
-            if lines:
-                try:
-                    docs = await kb.list_documents(search="amo_scenic")
-                    for doc in docs or []:
-                        doc_id = getattr(doc, "doc_id", "") or getattr(doc, "id", "")
-                        if doc_id:
-                            await kb.delete_document(doc_id)
-                except Exception:
-                    pass
-                try:
-                    await kb.upload_document(
-                        "amo_scenic_spots.txt",
-                        "\n\n".join(lines).encode("utf-8"),
-                        "txt",
-                    )
-                except Exception as exc:
-                    logger.warning("[amo] 景区知识库上传失败: %s" % exc)
-            logger.info("[amo] 景区知识库 %s 已同步，共 %d 个景区" % (name, len(lines)))
-            return kb
-        except Exception as exc:
-            logger.warning("[amo] 景区知识库创建失败: %s" % exc)
-            return None
 
-    async def _scenic_kb_context(self, query):
-        try:
-            manager = getattr(self.context, "kb_manager", None)
-            if manager is None or not str(query or "").strip():
-                return ""
-            name = self._scenic_kb_name()
-            kb = await manager.get_kb_by_name(name)
-            if kb is None:
-                return ""
-            result = await manager.retrieve(str(query)[:400], [name], top_m_final=4)
-            return str(result.get("context_text") or "") if isinstance(result, dict) else ""
-        except Exception as exc:
-            logger.debug("[amo] 景区知识库检索失败: %s" % exc)
-            return ""
 
-    def _dialect_active(self):
-        """方言是否生效：语种选「普通话」就等于关掉方言（连方言库都不查）。"""
-        style = str(self.cfg_str("dialect_style", "") or "").strip()
-        if style in ("普通话", "关闭", "off", "none"):
-            return False
-        return self.cfg_bool("dialect_enabled", True)
 
-    def _dialect_style(self):
-        """语种：配置里写了就用配置（面板可覆盖），没写就按世界观城市自动选。"""
-        explicit = str(self.cfg_str("dialect_style", "") or "").strip()
-        if explicit and explicit not in ("自动", "auto", "auto_city"):
-            return explicit
-        city = ""
-        try:
-            world = getattr(self.state, "worldview", None) or {}
-            city = str(world.get("city") or "")
-        except Exception:
-            pass
-        if not city:
-            try:
-                city = str(
-                    self.cfg_str("weather_city_name", "")
-                    or self.cfg_str("weather_city", "")
-                    or ""
-                )
-            except Exception:
-                pass
-        return dialect_for_city(city)
 
-    def _dialect_kb_name(self):
-        base = self.cfg_str("dialect_kb_name", "陪伴方言库").strip() or "陪伴方言库"
-        style = self._dialect_style().strip()
-        return base + "-" + style if style else base
 
     @staticmethod
     def _embedding_provider_id(provider):
@@ -1455,31 +1111,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         except Exception:
             return ""
 
-    async def _dialect_kb_context(self, query):
-        # 关掉方言就别检索方言库：省一次 embedding 查询和一段提示词
-        if not self._dialect_active():
-            return ""
-        try:
-            manager = getattr(self.context, "kb_manager", None)
-            if manager is None or not str(query or "").strip():
-                return ""
-            name = self._dialect_kb_name()
-            kb = await manager.get_kb_by_name(name)
-            names = [name]
-            if kb is None:
-                legacy = await manager.get_kb_by_name("核心方言库")
-                if legacy is not None:
-                    kb = legacy
-                    names = ["核心方言库"]
-            if kb is None:
-                return ""
-            result = await manager.retrieve(str(query)[:500], names, top_m_final=3)
-            if not isinstance(result, dict):
-                return ""
-            return str(result.get("context_text") or "")
-        except Exception as exc:
-            logger.debug("[amo] 方言知识库检索失败: %s" % exc)
-            return ""
 
 
 
@@ -1701,28 +1332,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             return "衣柜里没有%s，%s；下次再买。" % (text or "这类衣服", hint)
         return "衣柜里没有%s，这次换不了。" % (text or "这类衣服")
 
-    def _command_prefixes(self):
-        if self._prefix_cache is not None:
-            return self._prefix_cache
-        prefixes = []
-        try:
-            cfg = self.context.get_config()
-            raw = cfg.get("wake_prefix", []) if cfg else []
-            if isinstance(raw, str):
-                raw = [raw]
-            prefixes = [str(item) for item in (raw or []) if item]
-        except Exception:
-            pass
-        self._prefix_cache = prefixes
-        return prefixes
 
-    def _looks_like_command(self, text):
-        if looks_like_plain_command(text):
-            return True
-        first = text.split()[0].lower() if text.split() else ""
-        if first in ("amo", "陪伴", "c_status", "c_profile", "c_setrel", "learn_and_gate"):
-            return True
-        return any(prefix and text.startswith(prefix) for prefix in self._command_prefixes())
 
     _on_astrbot_loaded_hook = getattr(filter, "on_astrbot_loaded", None)
 
@@ -1746,30 +1356,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             except Exception as exc:
                 logger.debug("[amo] 加载完成推月薪失败: %s" % exc)
 
-    def _record_tokens(self, kind, provider, response):
-        """把这次调用的 token 记进自己的表；provider_stats 只统计主回复，这里补内部调用。"""
-        try:
-            usage = getattr(response, "usage", None)
-            if usage is None:
-                return
-            if isinstance(usage, dict):
-                miss = usage.get("input_other", 0)
-                cached = usage.get("input_cached", 0)
-                out = usage.get("output", 0)
-            else:
-                miss = getattr(usage, "input_other", 0)
-                cached = getattr(usage, "input_cached", 0)
-                out = getattr(usage, "output", 0)
-            if not (int(miss or 0) or int(cached or 0) or int(out or 0)):
-                return
-            model = ""
-            try:
-                model = str(provider.get_model() or "")
-            except Exception:
-                model = ""
-            self.db.record_tokens(kind, model, miss, cached, out)
-        except Exception as exc:
-            logger.debug("[amo] 记 token 失败: %s" % exc)
 
     def _spawn(self, coro):
         try:
@@ -2398,24 +1984,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
 
 
 
-    def _data_plugin(self):
-        """找「我想永远陪着你-记忆」插件实例；没装就返回 None。"""
-        try:
-            for name in self.DATA_PLUGIN_NAMES:
-                star = self._star_instance(self.context.get_registered_star(name))
-                if star is not None:
-                    return star
-        except Exception:
-            pass
-        try:
-            for meta in self.context.get_all_stars():
-                marker = (getattr(meta, "name", "") or "") + " " + (getattr(meta, "module_path", "") or "")
-                star = self._star_instance(meta)
-                if star is not None and ("amo_memory" in marker.lower() or "amo_data" in marker.lower()):
-                    return star
-        except Exception:
-            pass
-        return self._embedded_data_plugin()
 
     # ---------- 融合态：记忆是终端自带的数据层 ----------
 
@@ -2441,89 +2009,16 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                     return data
         return {}
 
-    def _data_mem(self):
-        plugin = self._data_plugin()
-        return getattr(plugin, "mem", None) if plugin is not None else None
 
     # ---------- 记忆能力层（memory_hooks）：陪伴只判定，数据交给挂载插件 ----------
-    def _memory_hub(self):
-        hub = getattr(self, "_mem_hub", None)
-        if hub is not None:
-            return hub
-        if MemoryHub is None:
-            return None
-        try:
-            hub = MemoryHub(
-                self._memory_runtime(),
-                buffer_size=max(8, self.cfg_int("ctx_window", 48)),
-            )
-        except Exception as exc:
-            logger.warning("[amo] 记忆能力层初始化失败: %s" % exc)
-            return None
-        self._mem_hub = hub
-        return hub
 
 
-    def _plugin_by_names(self, names):
-        """按插件名找实例；不缓存，reload 之后拿到的是新实例。"""
-        for name in names:
-            try:
-                meta = self.context.get_registered_star(name)
-            except Exception:
-                meta = None
-            star = self._star_instance(meta)
-            if star is not None:
-                return star
-        try:
-            wanted = [str(item).lower() for item in names]
-            for meta in self.context.get_all_stars():
-                module = str(getattr(meta, "module_path", "") or "").lower()
-                label = str(getattr(meta, "name", "") or "").lower()
-                if any(word in module or word in label for word in wanted):
-                    star = self._star_instance(meta)
-                    if star is not None:
-                        return star
-        except Exception:
-            pass
-        return None
 
 
-    def _data_store(self):
-        """兜底：直接拿数据插件的 DataStore（mem 门面缺失/旧版时用）。"""
-        plugin = self._data_plugin()
-        return getattr(plugin, "store", None) if plugin is not None else None
 
-    def _data_connected(self):
-        """数据插件此刻在不在：只看内存里的插件表，不读库、不联网。"""
-        plugin = self._data_plugin()
-        if plugin is None:
-            return False
-        return getattr(plugin, "mem", None) is not None or getattr(plugin, "store", None) is not None
 
-    def _note_data_missing(self):
-        """第一次没找到数据插件：记一次日志，并在 60 秒后再确认一次（只提醒一次）。"""
-        if not self._data_missing_logged:
-            self._data_missing_logged = True
-            logger.info("[amo] 未检测到数据插件 Astr_Amo_data，继续用本地库（装好后面板数据为空是正常的）")
-        if not self._data_warn_scheduled:
-            self._data_warn_scheduled = True
-            self._spawn(self._warn_data_missing_later())
 
-    async def _warn_data_missing_later(self, delay=60.0):
-        """启动 60 秒后还没连上数据插件，才升级成一条 warning；连上就不打。"""
-        try:
-            await asyncio.sleep(max(1.0, float(delay)))
-        except asyncio.CancelledError:
-            return
-        if not self._running or self._data_synced or self._data_connected():
-            return
-        logger.warning(
-            "[amo] 数据插件未连接：去「插件」页看 Astr_Amo_data 是不是被停用/加载报错；"
-            "装好后 5 分钟内会自动接上，不用重启"
-        )
 
-    def _data_bot_id(self):
-        return str(self.cfg_str("data_bot_id", "") or self.bot_name or "default")
 
     # 平台名 -> 显示名。Amo 在 QQ 和飞书上都要认得出同一个人。
     PLATFORM_LABELS = {
@@ -2534,32 +2029,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         "webchat": "网页", "wechat": "微信", "wx": "微信",
     }
 
-    def _platform_of(self, event=None):
-        """当前消息来自哪个平台（aiocqhttp / lark …），失败就退回 umo 前缀。"""
-        name = ""
-        try:
-            name = str(event.get_platform_name() or "")
-        except Exception:
-            name = ""
-        if not name:
-            try:
-                name = str(event.unified_msg_origin or "").split(":", 1)[0]
-            except Exception:
-                name = ""
-        name = name.strip().lower()
-        if name:
-            seen = getattr(self, "_seen_platforms", None)
-            if seen is None:
-                seen = set()
-                self._seen_platforms = seen
-            seen.add(name)
-        return name
 
-    def _platform_label(self, platform=""):
-        key = str(platform or "").strip().lower()
-        if not key:
-            return "这里"
-        return self.PLATFORM_LABELS.get(key, str(platform).strip())
 
     @staticmethod
     def _event_message_id(event):
@@ -2574,107 +2044,16 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                     return str(value)[:128]
         return ""
 
-    async def _data_call(self, name, *args, **kwargs):
-        mem = self._data_mem()
-        func = getattr(mem, name, None) if mem is not None else None
-        if not callable(func):
-            logger.error("[amo] 记忆库没有接口 %s（Astr_Amo_data 没连上或版本不对）" % name)
-            return None
-        try:
-            return await asyncio.wait_for(
-                func(*args, **kwargs),
-                timeout=max(1.0, self.cfg_float("data_call_timeout_seconds", 15.0)),
-            )
-        except asyncio.TimeoutError:
-            logger.error("[amo] 记忆库 %s 超时" % name)
-            return None
-        except Exception as exc:
-            logger.error("[amo] 记忆库 %s 调用失败: %s" % (name, exc))
-            return None
-
-
-    def _log_push_failure(self, uid, exc):
-        """同一次同步里最多打 3 条 warning，避免刷屏。"""
-        count = to_int(getattr(self, "_push_fail_count", 0))
-        self._push_fail_count = count + 1
-        if count < 3:
-            logger.warning(
-                "[amo] 推送画像 %s 失败: %s: %s" % (uid, type(exc).__name__, exc)
-            )
 
 
 
-    def _apply_remote_profile(self, uid, remote_row, local_profile):
-        """把数据插件面板改过的画像字段拉回本地（不标记成本地手动修改）。"""
-        fields = {}
-        for src, dst in (("name", "name"), ("alias", "alias"), ("relation", "relation"), ("remark", "notes")):
-            value = str(remote_row.get(src) or "").strip()
-            if src == "remark" and _looks_auto_note(value):
-                continue
-            if value and value != str(local_profile.get(dst) or "").strip():
-                fields[dst] = value
-        if not fields:
-            return False
-        try:
-            self.db.update_profile(uid, mark_local=False, **fields)
-        except Exception as exc:
-            logger.warning("[amo] 拉回画像 %s 失败: %s" % (uid, exc))
-            return False
-        logger.info("[amo] 画像从数据插件拉回：%s %s" % (uid, ",".join(fields.keys())))
-        return True
 
 
 
-    async def _push_relation_to_data(self, a_uid, b_uid, relation, note=""):
-        # "bot"/"self" 是插件内部标识，不是真实人物：写进记忆终端会让关系图多出一个
-        # 叫 bot 的节点，所以只推真实的人与人之间的关系。
-        if str(a_uid) in INTERNAL_RELATION_NODES or str(b_uid) in INTERNAL_RELATION_NODES:
-            return
-        await self._data_call(
-            "save_relation", self._data_bot_id(), str(a_uid), str(b_uid),
-            str(relation or "朋友"), str(note or ""),
-        )
 
-    async def _sync_profile_relation_edge(self, uid, relation, note="画像：关系字段"):
-        """画像里手动设的关系，同步成一条 bot↔对方 的关系边。
 
-        关系图是从 relation_network 渲染的；不写这条边，就会出现「画像设成恋人、
-        图上还是自动沉淀的熟人」。
-        """
-        uid = str(uid or "").strip()
-        relation = str(relation or "").strip()
-        # 画像用的是「相恋」，关系网用的是「恋人」；不换算就会被下面的白名单挡掉，
-        # 于是又回到「设了恋人、图上还是熟人」。
-        relation = {"相恋": "恋人", "熟识": "熟人", "仇恨": "仇人"}.get(relation, relation)
-        if not uid or not relation or relation in ("普通",):
-            return
-        if uid in INTERNAL_RELATION_NODES or relation not in NETWORK_RELATIONS:
-            return
-        try:
-            self.db.upsert_relation("bot", uid, relation, note)
-        except Exception as exc:
-            logger.debug("[amo] 画像关系写进关系网失败: %s" % exc)
 
-    async def _data_mem_list(self, uid, keyword="", limit=50):
-        """面板记忆页：直接列出记忆终端里的条目。"""
-        mem = self._data_mem()
-        if mem is None or not uid:
-            return []
-        size = max(1, min(200, to_int(limit, 50)))
-        try:
-            if keyword:
-                recall = getattr(mem, "recall", None)
-                rows = await recall(self._data_bot_id(), str(uid), str(keyword), size, "", "") if callable(recall) else []
-            else:
-                lister = getattr(mem, "list_memories", None)
-                rows = await lister(self._data_bot_id(), str(uid), size) if callable(lister) else []
-        except Exception as exc:
-            logger.debug("[amo] 读取记忆终端失败: %s" % exc)
-            return []
-        items = [dict(row) for row in (rows or []) if isinstance(row, dict)]
-        for item in items:
-            item.setdefault("source", "amo_data")
-        return items
+
 
     # ------------------------------------------------------------------
     # 生存状态（饱食度 / 水分）：只读 + 只注入，绝不自己改
@@ -2718,65 +2097,10 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
 
 
 
-    def _data_memory_count(self, uid):
-        """状态页记忆条数：以「记忆终端」为准，终端没有才数外挂插件。
-
-        以前这里只数外挂插件，装的是 Astr_Amo_data 时状态页永远是 0；
-        又套了 30 秒缓存，刚记住的东西要刷新才出现。
-        """
-        store = self._data_store()
-        lister = getattr(store, "list_memories", None) if store is not None else None
-        if callable(lister):
-            try:
-                rows = lister(self._data_bot_id(), str(uid or ""), 200) or []
-                return len(rows)
-            except Exception as exc:
-                logger.debug("[amo] 统计记忆终端条数失败: %s" % exc)
-        return 0
-
-    async def _push_cache_to_data(self, key, value):
-        await self._data_call("cache_set", self._data_bot_id(), str(key), value)
 
 
-    async def _data_memory_write(self, uid, content, kind="fact", tier=1, scope="private", group_id=""):
-        """把一条记忆交给「记忆终端」写入；它只负责存，陪伴不落本地库。"""
-        mem = self._data_mem()
-        if mem is None or not uid:
-            return False
-        content = re.sub(r"\s+", " ", str(content or "")).strip()
-        if not content:
-            return False
-        remember = getattr(mem, "remember", None)
-        if not callable(remember):
-            return False
-        level = to_int(tier, 1)
-        importance = 0.75 if level >= 2 else (0.55 if level == 1 else 0.35)
-        try:
-            result = await remember(
-                self._data_bot_id(), str(uid), content,
-                kind=str(kind or "fact"), importance=importance,
-                scope=str(scope or "private"), group_id=str(group_id or ""),
-            )
-        except Exception as exc:
-            logger.debug("[amo] 记忆终端写入失败: %s" % exc)
-            return False
-        if isinstance(result, dict):
-            return bool(result.get("ok", True))
-        return bool(result)
 
-    async def _sync_with_data_plugin(self):
-        """启动时双向同步：首次把本地画像/关系/日程缓存推过去，之后以插件为准补齐本地。
 
-        数据插件（Astr_Amo_data）可能比 amo 后加载，所以允许重试：
-        - 本实例只成功同步一次（_data_synced），之后所有调用直接返回，不重复推送；
-        - 启动、on_astrbot_loaded、后台 tick 三处可能同时来，用锁串行，避免重复迁移。
-        """
-        if self._data_synced:
-            return
-        async with self._data_sync_lock:
-            if self._data_synced:
-                return
-            await self._sync_with_data_plugin_once()
 
 
     WRITE_METHODS = (
@@ -5077,13 +4401,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
 
 
     # ---------- 指令 ----------
-    def _args(self, event):
-        raw = (event.message_str or "").strip()
-        raw = re.sub(r"^[/／]\s*", "", raw)
-        parts = raw.split()
-        if parts and parts[0].lower() in ("amo", "陪伴", "amo_forever", "astrbot_amo_forever"):
-            parts = parts[1:]
-        return parts
 
     def _resolve_target(self, event, args, index):
         if Comp is not None:
@@ -5245,31 +4562,8 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
     })
 
 
-    def _q(self, key, default=None):
-        try:
-            if web_request is not None:
-                return web_request.query.get(key, default)
-        except Exception:
-            pass
-        return default
 
-    def _q_int(self, key, default=0):
-        return to_int(self._q(key, default), default)
 
-    async def _body(self):
-        try:
-            if web_request is not None and hasattr(web_request, "json"):
-                data = await web_request.json(default={})
-                return data if isinstance(data, dict) else {}
-        except Exception:
-            pass
-        try:
-            if web_request is not None:
-                data = await web_request.get_json(silent=True)
-                return data or {}
-        except Exception:
-            pass
-        return {}
 
     @staticmethod
     def _coerce_config_value(kind, value):
@@ -5293,26 +4587,10 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             return parsed if isinstance(parsed, dict) else {}
         return str(value)
 
-    def _schema_map(self):
-        path = os.path.join(self.plugin_dir, "_conf_schema.json")
-        try:
-            with open(path, encoding="utf-8") as stream:
-                schema = json.load(stream)
-            return schema if isinstance(schema, dict) else {}
-        except Exception as exc:
-            logger.warning("[amo] 读取配置 schema 失败: %s" % exc)
-            return {}
 
     # 这些值绝不能随 /config 明文下发（GET 无 body、无 CSRF 校验）
     SENSITIVE_KEYS = {"hefeng_key", "deepseek_api_key"}
 
-    def _apply_forced_on_config(self):
-        for key in FORCED_ON_CONFIG_KEYS:
-            try:
-                if key in self.config and self.config.get(key) is not True:
-                    self.config[key] = True
-            except Exception:
-                pass
 
     @staticmethod
     def _mask_secret(value):
@@ -5394,54 +4672,13 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
 
 
     # ---- 用量 / 余额 ----
-    def _usage_db_path(self):
-        try:
-            from astrbot.core.utils.astrbot_path import get_astrbot_data_path
-            return os.path.join(str(get_astrbot_data_path()), "data_v4.db")
-        except Exception:
-            try:
-                data_dir = os.path.dirname(os.path.dirname(os.path.dirname(str(self.db.path))))
-                return os.path.join(data_dir, "data_v4.db")
-            except Exception:
-                return ""
 
-    def _deepseek_api_key(self):
-        key = str(self.cfg_str("deepseek_api_key", "") or "").strip()
-        if key:
-            return key
-        for name in ("DEEPSEEK_API_KEY", "COMPANION_V2_BALANCE_API_KEY"):
-            value = str(os.environ.get(name, "") or "").strip()
-            if value:
-                return value
-        return ""
 
-    def _usage_prices(self):
-        prices = {}
-        for key in ("hit_peak", "hit_idle", "miss_peak", "miss_idle", "out_peak", "out_idle"):
-            prices[key] = self.cfg_float("usage_price_" + key, USAGE_DEFAULT_PRICES[key])
-        return prices
 
-    def _usage_start_of_today(self):
-        now = _now()
-        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        return start.timestamp()
 
     # ---- 供应商识别 / 多模型用量 ----
 
-    def _judge_provider_id(self):
-        try:
-            if self.heartflow is not None:
-                return str(self.heartflow.judge_provider_info().get("id") or "")
-        except Exception:
-            pass
-        return ""
 
-    def _using_provider_id(self):
-        try:
-            provider = self.context.get_using_provider()
-            return str((getattr(provider, "provider_config", None) or {}).get("id") or "")
-        except Exception:
-            return ""
 
 
     @staticmethod
@@ -5454,32 +4691,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         return "openai_bill"
 
 
-    def _provider_api_key(self, item):
-        """从 AstrBot 供应商配置里取密钥；只在内存中使用，不写日志不回传。"""
-        config = {}
-        try:
-            for provider in (self.context.get_all_providers() or []):
-                candidate = getattr(provider, "provider_config", None) or {}
-                if str(candidate.get("id") or "") == str(item.get("id") or ""):
-                    config = candidate
-                    break
-        except Exception:
-            config = {}
-        key = config.get("key") or ""
-        if isinstance(key, list):
-            key = next((str(item or "").strip() for item in key if str(item or "").strip()), "")
-        return str(key or "").strip()
 
-    async def _balance_cached(self):
-        """余额 60 秒内复用，避免面板每刷一次就打一次外网。"""
-        now = time.time()
-        cache = getattr(self, "_balance_cache", None)
-        if isinstance(cache, dict) and now - float(cache.get("at") or 0) < 60:
-            return cache.get("data") or {"ok": False, "error": "查询失败"}
-        key = self._deepseek_api_key()
-        data = await asyncio.to_thread(fetch_deepseek_balance, key)
-        self._balance_cache = {"at": now, "data": data}
-        return data
 
 
 
