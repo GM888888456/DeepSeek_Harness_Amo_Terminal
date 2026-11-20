@@ -1659,6 +1659,60 @@ class ScheduleEngine:
             cur["vehicle"] = cur.get("vehicle") or (ctx.get("car") if cur["transit"] == "drive" else "")
             cur["detail"] = "上一小时还在%s，这一小时在路上" % (prev.get("place") or "别处")
             cur["effects"] = {}
+        # 短途往返：两头在同一个地方（比如公司在同一栋楼），中间那一格不该是"在路上"。
+        # 现实里就是下楼吃个饭，不画成"上一秒公司、下一秒街上"。
+        for index in range(1, len(items) - 1):
+            cur = items[index]
+            if str(cur.get("zone") or "") != "road":
+                continue
+            prev_place = str(items[index - 1].get("place") or "").strip()
+            next_place = str(items[index + 1].get("place") or "").strip()
+            if not prev_place or prev_place != next_place:
+                continue
+            next_zone = str(items[index + 1].get("zone") or "")
+            if next_zone not in ("restaurant", "office", "mall", "home"):
+                continue
+            cur["zone"] = next_zone
+            cur["place"] = next_place
+            cur["category"] = items[index + 1].get("category") or cur.get("category") or "work"
+            cur["activity"] = ("在公司附近吃口饭" if next_zone == "restaurant"
+                               else "回工位接着忙")
+            cur["detail"] = "就在同一处附近，没走远"
+            cur["transit"] = ""
+            cur["vehicle"] = ""
+
+        # 文案说人已经到家（洗漱/睡衣/被窝），那就不是"在路上"。
+        # 否则会出现「她说在家换睡衣，照片背景是地铁站」。
+        home_words = ("到家", "在家", "进屋", "洗漱", "睡衣", "被窝", "躺下", "回到小窝")
+        home_place = str(ctx.get("home") or "").strip()
+        for item in items:
+            if str(item.get("zone") or "") != "road":
+                continue
+            text = str(item.get("activity") or "") + str(item.get("detail") or "")
+            if not any(word in text for word in home_words):
+                continue
+            item["zone"] = "home"
+            if home_place:
+                item["place"] = home_place
+            item["category"] = "rest"
+            item["transit"] = ""
+            item["vehicle"] = ""
+
+        # 文案在吃饭/喝东西，那就不是"在路上"：路上那一格只该有通勤。
+        eat_words = ("吃", "喝", "饭", "面", "汤", "外卖", "奶茶", "咖啡", "粉")
+        for item in items:
+            if str(item.get("zone") or "") != "road":
+                continue
+            text = str(item.get("activity") or "") + str(item.get("detail") or "")
+            if not any(word in text for word in eat_words):
+                continue
+            if any(word in text for word in ("地铁", "公交", "车厢", "站台", "打车", "开车")):
+                continue
+            item["zone"] = "restaurant"
+            item["category"] = "meal"
+            item["transit"] = ""
+            item["vehicle"] = ""
+
         # 周末景区必须体现资产绑定：开车、堵车、找停车位。
         if (ctx.get("meta") or {}).get("rest") and ctx.get("scenic") and ctx.get("good_weather"):
             scenic_items = [item for item in items if item.get("zone") == "scenic"]
