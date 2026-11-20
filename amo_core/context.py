@@ -224,6 +224,32 @@ class ContextMixin:
         if wander_text:
             parts.append(wander_text)
         if is_group:
+            # 「刚才谁在跟谁说话」：以前群聊只给一句「这条是不是在跟你说话」，
+            # 模型看不到前因后果，就把群里别人之间的问答当成在回答她
+            # （2026-11-20 19:04 实例：真的懈回火拼「都有」，她接成「我什么时候抛过你」）。
+            try:
+                flow = []
+                for row in (self._recent(umo, 6) or []):
+                    if not isinstance(row, dict):
+                        continue
+                    content = str(row.get("content") or "").strip()
+                    if not content:
+                        continue
+                    who = str(row.get("name") or row.get("sender") or row.get("nick") or "").strip()
+                    if str(row.get("role") or "") in ("assistant", "bot"):
+                        who = "你"
+                    elif not who:
+                        who = "群友"
+                    flow.append("- %s：%s" % (who, content[:40]))
+                if flow:
+                    parts.append(
+                        "【刚才谁在跟谁说话】\n" + "\n".join(flow[-5:]) + "\n"
+                        "看清楚：这是群里几个人在互相说话。没有点你的名字、没有 @ 你、"
+                        "也没有接着你上一句说的，就不是在问你。就算你想插一句，也不能把别人之间的"
+                        "问答当成在回答你、在问你——别去纠正别人对你的误会，也别把话题接成你自己的事。"
+                    )
+            except Exception as exc:
+                logger.debug("[amo] 群聊对话流提示失败: %s" % exc)
             target = str(getattr(event, "heartflow_target", "") or "")
             angle = str(getattr(event, "heartflow_angle", "") or "")
             mode = str(getattr(event, "heartflow_mode_hint", "") or "")
@@ -238,6 +264,7 @@ class ContextMixin:
                         "【群聊·插话】这是群聊，说话的是 " + sender_nick + "。这条不是在叫你，"
                         "你只是自己想插一句：先把上下文里他们在聊的事看懂，再" + (angle or "顺着话题接一句") + "。"
                         "要求：1-2 句、自然、像群里随口说话；不要把它当成别人问你的问题来回答，"
+                        "也不要把上一条当成在回答你（先看【刚才谁在跟谁说话】，谁问的谁答的），"
                         "不要复述对方的话，不要突然报自己的日程或地点，不要用恋人语气，也别把话题抢过来。"
                         "必须接住一个具体的东西（某个人、哪件事、哪个数字、哪句原话）；"
                         "如果你只能说出「赶紧修」「别乱花钱」「多喝热水」这种放哪儿都成立的话，就别硬接。"
