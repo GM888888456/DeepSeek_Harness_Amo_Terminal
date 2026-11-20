@@ -139,7 +139,9 @@ EVENT_DELTAS: dict[HeartflowEvent, dict] = {
     HeartflowEvent.MONEY_TIGHT: {Emotion.ANGER: 4, Emotion.SADNESS: 5, Desire.MIND: 2},
     HeartflowEvent.PHOTO_SENT: {Emotion.JOY: 2.5, Desire.EYE: 2.5},
     HeartflowEvent.VOICE_SENT: {Emotion.JOY: 2.5, Desire.EAR: 3.5},
-    HeartflowEvent.MEAL: {Physiology.HUNGER: -25, Emotion.JOY: 2, Desire.TONGUE: -15},
+    # 吃饭不再直接压「饿」：饿是由饱食度算出来的（see _sync_hunger_from_vitals），
+    # 这里再压 25 点等于一顿饭记两次账，饿就永远贴 0。改成回一点力气。
+    HeartflowEvent.MEAL: {Emotion.JOY: 2, Physiology.ENERGY: 6, Desire.TONGUE: -15},
     HeartflowEvent.MEDICAL_SICK: {Physiology.ENERGY: -15, Emotion.SADNESS: 5},
     HeartflowEvent.MEDICAL_TREATED: {Physiology.ENERGY: 10, Emotion.JOY: 3},
     HeartflowEvent.PERIOD_START: {Physiology.ENERGY: -20, Emotion.ANGER: 10, Desire.BODY: 12},
@@ -351,17 +353,18 @@ class Heartflow:
     #: 自然变化速度（每分钟）。以前是 0.6 / 0.35，一小时就饿 36 点、掉 21 点精力：
     #: 吃一顿才回 25 点，等于刚吃完一小时又饿，而且精力只会一路掉到 0，永远回不来。
     HUNGER_PER_MINUTE = 0.25          # 约 6.7 小时从饱到饿
-    ENERGY_PER_MINUTE = 0.12          # 醒着 14 小时耗尽
+    ENERGY_PER_MINUTE = 0.09          # 醒着约 18 小时耗尽（中午还得能干活）
     SLEEP_ENERGY_PER_MINUTE = 0.8     # 睡着两小时回满
 
     #: 分档回落：离基线越远，落得越快。以前一律 8%/小时，从 100 落回基线要 15 小时，
     #: 中间聊天又不停往上加，于是情绪就一直顶在天花板上。
     #: 值是「每小时回落掉超出部分的比例」。
     RELEASE_BANDS = (
-        (40.0, 0.45),   # 高得离谱：一小时落掉一半多
-        (22.0, 0.30),   # 明显偏高：一小时落掉三成
-        (10.0, 0.18),   # 有点上头
-        (0.0, 0.10),    # 平常的小起伏
+        (50.0, 0.80),   # 顶到 90 上下：一小时落掉八成，两小时回常态
+        (40.0, 0.62),   # 高得离谱：一小时落掉六成
+        (22.0, 0.45),   # 明显偏高：一小时落掉四成半
+        (10.0, 0.28),   # 有点上头
+        (0.0, 0.15),    # 平常的小起伏
     )
 
     #: 一天里「正常水平」的走向（小时 → 基线）。她不是恒定 30 的机器：

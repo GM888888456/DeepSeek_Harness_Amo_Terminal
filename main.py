@@ -2978,7 +2978,9 @@ class HumanState:
                  "desire_body", "desire_mind", "hunger", "energy")
 
     #: 「离常态多远」→ 0-100、50=平常 的刻度，给语气/门控的阈值用。
-    FEEL_GAIN = 2.2
+    #: 以前是 2.2：比常态高 23 分就顶到 100，面板上怒/哀/惧永远显示 100，
+    #: 看着像坏掉。1.2 是「高 40 分才算顶」。
+    FEEL_GAIN = 1.2
 
     def save(self):
         self.db.kv_set("health", self.health)
@@ -10384,15 +10386,19 @@ class HumanCorePlugin(Star):
             return
         now = now_ts()
         last = to_float(self.db.kv_get("heartflow_tick_ts", 0), 0)
-        self.db.kv_set("heartflow_tick_ts", now)
-        if not last:
-            return
-        minutes = (now - last) / 60.0
-        if minutes < 0.5 or minutes > 24 * 60:
-            return
-        self.feelings.decay(minutes, sleeping=self._is_sleeping_hour())
+        minutes = (now - last) / 60.0 if last else 0.0
+        # 时间戳只在「真的结算过」之后才往前拨。以前是先写时间戳、再判「不足 0.5 分钟
+        # 就 return」，而后台循环正好 30 秒一轮 —— 每两轮就白丢一次衰减（实测 3 分钟
+        # 只走了 2 分钟的量）。现在攒着，够 0.5 分钟再一次性结算。
+        if last and 0.5 <= minutes <= 24 * 60:
+            self.feelings.decay(minutes, sleeping=self._is_sleeping_hour())
+            self.db.kv_set("heartflow_tick_ts", now)
+        elif not last or minutes > 24 * 60:
+            # 第一次跑，或者断开太久（>24 小时）：只把表拨到当下，不补算这一大截
+            self.db.kv_set("heartflow_tick_ts", now)
         self._sync_hunger_from_vitals()
         self._wake_energy_tick()
+        self._energy_day_tick()
 
     def _wake_energy_tick(self) -> None:
         """早上睡醒精力回满，一天一次。
@@ -10426,6 +10432,48 @@ class HumanCorePlugin(Star):
             logger.info("[amo] 早上醒了，精力回满")
         except Exception as exc:
             logger.debug("[amo] 睡醒回精力失败: %s" % exc)
+
+    def _energy_day_tick(self) -> None:
+        """白天也回点力气：午后眯一会儿、晚上到家歇一歇，各补一次（一天各一次）。
+
+        以前精力只有两个来源（23:00-07:00 睡着、07:00 醒来补到 88），之后一路掉，
+        中午就剩二十几、傍晚趴到 0，面板上永远是「累得睁不开眼」。
+        """
+        if getattr(self, "feelings", None) is None:
+            return
+        try:
+            import time as _time
+
+            now = _time.localtime()
+            hour, today = int(now.tm_hour), _time.strftime("%Y-%m-%d", now)
+            energy = float(self.feelings.values().get("energy") or 0)
+        except Exception:
+            return
+        # (标记键, 起始小时, 结束小时, 低于这个值才补, 补到多少)
+        windows = (
+            ("energy_noon_date", 13, 16, 66.0, 66.0),
+            ("energy_evening_date", 18, 22, 52.0, 52.0),
+        )
+        for key, start, end, floor, target in windows:
+            if not (start <= hour < end):
+                continue
+            try:
+                if str(self.db.kv_get(key, "") or "") == today:
+                    continue
+            except Exception:
+                continue
+            try:
+                self.db.kv_set(key, today)
+            except Exception:
+                pass
+            if energy >= floor:
+                continue
+            try:
+                self.feelings.set_physiology(energy=target)
+                logger.info("[amo] 歇了一会儿，精力回到 %d" % int(target))
+            except Exception as exc:
+                logger.debug("[amo] 白天回精力失败: %s" % exc)
+            return
 
     def _sync_hunger_from_vitals(self) -> None:
         """心流的「饿」直接跟着记忆库的饱食度走（饿 = 100 - 饱食度）。
