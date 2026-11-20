@@ -831,6 +831,13 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 except Exception:
                     pass
                 self.heartflow.set_identity(self.bot_name, self.bot_aliases)
+                try:
+                    # 重启后把已经学到的爱称补回引擎（不然要等他说下一句才认得）
+                    _store = self.db.kv_get("lover_pet_names", {}) or {}
+                    for _k, _v in dict(_store).items():
+                        self.heartflow.set_lover_names(_k, _v)
+                except Exception as _exc:
+                    logger.debug("[amo] 恢复爱称失败: %s" % _exc)
         except Exception as exc:
             logger.error("[amo] 心流引擎初始化失败: %s" % exc)
         # 飞书适配器默认把每条回复都发成「引用回复」；私聊不该引用（群聊按概率）
@@ -1337,6 +1344,63 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         return "private", ""
 
 
+    #: 学爱称时要排除的常用词：避免把「今天好累」当成称呼
+    PET_STOPWORDS = frozenset((
+        "你", "我", "他", "她", "它", "在", "这", "那", "是", "不", "好", "嗯", "哦", "啊",
+        "吗", "呢", "吧", "的", "了", "呀", "嘛", "就", "都", "也", "还", "又", "和", "跟",
+        "给", "把", "被", "让", "去", "来", "说", "看", "能", "会", "要", "想", "有", "没",
+        "别", "再", "才", "很", "太", "最", "今天", "明天", "昨天", "现在", "刚才", "那个",
+        "这个", "什么", "怎么", "为什么", "好的", "可以", "知道", "哈哈", "嘿嘿",
+    ))
+    PET_SEP = "，,、。.!！?？ ~～…：:；;\t\n"
+
+    def _learn_lover_names(self, uid, text, event=None) -> None:
+        """从恋人的话里学「他平时怎么叫你」，存 kv 并推给心流。
+
+        只认两种形态，宁可少记也不乱记：
+        1) 句首称呼后紧跟分隔符：「宝，在干嘛」「憨憨，睡了吗」；
+        2) 整句就是一个 1~4 字的称呼：「宝」「憨憨」。
+        不写死「宝/憨憨/乖乖」这类名字——每个人的叫法不一样，靠这个自己记。
+        """
+        body = str(text or "").strip()
+        if not body:
+            return
+        candidate = ""
+        head = body
+        for idx, ch in enumerate(head):
+            if ch in self.PET_SEP:
+                candidate = head[:idx].strip()
+                break
+        else:
+            candidate = head if len(head) <= 4 else ""
+        candidate = candidate.strip(" \t\n\"'“”‘’")
+        if not candidate or len(candidate) > 4 or candidate in self.PET_STOPWORDS:
+            return
+        if candidate.isdigit():
+            return
+        try:
+            store = self.db.kv_get("lover_pet_names", {}) or {}
+            names = [str(x) for x in (store.get(str(uid)) or [])]
+            changed = False
+            if candidate not in names:
+                names.append(candidate)
+                names = names[-12:]
+                store[str(uid)] = names
+                self.db.kv_set("lover_pet_names", store)
+                changed = True
+                logger.info("[amo] 记住他叫你的爱称：%s（uid=%s）" % (candidate, uid))
+            if self.heartflow is not None:
+                self.heartflow.set_lover_names(uid, names)
+                try:
+                    raw_uid = str(event.get_sender_id() or "") if event is not None else ""
+                except Exception:
+                    raw_uid = ""
+                if raw_uid and raw_uid != str(uid):
+                    self.heartflow.set_lover_names(raw_uid, names)
+            _ = changed
+        except Exception as exc:
+            logger.debug("[amo] 记爱称失败: %s" % exc)
+
     # ---------- 消息入口 ----------
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
@@ -1346,10 +1410,14 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             # 2026-11-20：群里他喊「老婆」被判成「对象:unknown」直接沉默，
             # 就是因为在裁决之前没人告诉心流「发这条的是你恋人」。
             try:
-                _profile = self.db.get_profile(self._canonical_uid(event)) or {}
+                _uid = self._canonical_uid(event)
+                _profile = self.db.get_profile(_uid) or {}
                 event.amo_sender_is_lover = str(_profile.get("relation") or "") == "相恋"
-            except Exception:
+                if event.amo_sender_is_lover:
+                    self._learn_lover_names(_uid, raw_text, event)
+            except Exception as exc:
                 event.amo_sender_is_lover = False
+                logger.debug("[amo] 认人失败: %s" % exc)
             try:
                 raw_text = (event.message_str or "").strip()
                 if raw_text and await self._maybe_go_sleep(event, raw_text):

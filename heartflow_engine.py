@@ -512,6 +512,8 @@ class HeartflowEngine:
         self.config = _validate_config(config)
         self.bot_name = ""
         self.bot_aliases: List[str] = []
+        #: uid -> 这个人平时叫你的爱称（从聊天里学，不用写死通用词表）
+        self.lover_names: Dict[str, List[str]] = {}
 
         # 基础配置
         self.judge_provider_name: str = self.config.get("judge_provider_name", "")
@@ -745,6 +747,18 @@ class HeartflowEngine:
     #: 单字爱称单独放：只在整句很短或作为称呼出现时才算，避免「淘宝/支付宝」误命中
     LOVER_SHORT_WORDS = ("宝", "乖", "猪", "臭宝")
 
+    def set_lover_names(self, uid, names) -> None:
+        """登记「这个人平时叫你什么」。由插件按 uid 推上来，学到的越多越准。"""
+        try:
+            key = str(uid or "")
+            if not key:
+                return
+            values = [str(x).strip() for x in (names or []) if str(x).strip()]
+            if values:
+                self.lover_names[key] = values[-16:]
+        except Exception as exc:
+            logger.debug("[心流] 登记爱称失败: %s" % exc)
+
     def _lover_calls_bot(self, event) -> str:
         """发件人是你的恋人，又用了爱称 → 这条就是对你说的。"""
         try:
@@ -755,7 +769,12 @@ class HeartflowEngine:
         text = str(getattr(event, "message_str", "") or "").strip()
         if not text:
             return ""
-        for word in self.LOVER_CALL_WORDS:
+        learned = []
+        try:
+            learned = list(self.lover_names.get(str(getattr(event, "sender_id", "") or ""), []))
+        except Exception:
+            learned = []
+        for word in learned + list(self.LOVER_CALL_WORDS):
             if word and word in text:
                 return word
         short = re.sub(r"[\s，。！？!?、；;：:,.~～…\-]+", "", text)
@@ -773,9 +792,16 @@ class HeartflowEngine:
                 return ""
         except Exception:
             return ""
+        names = []
+        try:
+            names = list(self.lover_names.get(str(getattr(event, "sender_id", "") or ""), []))
+        except Exception:
+            names = []
+        call_hint = ("他平时叫你：" + "、".join(names) + "。这些话如果不是在说别人，就是在叫你。\n") if names else ""
         return (
             "\n## 说话的人是你恋人\n"
-            "这条消息是【你的恋人】说的（你们是相恋关系）。他管你叫 宝 / 憨憨 / 老婆 / 宝贝 / 亲爱的 "
+            + call_hint
+            + "这条消息是【你的恋人】说的（你们是相恋关系）。他管你叫 宝 / 憨憨 / 老婆 / 宝贝 / 亲爱的 "
             "这类爱称时，就是在叫你，不是别人；他单纯跟你撒娇、说情话、嗔你一句、喊你一声，"
             "也算在跟你说话——这种消息 target 必须是 bot、should_reply 必须是 true，"
             "不要判成 other / unknown，也不要因为「没点名」就沉默。\n"
