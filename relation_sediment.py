@@ -30,10 +30,19 @@ def note_kind(note):
 
 
 def auto_relation_for(count, span_days):
-    """互动量 → 关系档位；聊过一句也是「陌生人」，保证每个人都在网里。"""
-    if count >= 60 and span_days >= 7:
-        return "朋友"
-    if count >= 15 and span_days >= 2:
+    """互动量 → 关系档位。
+
+    2026-11-20 用户口径：聊过之后就该「认识」，靠聊天自己长关系网。
+    原来要 15 条 + 跨 2 天才算熟人、60 条 + 跨 7 天才算朋友，群里永远一片
+    「陌生人」（实测 190 条），两跳推断也就永远起不来。
+    现在：聊过 3 句就当认识（熟人）；20 句且跨 2 天算朋友；60 句且跨 7 天维持朋友。
+    """
+    if count >= 20 or (count >= 60 and span_days >= 7):
+        if count >= 20 and span_days >= 2:
+            return "朋友"
+        if count >= 60:
+            return "朋友"
+    if count >= 3:
         return "熟人"
     return "陌生人"
 

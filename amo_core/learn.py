@@ -192,7 +192,16 @@ class LearnMixin:
             stats = self.db.interaction_stats(days)
         except Exception as exc:
             logger.debug("[amo] 互动统计失败: %s" % exc)
-            return
+            stats = []
+        if not stats:
+            # 终端的 messages 表从来没写过（真实消息都在记忆插件里），
+            # 所以这里一直拿不到互动量，关系网永远是「陌生人」。改成向数据插件要。
+            try:
+                stats = await self._data_call("interaction_stats", self._data_bot_id(), days) or []
+                stats = [dict(item) for item in stats if isinstance(item, dict)]
+            except Exception as exc:
+                logger.debug("[amo] 从数据插件取互动统计失败: %s" % exc)
+                stats = []
         if self.cfg_bool("relation_stranger_edges", True):
             seen = {str(row.get("uid") or "") for row in stats}
             try:

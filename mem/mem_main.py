@@ -523,6 +523,14 @@ class MemoryAPI:
         except Exception:
             return {}
 
+    async def interaction_stats(self, bot_id: str, days: int = 0) -> list:
+        """按 uid 统计互动量，给终端的「关系网沉淀」用（本地 messages 表是空的）。"""
+        try:
+            return self._store.interaction_stats(self._bot(bot_id), int(days or 0))
+        except Exception as exc:
+            logger.debug("[amo_data] 互动统计失败: %s" % exc)
+            return []
+
     # ---------- 人物：跨平台身份合并 ----------
     async def resolve_person(self, bot_id: str, platform: str, uid: str, name: str = "") -> int:
         """Amo 每次说话前调一次：拿到这个 (平台, uid) 的人物 pid，同名自动并。"""

@@ -10,6 +10,7 @@ from typing import List
 from typing import Optional
 from typing import Tuple
 import re
+import time
 import sqlite3
 
 if TYPE_CHECKING:  # 只给类型检查看：包内相对导入
@@ -323,6 +324,30 @@ class MessagesMixin(_StoreBase):
         rows = [r for r in rows if start <= int(r.get("created_at") or 0) < end]
         rows = sorted(rows, key=lambda r: (int(r.get("created_at") or 0), int(r.get("id") or 0)))
         return rows[-limit:]
+    def interaction_stats(self, bot_id: str, days: int = 0) -> List[Dict[str, Any]]:
+        """按 uid 统计互动量（条数 / 首末时间）。关系网沉淀要用。"""
+        where, params = _bot_filter(bot_id)
+        sql = ("SELECT uid, COUNT(*) AS c, MIN(created_at) AS f, MAX(created_at) AS l "
+               "FROM messages WHERE uid <> '' AND uid <> 'bot'" + where)
+        if days and int(days) > 0:
+            sql += " AND created_at >= ?"
+            params.append(int(time.time()) - int(days) * 86400)
+        sql += " GROUP BY uid"
+        with self.lock:
+            rows = self.conn.execute(sql, params).fetchall()
+        out = []
+        for row in rows:
+            try:
+                out.append({
+                    "uid": str(row["uid"]),
+                    "c": int(row["c"] or 0),
+                    "f": float(row["f"] or 0),
+                    "l": float(row["l"] or 0),
+                })
+            except Exception:
+                continue
+        return out
+
     def list_messages(self, bot_id: str, umo: str = "", limit: int = 200,
                       pid: int = 0, platform: str = "", uid: str = "") -> List[Dict[str, Any]]:
         where, params = _bot_filter(bot_id)
