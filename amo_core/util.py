@@ -67,7 +67,7 @@ def schedule_category_feel():
         return _CATEGORY_FEEL_CACHE
     table = {}
     try:
-        from .schedule_engine import CATEGORY_FEEL as table
+        from ..schedule_engine import CATEGORY_FEEL as table
     except Exception:
         try:
             from schedule_engine import CATEGORY_FEEL as table

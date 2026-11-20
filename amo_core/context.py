@@ -30,22 +30,8 @@ except Exception:  # pragma: no cover
 
     logger = logging.getLogger("amo_terminal")
 
-from .deps import *
-from .consts import *
-from .text import *
-from .timeutil import *
-from .util import *
+from .shared import *
 
-DIALECT_SAMPLES = {
-    "贵州话": "晓得、咋个、要得、安逸",
-    "东北话": "咋整、唠嗑、得瑟、麻溜",
-    "四川话": "啥子、莫得、巴适、搞快些",
-    "广东话": "唔该、点解、得闲、搞掂",
-    "台湾腔": "酱紫、蛮、超赞、拍谢",
-    "天津话": "嘛呢、倍儿、哏儿、得嘞",
-    "河南话": "弄啥嘞、中、得劲、木有",
-    "上海话": "阿拉、侬、哪能、老灵",
-}
 
 
 class ContextMixin:
@@ -680,6 +666,5 @@ class ContextMixin:
 
 
 __all__ = [
-    "DIALECT_SAMPLES",
     "ContextMixin",
 ]

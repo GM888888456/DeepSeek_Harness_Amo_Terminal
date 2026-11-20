@@ -30,11 +30,7 @@ except Exception:  # pragma: no cover
 
     logger = logging.getLogger("amo_terminal")
 
-from .deps import *
-from .consts import *
-from .text import *
-from .timeutil import *
-from .util import *
+from .shared import *
 
 _HIS_SLEEP_RE = re.compile(r"要睡|去睡|睡觉|睡了|想睡|困了|困死|眯一会|眯一会儿|躺一会|躺一会儿|晚安|闭眼")
 _HIS_AWAY_RE = re.compile(r"在外地|出差|不在家|回不去|放假|休假|年假|请假|不上班|不用上班|明天.{0,6}早起")

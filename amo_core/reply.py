@@ -30,11 +30,7 @@ except Exception:  # pragma: no cover
 
     logger = logging.getLogger("amo_terminal")
 
-from .deps import *
-from .consts import *
-from .text import *
-from .timeutil import *
-from .util import *
+from .shared import *
 
 STYLE_HINTS = {
     "soft": "整体语气温柔、软一点。",

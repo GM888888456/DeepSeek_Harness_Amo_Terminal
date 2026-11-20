@@ -450,7 +450,7 @@ class HumanState:
         """
         try:
             try:
-                from .amo_city_index import city_location
+                from ..amo_city_index import city_location
             except Exception:
                 from amo_city_index import city_location
             return city_location(city)
@@ -1824,7 +1824,7 @@ class HumanState:
         context = self.schedule_context(day) or {}
         weather = ""
         try:
-            from .schedule_engine import _weather_text
+            from ..schedule_engine import _weather_text
         except Exception:
             try:
                 from schedule_engine import _weather_text  # type: ignore

@@ -30,11 +30,7 @@ except Exception:  # pragma: no cover
 
     logger = logging.getLogger("amo_terminal")
 
-from .deps import *
-from .consts import *
-from .text import *
-from .timeutil import *
-from .util import *
+from .shared import *
 
 _SALARY_RE = re.compile(
     r"(月薪|月工资|工资|薪资|年薪|收入)\s*[:：约是]?\s*(\d+(?:\.\d+)?)\s*(万|w|k|千)?",

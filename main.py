@@ -23,6 +23,11 @@ try:
     from .amo_core.human_state import *  # noqa: F401,F403
     from .amo_core.llm_service import *  # noqa: F401,F403
     from .amo_core.reply_gate import *  # noqa: F401,F403
+    from .amo_core.infra import *  # noqa: F401,F403
+    from .amo_core.vitals import *  # noqa: F401,F403
+    from .amo_core.memory_ops import *  # noqa: F401,F403
+    from .amo_core.media import *  # noqa: F401,F403
+    from .amo_core.shared import *  # noqa: F401,F403
     from .amo_core.relations import *  # noqa: F401,F403
     from .amo_core.presence import *  # noqa: F401,F403
     from .amo_core.outfit import *  # noqa: F401,F403
@@ -45,6 +50,11 @@ except ImportError:  # 非包方式加载时的回退
     from amo_core.human_state import *  # noqa: F401,F403
     from amo_core.llm_service import *  # noqa: F401,F403
     from amo_core.reply_gate import *  # noqa: F401,F403
+    from amo_core.infra import *  # noqa: F401,F403
+    from amo_core.vitals import *  # noqa: F401,F403
+    from amo_core.memory_ops import *  # noqa: F401,F403
+    from amo_core.media import *  # noqa: F401,F403
+    from amo_core.shared import *  # noqa: F401,F403
     from amo_core.relations import *  # noqa: F401,F403
     from amo_core.presence import *  # noqa: F401,F403
     from amo_core.outfit import *  # noqa: F401,F403
@@ -191,7 +201,6 @@ except Exception:
 
 #: 面板不展示、但仍可从配置文件改的键。
 #: 评分规则决定「什么叫值得回」，改错了她会变得很奇怪；绝大多数人不需要动它。
-PANEL_HIDDEN_KEYS = frozenset({"hf_judge_rules"})
 DEFAULT_ADMIN = ""
 LEGACY_DEFAULT_ADMIN = "3261748099"
 
@@ -287,35 +296,6 @@ for _d in range(25, 28):
 
 
 
-def lark_quote_kwargs(is_private, message_id, sender_id, chat_id, quote):
-    """飞书发送参数：决定走「引用回复」还是普通发送。
-
-    AstrBot 的飞书适配器在 `LarkMessageEvent.send()` 里固定传
-    `reply_message_id=self.message_obj.message_id`，所以不管私聊群聊、也不管
-    `platform_settings.reply_with_quote`，每条消息都会变成飞书里的「回复」，
-    私聊看起来就是一直在引用他上一条。
-
-    - 私聊：普通发送（receive_id = 他的 open_id），不引用；
-    - 群聊且按概率判定要引用：reply；
-    - 群聊但不引用：普通发送（receive_id = 会话 chat_id）；
-    - 拿不到 open_id / chat_id 时退回原来的 reply，宁可引用也别发不出去。
-    """
-    message_id = str(message_id or "")
-    sender_id = str(sender_id or "")
-    chat_id = str(chat_id or "")
-    if is_private and sender_id:
-        return {
-            "receive_id": sender_id,
-            "receive_id_type": "open_id",
-            "fallback_chat_id": chat_id or None,
-        }
-    if quote and message_id:
-        return {"reply_message_id": message_id}
-    if chat_id:
-        return {"receive_id": chat_id, "receive_id_type": "chat_id"}
-    if message_id:
-        return {"reply_message_id": message_id}
-    return {}
 
 
 
@@ -652,24 +632,8 @@ def looks_like_ai_admission(text):
 # 她不能报后台：模型名、厂商、插件名、API、提示词这类都不该出现在聊天里。
 # 但「插件/提示词/模型」这些词在正常的开发闲聊里也会出现（用户在聊他自己的项目），
 # 一刀切会把正常回复也换成「秘密，不告诉你」。所以只认「说的是她自己」的那种句子。
-MODEL_LEAK_RE = re.compile(
-    r"(?:deepseek|openai|anthropic|claude|gemini|chatgpt|gpt-?[0-9]|qwen|通义|千问|"
-    r"glm|chatglm|智谱|moonshot|kimi|doubao|豆包|ernie|文心|hunyuan|混元|llama|mistral|"
-    r"grok|sonnet|opus|haiku|dp-?[0-9]|llm|大模型|语言模型|模型名称|api\s*key|"
-    r"token|提示词|prompt|system\s*prompt|插件|astrbot)",
-    re.I,
-)
 
 # 「我自己就是/我用的是/我基于…」这类自曝句，才真的算泄漏后台
-SELF_LEAK_RE = re.compile(
-    r"(?:我|本人|咱)(?:就|也|其实|确实|大概)?(?:是|用的?|基于|跑在|接的?|部署在|由)"
-    r"[^。！？，]{0,24}(?:模型|提示词|插件|astrbot|api|服务端|后端)"
-    r"|(?:我|本人)的(?:模型|提示词|系统提示|底层|设定文件|配置)"
-    r"|(?:我|本人)(?:被|是由)[^。！？，]{0,16}(?:训练|开发|部署|接入)"
-    r"|(?:我|本人)(?:用的?是?|在用的?|跑)在?[^。！？，]{0,16}"
-    r"(?:deepseek|openai|anthropic|claude|gpt|gemini|qwen|智谱|通义|豆包|kimi)",
-    re.I,
-)
 
 
 DEFENSIVE_REPLY_RE = re.compile(
@@ -685,39 +649,10 @@ def looks_like_defensive_reply(text):
 
 
 # 真要拦时的换口话术：轮换几句，别每次都「秘密，不告诉你」
-LEAK_DEFLECTS = (
-    "这个啊，不聊。",
-    "问点别的吧。",
-    "说这个干嘛。",
-    "不告诉你。",
-    "你猜。",
-)
 
 
-def leak_deflect_text():
-    return random.choice(LEAK_DEFLECTS)
 
 
-def looks_like_model_leak(text):
-    """回复里有没有把她自己的模型/提示词/插件这类后台信息说出来。
-
-    注意：只拦「说的是她自己」的句子。用户在聊自己的项目（插件、提示词、模型选型）时，
-    她顺着聊是正常的，不能被换成「秘密，不告诉你」。
-    """
-    raw = str(text or "")
-    if not raw:
-        return False
-    if not MODEL_LEAK_RE.search(raw):
-        return False
-    if SELF_LEAK_RE.search(raw):
-        return True
-    # 短句里直接报出厂商/模型名、且没有任何「他/你/这个项目」之类的第三方指向时，
-    # 仍然按自曝处理（她不会无端说这些名字）
-    compact = re.sub(r"\s+", "", raw)
-    if len(compact) <= 12 and re.search(
-            r"(?:deepseek|openai|anthropic|claude|gemini|chatgpt|qwen|智谱|通义)", compact, re.I):
-        return True
-    return False
 
 
 def typing_delay_ms(text, base=700, per_char=400, cap=20000):
@@ -757,98 +692,6 @@ def typing_delay_ms(text, base=700, per_char=400, cap=20000):
 
 
 
-def fetch_provider_balance(api_key, base_url, kind, timeout=8.0):
-    """尽力查询供应商余额；查不到就返回 {ok: False, error}，不抛异常。
-
-    支持：DeepSeek（/user/balance）、SiliconFlow（/v1/user/info）、
-    OpenAI 兼容中转（/v1/dashboard/billing/subscription + usage，one-api/new-api 常见）。
-    """
-    import urllib.request
-
-    api_key = str(api_key or "").strip()
-    base = str(base_url or "").rstrip("/")
-    if not api_key or not base:
-        return {"ok": False, "error": "缺密钥或地址"}
-
-    def _request(url, headers=None):
-        auth = dict(headers or {})
-        auth.setdefault("Authorization", "Bearer " + api_key)
-        auth.setdefault("Accept", "application/json")
-        request = urllib.request.Request(url, headers=auth)
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
-
-    try:
-        if kind == "deepseek":
-            payload = _request(base + "/user/balance", {"Accept": "application/json"})
-            infos = payload.get("balance_infos") or []
-            chosen = None
-            for item in infos:
-                if str(item.get("currency") or "").upper() == "CNY":
-                    chosen = item
-                    break
-            if chosen is None and infos:
-                chosen = infos[0]
-            if not isinstance(chosen, dict):
-                return {"ok": False, "error": "返回里没有余额信息"}
-
-            def money(value):
-                try:
-                    return round(float(value), 2)
-                except (TypeError, ValueError):
-                    return None
-
-            return {
-                "ok": True,
-                "available": bool(payload.get("is_available")),
-                "currency": str(chosen.get("currency") or "CNY"),
-                "amount": money(chosen.get("total_balance")),
-                "granted": money(chosen.get("granted_balance")),
-                "topped_up": money(chosen.get("topped_up_balance")),
-            }
-        if kind == "siliconflow":
-            payload = _request(base + "/v1/user/info", {"Accept": "application/json"})
-            data = payload.get("data") or {}
-            amount = None
-            for field in ("balance", "totalBalance"):
-                try:
-                    amount = round(float(data.get(field)), 2)
-                    break
-                except (TypeError, ValueError):
-                    continue
-            if amount is None:
-                return {"ok": False, "error": "返回里没有余额字段"}
-            return {"ok": True, "currency": "CNY", "amount": amount}
-        # openai 兼容中转（one-api/new-api 常见）
-        subscription = _request(base + "/v1/dashboard/billing/subscription")
-        hard_limit = None
-        try:
-            hard_limit = float(subscription.get("hard_limit_usd"))
-        except (TypeError, ValueError):
-            hard_limit = None
-        if hard_limit is None:
-            return {"ok": False, "error": "返回里没有 hard_limit_usd"}
-        today = _now()
-        month_start = today.replace(day=1).strftime("%Y-%m-%d")
-        end_date = (today + timedelta(days=1)).strftime("%Y-%m-%d")
-        used_cents = 0.0
-        try:
-            usage = _request(
-                base + "/v1/dashboard/billing/usage?start_date=" + month_start + "&end_date=" + end_date
-            )
-            used_cents = float(usage.get("total_usage") or 0)
-        except Exception:
-            used_cents = 0.0
-        remaining = round(hard_limit - used_cents / 100.0, 2)
-        return {
-            "ok": True,
-            "currency": "USD",
-            "amount": max(0.0, remaining),
-            "used": round(used_cents / 100.0, 2),
-            "limit": round(hard_limit, 2),
-        }
-    except Exception as exc:
-        return {"ok": False, "error": str(exc)[:120]}
 
 
 def fetch_deepseek_balance(api_key, base_url="https://api.deepseek.com", timeout=8.0):
@@ -1185,29 +1028,9 @@ def extract_persona_aliases(persona, name=""):
 
 # 面板写操作路由：只注册 POST + 套 _web_guard。
 # 以前守卫按「methods 里有没有 GET」判断，而写接口全被注册成 GET+POST，于是守卫一次都没执行过。
-WRITE_ROUTES = frozenset({
-    "/config/save", "/config_save",
-    "/voice/save",
-    "/profile/save", "/profile_save",
-    "/profile/delete", "/profile_delete",
-    "/relation/save", "/relation_save",
-    "/relation/delete", "/relation_delete",
-    "/memory/add", "/memory_add",
-    "/memory/delete", "/memory_delete",
-    "/mood/update", "/mood_update",
-    "/schedule/regen", "/schedule_regen",
-    "/kb/regen", "/kb_regen",
-    "/scenic_kb/regen", "/scenic_kb_regen",
-    "/worldview/regen", "/worldview_regen",
-    "/say",
-    "/city/set",
-    "/draw/test",
-    "/draw/decide",
-    "/refresh_status",
-})
 
 
-class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, ReplyMixin, SyncMixin, LearnMixin, EconomyMixin, WeatherMixin, OutfitMixin, PresenceMixin, RelationsMixin, Star):
+class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, ReplyMixin, SyncMixin, LearnMixin, EconomyMixin, WeatherMixin, OutfitMixin, PresenceMixin, RelationsMixin, MediaMixin, MemoryOpsMixin, VitalsMixin, InfraMixin, Star):
     def __init__(self, context: Context, config: dict = None):
         super().__init__(context)
         self.config = config or {}
@@ -1660,112 +1483,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
 
 
 
-    def _migrate_legacy_config(self):
-        """把旧版 amo_forever_config.json 合并到 Astrbot_Amo_forever_config.json。"""
-        path = str(getattr(self.config, "config_path", "") or "")
-        if not path:
-            return
-        base = os.path.dirname(path)
-        legacy_candidates = [
-            os.path.join(base, "amo_forever_config.json"),
-            os.path.join(base, "astrbot_plugin_amo_forever_config.json"),
-        ]
-        legacy = next((item for item in legacy_candidates if os.path.exists(item)), "")
-        if not legacy:
-            return
-        try:
-            import shutil as _shutil
-            with open(path, encoding="utf-8-sig") as stream:
-                current = json.load(stream)
-            with open(legacy, encoding="utf-8-sig") as stream:
-                old = json.load(stream)
-            if not isinstance(current, dict) or not isinstance(old, dict):
-                return
-            schema = {}
-            try:
-                with open(os.path.join(self.plugin_dir, "_conf_schema.json"), encoding="utf-8-sig") as stream:
-                    schema = json.load(stream) or {}
-            except Exception:
-                schema = {}
-            merged = {}
-            for key, value in old.items():
-                meta = schema.get(key) if isinstance(schema.get(key), dict) else {}
-                default = meta.get("default")
-                if key not in current or current.get(key) == default:
-                    current[key] = value
-                    merged[key] = value
-            if not merged:
-                return
-            backup = path + ".bak-4.0.0"
-            if os.path.exists(path) and not os.path.exists(backup):
-                _shutil.copy2(path, backup)
-            self.config.update(current)
-            if hasattr(self.config, "save_config"):
-                self.config.save_config()
-            logger.info(
-                "[amo] 已迁移旧版 amo_forever 配置: %s（%d 项）"
-                % (legacy, len(merged))
-            )
-            logger.info("[amo] 升级提示：插件标识保持 Astrbot_Amo_forever；旧 amo_forever 配置/数据已自动迁移。")
-        except Exception as exc:
-            logger.warning("[amo] 旧版 amo_forever 配置迁移失败: %s" % exc)
 
-    def _reload_config_if_changed(self):
-        """AstrBot 原生插件配置页保存后，运行中的 self.config 可能不是新对象。
-
-        读取配置文件 mtime，变化时把新值合并进当前配置，保证天气城市、
-        管理员、主动私聊等动态配置不需要重启插件也能生效。
-        """
-        path = getattr(self.config, "config_path", "")
-        if not path:
-            return
-        try:
-            mtime = os.path.getmtime(path)
-        except Exception:
-            return
-        if mtime <= self._config_mtime:
-            return
-        try:
-            with open(path, encoding="utf-8-sig") as stream:
-                data = json.load(stream)
-            if not isinstance(data, dict):
-                return
-            old_engine_config = {
-                key: value for key, value in self.config.items()
-                if key.startswith("hf_")
-            }
-            self.config.update(data)
-            new_engine_config = {
-                key: value for key, value in self.config.items()
-                if key.startswith("hf_")
-            }
-            if old_engine_config and old_engine_config != new_engine_config:
-                self._spawn(self._apply_runtime_config())
-            self._config_mtime = mtime
-            if data.get("bot_name"):
-                self.bot_name = str(data.get("bot_name"))
-            if data.get("bot_aliases") is not None:
-                self.bot_aliases = [
-                    item.strip() for item in str(data.get("bot_aliases")).split(",") if item.strip()
-                ]
-            if self.heartflow is not None:
-                self.heartflow.set_identity(self.bot_name, self.bot_aliases)
-            self._persona_name_cache.clear()
-            raw_admins = data.get("admin_uids", None)
-            if raw_admins is not None:
-                self.admin_uids = {
-                    item.strip() for item in str(raw_admins).split(",") if item.strip()
-                }
-            start = str(data.get("period_start") or "").strip()
-            if start:
-                self._set_period_start(start)
-            try:
-                self._sync_weather_city_config()
-            except Exception:
-                pass
-            logger.debug("[amo] 检测到插件配置变更，已重新加载")
-        except Exception as exc:
-            logger.debug("[amo] 重新加载插件配置失败: %s" % exc)
 
     def _hf_config(self):
         try:
@@ -2078,63 +1796,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         task.add_done_callback(_report)
         return task
 
-    async def _ensure_ready(self):
-        if self._ready:
-            return
-        async with self._init_lock:
-            if self._ready:
-                return
-            try:
-                await asyncio.to_thread(self.db.init)
-            except Exception as exc:
-                logger.error("[amo] 数据库初始化失败: %s" % exc)
-            self._migrate_proactive_timing()
-            self._migrate_typing_defaults()
-            self._migrate_legacy_admin_default()
-            self._migrate_scenic_kb_name()
-            self._migrate_schedule_defaults()
-            self._migrate_diary_continuity()
-            self._apply_forced_on_config()
-            self._cleanup_legacy_memory_profiles()
-            await asyncio.to_thread(self._merge_alias_profiles)
-            self.state = HumanState(self)
-            try:
-                await self._sync_with_data_plugin()
-            except Exception as exc:
-                logger.debug("[amo] 与数据插件同步失败: %s" % exc)
-            self._ready = True
-            self._loop_task = self._spawn(self._background_loop())
-            self._spawn(self._warm_up())
 
-    def _migrate_schedule_defaults(self):
-        """5.1.1：位置/资产改为“人格优先、缺失随机”，清掉 5.1.0 自动写入的固定默认值。"""
-        try:
-            if self.db.kv_get("schedule_defaults_511", False):
-                return
-            auto_filled = bool(self.db.kv_get("schedule_defaults_510", False))
-            changed = False
-            cleared_city = False
-            old_defaults = {
-                "schedule_city": "贵阳",
-                "schedule_home": "观山湖区·小窝",
-                "schedule_workplace": "公司（贵阳·观山湖区）",
-                "schedule_car": "黑色奔驰C级",
-            }
-            for key, value in old_defaults.items():
-                if self.cfg_str(key, "").strip() == value:
-                    self.config[key] = ""
-                    changed = True
-                    if key == "schedule_city":
-                        cleared_city = True
-            weather_city = self.cfg_str("weather_city", "").strip()
-            if weather_city == "杭州" or ((cleared_city or auto_filled) and weather_city == "贵阳"):
-                self.config["weather_city"] = ""
-                changed = True
-            if changed and hasattr(self.config, "save_config"):
-                self.config.save_config()
-            self.db.kv_set("schedule_defaults_511", True)
-        except Exception as exc:
-            logger.debug("[amo] 日程默认配置迁移失败: %s" % exc)
 
     def _migrate_diary_continuity(self):
         """5.2.1：旧版动态日记是逐小时独立生成的，可能互相矛盾；升级时清一次缓存。"""
@@ -2308,33 +1970,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             logger.warning("[amo] 跨平台账号合并失败: %s" % exc)
 
     # ---------- 管理员 ----------
-    def _is_admin(self, event):
-        uid = self._canonical_uid(event)
-        if uid in self.admin_uids:
-            return True
-        try:
-            umo = str(event.unified_msg_origin or "")
-        except Exception:
-            umo = ""
-        # 每条消息都会走这里，get_config 没必要每次读：按会话缓存 60 秒
-        cache = getattr(self, "_admin_cache", None)
-        if cache is None:
-            cache = {}
-            self._admin_cache = cache
-        now = time.time()
-        hit = cache.get(umo)
-        if hit and now - hit[0] < 60:
-            return uid in hit[1]
-        try:
-            cfg = self.context.get_config(umo)
-            admins = cfg.get("admins_id", []) if cfg else []
-            if isinstance(admins, str):
-                admins = [item.strip() for item in admins.split(",") if item.strip()]
-            names = {str(item) for item in (admins or [])}
-        except Exception:
-            names = set()
-        cache[umo] = (now, names)
-        return uid in names
 
     # ---------- 消息学习 ----------
 
@@ -2436,81 +2071,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         merged.extend(rows)
         return merged[-size:]
 
-    async def _recent_by_uid(self, uid, limit=20, umo=""):
-        """取近聊：优先按会话，其次按 uid；都没有再退回缓冲/本地缓存。"""
-        uid = str(uid or "")
-        size = max(1, int(limit or 20))
-        mem = self._data_mem()
-        lister = getattr(mem, "list_messages", None) if mem is not None else None
-        if callable(lister) and umo:
-            # 按会话取：bot 行的 uid 是字面量 "bot"，按 uid 过滤会把她说的话全滤掉
-            try:
-                rows = await lister(self._data_bot_id(), str(umo), size) or []
-            except Exception as exc:
-                logger.debug("[amo] 读最近消息失败: %s" % exc)
-                rows = []
-            if rows:
-                return sorted(rows, key=lambda item: to_float(item.get("created_at"), 0))[-size:]
-        if callable(lister):
-            try:
-                rows = await lister(self._data_bot_id(), "", size, uid=uid) or []
-            except Exception:
-                rows = []
-            if rows:
-                return sorted(rows, key=lambda item: to_float(item.get("created_at"), 0))[-size:]
-        merged = []
-        hub = self._memory_hub()
-        if hub is not None:
-            try:
-                merged = hub.buffer.by_uid(uid, size)
-            except Exception:
-                merged = []
-        if merged:
-            return sorted(merged, key=lambda item: to_float(item.get("created_at"), 0))[-size:]
-        try:
-            return self.db.messages_by_uid(uid, size)
-        except Exception:
-            return []
 
-    async def _hydrate_recent(self, umo, limit=30):
-        """从记忆终端把这个会话最近的话捞回内存，重启后也有上下文。"""
-        umo = str(umo or "")
-        if not umo:
-            return
-        if str(umo) in getattr(self, "_ctx_hydrated", set()):
-            return
-        rows = []
-        hub = self._memory_hub()
-        if hub is not None:
-            try:
-                rows = await hub.recent(umo, "", max(1, int(limit))) or []
-            except Exception as exc:
-                logger.debug("[amo] 能力层取上下文失败: %s" % exc)
-                rows = []
-        if not rows:
-            mem = self._data_mem()
-            lister = getattr(mem, "list_messages", None) if mem is not None else None
-            if callable(lister):
-                try:
-                    rows = await lister(self._data_bot_id(), umo, max(1, int(limit))) or []
-                except Exception as exc:
-                    logger.debug("[amo] 从记忆终端取上下文失败: %s" % exc)
-                    rows = []
-        if not rows:
-            try:
-                rows = self.db.recent_messages(umo, max(1, int(limit)))
-            except Exception:
-                rows = []
-        if not rows:
-            return
-        ordered = sorted(rows, key=lambda item: to_float(item.get("created_at"), 0))
-        if hub is not None:
-            try:
-                hub.buffer.hydrate(umo, ordered[-self.CONTEXT_BUFFER_LIMIT:])
-            except Exception:
-                pass
-        self._ctx_hydrated = getattr(self, "_ctx_hydrated", set())
-        self._ctx_hydrated.add(str(umo))
 
     def _is_talking_to_me(self, event):
         """这句是不是冲她来的：私聊、被 @ / 叫名字、或心流判定对象是 bot。"""
@@ -2536,48 +2097,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             pass
         return False
 
-    def _group_roster(self, umo, current_uid="", limit=8):
-        """群里最近说过话的人：uid → 称呼 / 关系 / 聊过多少句。
-
-        让她在群里先认人：谁在说话、和她什么关系、该用什么语气，而不是把所有人都当同一个人。
-        """
-        roster = []
-        seen = set()
-        try:
-            rows = self._recent(umo, 40)
-        except Exception:
-            return roster
-        for row in rows:
-            if str(row.get("role") or "") != "user":
-                continue
-            uid = str(row.get("uid") or "")
-            if not uid or uid in seen:
-                continue
-            seen.add(uid)
-            profile = {}
-            try:
-                profile = self.db.get_profile(uid) or {}
-            except Exception:
-                profile = {}
-            name = (
-                str(profile.get("alias") or "").strip()
-                or str(profile.get("name") or "").strip()
-                or str(row.get("name") or "").strip()
-                or uid
-            )
-            relation = str(profile.get("relation") or "普通")
-            msg_count = to_int(profile.get("msg_count"), 0)
-            roster.append({
-                "uid": uid,
-                "name": name,
-                "relation": relation,
-                "msg_count": msg_count,
-                "current": bool(current_uid) and uid == str(current_uid),
-            })
-            if len(roster) >= max(1, int(limit)):
-                break
-        roster.sort(key=lambda item: (not item["current"], -item["msg_count"]))
-        return roster
 
     def _group_roster_text(self, umo, current_uid="", limit=8):
         roster = self._group_roster(umo, current_uid, limit)
@@ -2673,94 +2192,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         except Exception:
             return False
 
-    def _install_qq_quote_guard(self):
-        """QQ 私聊也不许引用。
 
-        AstrBot 核心的 `reply_with_quote` 是在插件 `on_decorating_result` **之后**
-        才往消息链里插 Reply 的，插件钩子里摘不干净；所以在发送前再兜一层。
-        群聊保持原样（插件自己按人数 + 概率加 Reply）。
-        """
-        try:
-            from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
-                AiocqhttpMessageEvent,
-            )
-        except Exception:
-            return
-        original = getattr(AiocqhttpMessageEvent, "_amo_original_send", None)
-        if original is None:
-            original = AiocqhttpMessageEvent.send
-            AiocqhttpMessageEvent._amo_original_send = original
-
-        async def send(ev, message):
-            try:
-                if not ev.get_group_id():
-                    message.chain = [
-                        comp for comp in message.chain if not isinstance(comp, Comp.Reply)
-                    ]
-            except Exception:
-                pass
-            await original(ev, message)
-
-        AiocqhttpMessageEvent.send = send
-        AiocqhttpMessageEvent._amo_quote_guard = True
-        logger.info("[amo] QQ 引用守卫已安装：私聊不引用，群聊按概率")
-
-    def _install_lark_quote_guard(self):
-        """飞书私聊不要引用：适配器把每条消息都发成「回复」。
-
-        只装在飞书环境；装一次就够（类上留标记，热重载不会套娃）。
-        群聊仍然按 `_should_quote_group()` 的概率决定引用，私聊一律普通发送。
-        """
-        try:
-            from astrbot.core.platform.sources.lark.lark_event import LarkMessageEvent
-        except Exception:
-            return
-        async def send(ev, message):
-            try:
-                is_private = bool(ev.is_private_chat())
-            except Exception:
-                is_private = False
-            # 只认消息链里已经有的 Reply（插件按人数+概率加的那一条）；
-            # 这里不能重新掷一次概率，否则「插件决定不引用」会被守卫再翻成引用。
-            try:
-                has_reply = any(isinstance(comp, Comp.Reply) for comp in message.chain)
-            except Exception:
-                has_reply = False
-            quote = bool(has_reply and not is_private)
-            if not quote:
-                try:
-                    message.chain = [comp for comp in message.chain if not isinstance(comp, Comp.Reply)]
-                except Exception:
-                    pass
-            kwargs = lark_quote_kwargs(
-                is_private,
-                getattr(ev.message_obj, "message_id", ""),
-                ev.get_sender_id(),
-                ev.get_group_id(),
-                quote,
-            )
-            message_type = getattr(getattr(ev.message_obj, "type", None), "value", "")
-            try:
-                await LarkMessageEvent.send_message_chain(
-                    message, ev.bot, message_type=message_type, **kwargs,
-                )
-            except Exception as exc:
-                if "reply_message_id" in kwargs:
-                    raise
-                # 普通发送失败（比如 open_id 被拒）就退回原来的引用发送，别把话吞了
-                logger.warning("[amo] 飞书普通发送失败，退回引用发送: %s" % exc)
-                await LarkMessageEvent.send_message_chain(
-                    message, ev.bot,
-                    reply_message_id=getattr(ev.message_obj, "message_id", ""),
-                    message_type=message_type,
-                )
-            finally:
-                # 父类只做 metrics 记录，不能少
-                await AstrMessageEvent.send(ev, message)
-
-        LarkMessageEvent.send = send
-        LarkMessageEvent._amo_quote_guard = True
-        logger.info("[amo] 飞书引用守卫已安装：私聊不引用，群聊按概率")
     # 记忆检索桥：不同插件的入口名字不一样，按顺序找，找到哪个用哪个
 
     # ---------- 配套数据插件（Astr_Amo_data / 我想永远陪着你-记忆） ----------
@@ -2863,34 +2295,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 return value
         return None
 
-    def _image_share_prompt(self, scene=None):
-        """按她此刻在干嘛拼提示词；拿不到状态就用一句通用的自拍。
-
-        衣服必须写进来：以前这个模板只有「{activity}，{place}」，没有衣服这一项，
-        于是主动分享那张图生图插件读到空穿搭、模型自己配一套 —— 同一次对话里
-        主动分享穿一套、要照片又穿另一套。
-        """
-        activity = ""
-        place = ""
-        outfit = ""
-        try:
-            current = scene if isinstance(scene, dict) else self._activity_snapshot()
-            activity = str((current or {}).get("activity") or "").strip()
-            place = str((current or {}).get("place") or "").strip()
-            outfit = self._complete_outfit(str((current or {}).get("outfit") or "").strip())
-        except Exception:
-            pass
-        template = self.cfg_str(
-            "image_share_prompt_template",
-            "自拍，{activity}，{place}，{outfit}，自然光，看向镜头",
-        )
-        if "{outfit}" not in template:
-            template += "，{outfit}"
-        text = (template.replace("{activity}", activity)
-                        .replace("{place}", place)
-                        .replace("{outfit}", ("穿着" + outfit) if outfit else ""))
-        text = re.sub(r"[，,]{2,}", "，", text).strip("，, ")
-        return text or "自拍，日常光线，看向镜头"
 
     #: 活动 → 发图概率桶（对应配置 image_share_prob_<桶>）
     SHARE_BUCKET_WORDS = {
@@ -2920,76 +2324,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 return bucket
         return "other"
 
-    def _image_share_quota(self, now, private=True):
-        """返回 (能不能发, 今天已发张数)。
 
-        张数**只认生图插件**（Astrbot_Amo_Image）：主插件不再自己记一份，
-        否则同一张图会被数两遍，两边迟早对不上。冷却和概率仍在这里。
-        """
-        if not private:
-            cooldown = max(0, self.cfg_int("image_share_cooldown_minutes", 180)) * 60
-            try:
-                last = to_float(self.db.kv_get("image_share_last", 0), 0)
-            except Exception:
-                last = 0
-            if cooldown and last and now - last < cooldown:
-                return False, 0
-        plugin = self._image_plugin()
-        reader = getattr(plugin, "quota", None) if plugin is not None else None
-        if not callable(reader):
-            return True, 0
-        try:
-            info = reader("", "", not private) or {}
-        except Exception:
-            info = {}
-        if not isinstance(info, dict):
-            return True, 0
-        used = to_int(info.get("used"), 0)
-        return (info.get("allowed", True) is not False), used
-
-    async def _send_image_to_umo(self, umo, data, text="", quote_id="", label="照片",
-                                 prompt="", scene=None):
-        """在后台把图发到会话；用 context.send_message，不依赖已经结束的事件。
-
-        带 `quote_id` 时把图挂在那条消息下面，用户一眼知道这张图接的是哪句话。
-        Reply 个别平台不认，发失败会去掉引用再发一次，不影响出图。
-        """
-        if Comp is None or MessageChain is None or not umo:
-            return False
-        question = str(text or "").strip()
-
-        def build(with_quote):
-            chain = []
-            if with_quote and quote_id:
-                chain.append(Comp.Reply(id=str(quote_id)))
-            if question:
-                chain.append(Comp.Plain(question))
-            chain.append(Comp.Image.fromBytes(data))
-            return MessageChain(chain)
-
-        try:
-            chain = build(bool(quote_id))
-        except Exception:
-            return False
-        try:
-            await self.context.send_message(umo, chain)
-        except Exception as exc:
-            if not quote_id:
-                logger.error("[amo] 主动发图失败: %s" % exc)
-                return False
-            try:
-                await self.context.send_message(umo, build(False))
-            except Exception as retry_exc:
-                logger.error("[amo] 主动发图失败: %s" % retry_exc)
-                return False
-        # 发出去就记一条：以后「拍过什么」都能查得到，不靠调用方自觉。
-        # scene 必须传进来：以前固定给 {}，于是这条记忆永远没有地点，
-        # 只剩提示词里那句「家里」——和日程的「路上」打架，看着就像记忆错了。
-        try:
-            await self._remember_photo(umo, prompt, scene or {}, label=label)
-        except Exception as exc:
-            logger.debug("[amo] 发图后写记忆失败: %s" % exc)
-        return True
 
     #: 他这轮在说这些时，不发自拍、不换话题、不发俏皮话
     GLOOMY_WORDS = (
@@ -3013,100 +2348,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 hits += 1
         return hits >= 1
 
-    async def _share_decision(self, event):
-        """判断这次要不要分享；只做判断，不出图、不发送。"""
-        if not self.cfg_bool("image_share_enable", True):
-            return None
-        if event is None:
-            return None
-        private = bool(event.is_private_chat())
-        # 情绪闸：他这轮在说扛不住/想不开，她不该挑这个时候发一张自拍。
-        # 病象（11-17 09:15）：他连着说「阿墨怕是扛不过这次了」，她主动发了一张自拍。
-        try:
-            if self._his_gloomy_now(str(event.unified_msg_origin)):
-                return None
-        except Exception as exc:
-            logger.debug("[amo] 主动分享情绪闸判断失败: %s" % exc)
-        # 活动门控：她在吃饭 / 摸鱼 / 出去玩 / 在家才按概率发，睡觉和忙正事不发
-        bucket = self._share_bucket()
-        default_prob = self.SHARE_PROB_DEFAULTS.get(bucket, 0.0)
-        prob = max(0.0, min(1.0, self.cfg_float("image_share_prob_" + bucket, default_prob)))
-        if prob <= 0:
-            return None
-        # 心流给的「此刻适不适合发照片」（0~1）当乘数：心流说别发就不发
-        try:
-            urge = float(getattr(event, "amo_photo_urge", 1.0))
-        except Exception:
-            urge = 1.0
-        prob *= max(0.0, min(1.0, urge))
-        if prob <= 0 or random.random() >= prob:
-            return None
-        now = now_ts()
-        allowed, used = self._image_share_quota(now, private)
-        if not allowed:
-            return None
-        if getattr(self, "_share_inflight", False):
-            return None
-        plugin = self._image_plugin()
-        if plugin is None:
-            return None
-        quote = ""
-        if self.cfg_bool("image_share_quote", True):
-            quote = str(getattr(getattr(event, "message_obj", None), "message_id", "") or "")
-        scene = self._activity_snapshot(str(event.unified_msg_origin))
-        return {
-            "plugin": plugin,
-            "umo": str(event.unified_msg_origin),
-            "uid": str(event.get_sender_id() or ""),
-            "prompt": self._image_share_prompt(scene),
-            "scene": scene,
-            "quote": quote,
-            "now": now,
-            "used": used,
-        }
 
-    async def _share_image_task(self, decision):
-        """后台任务：出图 → 发送 → 记账。超时/失败都只记日志，不打扰聊天。"""
-        plugin = decision.get("plugin")
-        umo = decision.get("umo") or ""
-        prompt = decision.get("prompt") or ""
-        timeout = max(1, self.cfg_int("image_share_timeout", 90))
-        self._share_inflight = True
-        try:
-            scene = decision.get("scene") if isinstance(decision.get("scene"), dict) else {}
-            try:
-                data = await asyncio.wait_for(
-                    plugin.draw_for(umo, decision.get("uid") or "", prompt,
-                                    place=str(scene.get("place") or ""),
-                                    activity=str(scene.get("activity") or ""),
-                                    zone=str(scene.get("zone") or "")),
-                    timeout=timeout,
-                )
-            except Exception as exc:
-                logger.warning("[amo] 主动分享出图失败: %s" % exc)
-                return
-            if not data:
-                return
-            prefix = self.cfg_str("image_share_prefix", "")
-            quote = str(decision.get("quote") or "")
-            # 记忆由 _send_image_to_umo 统一写（它发完就会写一条 photo_record），
-            # 这里以前又写一遍，结果同一张图在库里两条，还带着不同的地点。
-            if not await self._send_image_to_umo(
-                    umo, data, prefix, quote, label="自拍",
-                    prompt=prompt, scene=scene):
-                return
-            # 张数由生图插件自己记（draw_for 里 _mark_call），这里只记冷却时间，
-            # 不重复计数——「今天发了几张」只有一个地方说了算。
-            self.db.kv_set("image_share_last", now_ts())
-            logger.info("[amo] 主动分享了一张图（%s）" % ("群聊" if "GroupMessage" in umo else "私聊"))
-            # 让她下一轮知道自己刚发过图，别一问三不知
-            self.db.kv_set("image_share_note", {"ts": now_ts(), "text": prefix or ""})
-        except asyncio.TimeoutError:
-            logger.warning("[amo] 主动分享出图超时（%ss），本次跳过" % timeout)
-        except Exception as exc:
-            logger.debug("[amo] 主动分享失败（跳过）: %s" % exc)
-        finally:
-            self._share_inflight = False
 
     # ---------- 半小时聊天摘要：更新这一小时的日记 ----------
 
@@ -3176,41 +2418,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         return self._embedded_data_plugin()
 
     # ---------- 融合态：记忆是终端自带的数据层 ----------
-    def _embedded_data_plugin(self):
-        """内嵌记忆：找不到独立记忆插件时，在进程内起一份。
-
-        用的是同一个 Context、同一份 plugin_data/Astr_Amo_data/amo_data.db，
-        对外接口（plugin.mem）与独立插件完全一致，所以上层代码不用改。
-        """
-        cached = getattr(self, "_embedded_data", None)
-        if cached is not None:
-            return cached
-        if getattr(self, "_embedded_data_failed", False):
-            return None
-        try:
-            from .mem.mem_main import AmoDataPlugin as _EmbeddedData
-        except Exception:
-            try:
-                from mem.mem_main import AmoDataPlugin as _EmbeddedData  # type: ignore
-            except Exception as exc:
-                self._embedded_data_failed = True
-                logger.error("[amo] 内嵌记忆导入失败（记忆功能不可用）: %s" % exc)
-                return None
-        try:
-            plugin = _EmbeddedData(self.context, self._embedded_data_config())
-            self._embedded_data = plugin
-            try:
-                if getattr(plugin, "mem", None) is not None:
-                    # 兄弟插件（影音/医疗/金融）找终端时要能拿到记忆门面
-                    self.mem = plugin.mem
-            except Exception:
-                pass
-            logger.info("[amo] 内嵌记忆已启动（融合模式，%s）" % getattr(plugin, "db_path", ""))
-            return plugin
-        except Exception as exc:
-            self._embedded_data_failed = True
-            logger.error("[amo] 内嵌记忆启动失败（记忆功能不可用）: %s" % exc)
-            return None
 
     @staticmethod
     def _embedded_data_config():
@@ -3256,35 +2463,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         self._mem_hub = hub
         return hub
 
-    def _memory_runtime(self):
-        star = self
-
-        class _Runtime:
-            logger = logger
-
-            @staticmethod
-            def cfg(key, default=None):
-                try:
-                    data = star.config
-                    if isinstance(data, dict):
-                        return data.get(key, default)
-                except Exception:
-                    pass
-                return default
-
-            @staticmethod
-            def bot_id():
-                return star._data_bot_id()
-
-            @staticmethod
-            def get_plugin(names):
-                return star._plugin_by_names(names)
-
-            @staticmethod
-            def normalize_memories(rows):
-                return star._normalize_memories(rows)
-
-        return _Runtime()
 
     def _plugin_by_names(self, names):
         """按插件名找实例；不缓存，reload 之后拿到的是新实例。"""
@@ -3309,37 +2487,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             pass
         return None
 
-    def _normalize_memories(self, rows):
-        """把各家插件返回的记忆统一成 {content, tier, name, kind, ...}。"""
-        items = []
-        for row in rows or []:
-            if isinstance(row, dict):
-                content = str(row.get("content") or row.get("memory") or "").strip()
-                importance = to_float(row.get("importance"), 0.5)
-                name = str(row.get("name") or row.get("who") or "").strip()
-                kind = str(row.get("kind") or row.get("memory_type") or "fact")
-                created_at = row.get("created_at", 0)
-            else:
-                memory = getattr(row, "memory", None) or row
-                content = str(getattr(memory, "content", "") or "").strip()
-                importance = to_float(getattr(memory, "importance", 0.5), 0.5)
-                name = str(getattr(memory, "name", "") or "").strip()
-                kind = str(getattr(memory, "memory_type", "") or "fact")
-                created_at = getattr(memory, "created_at", 0)
-            if len(content) < 2:
-                continue
-            items.append({
-                "content": content[:500],
-                "tier": 2 if importance >= 0.72 else (1 if importance >= 0.42 else 0),
-                "importance": importance,
-                "kind": kind,
-                "name": name,
-                "source": "hub",
-                "created_at": created_at,
-                "hits": 0,
-                "expires_at": None,
-            })
-        return items
 
     def _data_store(self):
         """兜底：直接拿数据插件的 DataStore（mem 门面缺失/旧版时用）。"""
@@ -3476,34 +2623,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         logger.info("[amo] 画像从数据插件拉回：%s %s" % (uid, ",".join(fields.keys())))
         return True
 
-    async def _time_recall_context(self, event, uid):
-        """按时间回看：他问"昨天下午/前天/上周三"时，去记忆终端取那段时间的聊天。"""
-        if not self.cfg_bool("time_recall_enabled", True):
-            return ""
-        text = str(getattr(event, "message_str", "") or "")
-        if not _looks_like_time_query(text):
-            return ""
-        mem = self._data_mem()
-        if mem is None or not callable(getattr(mem, "recall_messages", None)):
-            return ""
-        try:
-            umo = str(getattr(event, "unified_msg_origin", "") or "")
-            # 配 0 / 负数时以前会「请求 4 条、只渲染 1 条」，两边都按同一档位收敛
-            limit = max(1, min(40, self.cfg_int("time_recall_limit", 6)))
-            result = await self._data_call(
-                "recall_messages", self._data_bot_id(), query=text, umo=umo,
-                uid=str(uid), limit=min(limit * 2, 40),
-            )
-        except Exception as exc:
-            logger.debug("[amo] 时间回看失败: %s" % exc)
-            return ""
-        if not isinstance(result, dict):
-            return ""
-        messages = result.get("messages") or []
-        label = str(result.get("label") or "")
-        if not label:
-            return ""
-        return _render_time_block(label, messages, max_lines=max(1, int(limit)))
 
 
     async def _push_relation_to_data(self, a_uid, b_uid, relation, note=""):
@@ -3595,96 +2714,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 int(item.get("satiety") or 0)))
         return "；".join(rows)
 
-    def _vitals_hint(self, event) -> str:
-        """饿了/渴了/刚吃过什么，注入给模型。不满足条件时返回空串。
 
-        本能模式（``instinct_mode``）下只给 ``[Body: ...]`` 事实标签，不再写长句，
-        见执行文档 5.2。兜底动作（极端饥饿自动吃、口渴提醒冷却）与模式无关，两边都跑。
-        """
-        vitals = self._vitals()
-        if not vitals or not vitals.get("enabled", True):
-            return ""
-        try:
-            satiety = float(vitals.get("satiety") or 0)
-            hydration = float(vitals.get("hydration") or 0)
-        except (TypeError, ValueError):
-            return ""
-        hungry_at = float(vitals.get("hungry_at") or 30)
-        starving_at = float(vitals.get("starving_at") or 10)
-        if satiety < starving_at:
-            # 兜底喂食/生病判定：这是终端的事，跟标签模式无关
-            self._spawn(self._maybe_hunger_sick())
-            self._spawn(self._maybe_auto_meal())
-        if self.cfg_bool("instinct_mode", False):
-            return self._body_tag_block(satiety, hydration, hungry_at)
-        texts = []
-        if satiety < starving_at:
-            texts.append(
-                "【状态：极度饥饿 %.0f/100】你很久没吃东西了，胃里发空、手有点抖，"
-                "注意力没法集中，说话也没力气。" % satiety)
-        elif satiety < hungry_at:
-            texts.append("【状态：饥饿 %.0f/100】你有点饿了，注意力开始散。" % satiety)
-        if hydration < hungry_at:
-            try:
-                last_thirst = float(self.db.kv_get("thirst_hint_ts", 0) or 0)
-            except Exception:
-                last_thirst = 0.0
-            gap = 30 * 60 if hydration < 10 else 90 * 60
-            if now_ts() - last_thirst >= gap:
-                texts.append("【状态：口渴 %.0f/100】你渴了，嗓子发干。" % hydration)
-                try:
-                    self.db.kv_set("thirst_hint_ts", now_ts())
-                except Exception:
-                    pass
-        try:
-            last = self.db.kv_get("last_meal", {}) or {}
-        except Exception:
-            last = {}
-        try:
-            age = now_ts() - float(last.get("ts") or 0)
-        except Exception:
-            age = 1e9
-        if last and age < 6 * 3600:
-            texts.append("【你刚才吃了】%d 分钟前你吃了%s。" % (
-                max(1, int(age // 60)), str(last.get("dish") or "点东西")))
-        if texts:
-            menu = self._food_menu()
-            if menu:
-                texts.append("【现在能吃的（价格来自金融）】" + menu)
-        return ("\n" + "\n".join(texts)) if texts else ""
-
-    def _body_tag_block(self, satiety: float, hydration: float, hungry_at: float) -> str:
-        """本能模式的身体事实：只有数值，没有台词，带 ts。"""
-        try:
-            last = self.db.kv_get("last_meal", {}) or {}
-        except Exception:
-            last = {}
-        last_meal = "None"
-        try:
-            age = now_ts() - float(last.get("ts") or 0)
-        except Exception:
-            age = 1e9
-        if last and age < 6 * 3600:
-            last_meal = "%s（%d分钟前）" % (
-                str(last.get("dish") or "吃了点东西"), max(1, int(age // 60)))
-        fields = {
-            "Hunger": round(100.0 - satiety, 1),
-            "Thirst": round(100.0 - hydration, 1),
-            "Satiety": round(satiety, 1),
-            "Hydration": round(hydration, 1),
-            "Last_Meal": last_meal,
-        }
-        if _label_bus is not None:
-            lines = [_label_bus.format_tag("Body", fields, ts=now_ts())]
-        else:  # 兜底：标签模块没加载也不能空着
-            lines = ["[Body: Hunger=%.1f, Thirst=%.1f, Satiety=%.1f, Hydration=%.1f]"
-                     % (fields["Hunger"], fields["Thirst"],
-                        fields["Satiety"], fields["Hydration"])]
-        if satiety < hungry_at:
-            menu = self._food_menu()
-            if menu:
-                lines.append("【现在能吃的（价格来自金融）】" + menu)
-        return "\n" + "\n".join(lines)
 
 
 
@@ -3707,52 +2737,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
     async def _push_cache_to_data(self, key, value):
         await self._data_call("cache_set", self._data_bot_id(), str(key), value)
 
-    async def _data_memory_recall(self, uid, text, limit=6, event=None):
-        """从「记忆终端」（Astr_Amo_data）取回这个人的记忆。
-
-        陪伴自己不存记忆：装了就只问它要，没装才退回外挂记忆插件。
-        """
-        mem = self._data_mem()
-        if mem is None or not uid:
-            return []
-        recall = getattr(mem, "recall", None)
-        if not callable(recall):
-            return []
-        scope = "private"
-        group_id = ""
-        try:
-            if event is not None and not event.is_private_chat():
-                scope = "group"
-                group_id = str(event.get_group_id() or "")
-        except Exception:
-            pass
-        try:
-            rows = await recall(
-                self._data_bot_id(), str(uid), str(text or ""),
-                max(1, to_int(limit, 6)), scope, group_id,
-            )
-        except Exception as exc:
-            logger.debug("[amo] 记忆终端召回失败: %s" % exc)
-            return []
-        items = []
-        for row in rows or []:
-            if not isinstance(row, dict):
-                continue
-            content = re.sub(r"\s+", " ", str(row.get("content") or "")).strip()
-            if len(content) < 2:
-                continue
-            importance = to_float(row.get("importance"), 0.5)
-            items.append({
-                "content": content[:500],
-                "tier": 2 if importance >= 0.72 else (1 if importance >= 0.42 else 0),
-                "kind": str(row.get("kind") or "fact"),
-                "source": "amo_data",
-                "memory_type": str(row.get("kind") or ""),
-                "created_at": row.get("created_at", 0),
-                "hits": 0,
-                "expires_at": None,
-            })
-        return items
 
     async def _data_memory_write(self, uid, content, kind="fact", tier=1, scope="private", group_id=""):
         """把一条记忆交给「记忆终端」写入；它只负责存，陪伴不落本地库。"""
@@ -3802,46 +2786,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
 
 
 
-    async def _write_memory_checked(self, uid, content, kind="fact", tier=1, scope="private", group_id=""):
-        """写一条记忆并返回是否真的成功；失败打 warning，调用方据此决定要不要标记。
-
-        scope/group_id 必须一路传到数据终端：群聊写入 private、群聊却按 group 读，
-        就会表现为“群里聊过但她完全不记得”。
-        """
-        if _mem_prepare is not None:
-            try:
-                allowed, fixed, why = _mem_prepare(self.db, str(uid), content, _now(), now_ts())
-            except Exception:
-                allowed, fixed, why = True, content, "guard_error"
-            if not allowed:
-                logger.debug("[amo] 记忆没写（%s）: %s" % (why, str(content)[:40]))
-                return False
-            content = fixed
-        hub = self._memory_hub()
-        level = to_int(tier, 1)
-        importance = 0.75 if level >= 2 else (0.55 if level == 1 else 0.35)
-        if hub is not None and hub.writable():
-            try:
-                result = await hub.remember(str(uid), content, str(kind or "fact"), importance, scope, group_id)
-            except Exception as exc:
-                logger.warning("[amo] 记忆写入异常: %s" % exc)
-                result = {"ok": False}
-            if isinstance(result, dict) and result.get("ok"):
-                self._memory_committed(uid, content)
-                return True
-            logger.warning(
-                "[amo] 记忆没写进去（%s）: %s" % ((result or {}).get("reason", "?"), str(content)[:40])
-            )
-            return False
-        if self._data_mem() is not None:
-            try:
-                result = await self._data_memory_write(uid, content, kind, tier, scope, group_id)
-            except Exception:
-                result = False
-            if result:
-                self._memory_committed(uid, content)
-                return True
-        return False
 
     def _memory_committed(self, uid, content):
         """记忆真的写进去了：登记去重指纹，并在同一天地点冲突时留一条 warning。"""
@@ -4100,34 +3044,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                     "price": round(float(pc.get("price") or 6999) * 0.9, 2)}
         return {}
 
-    def _device_wish_tick(self) -> None:
-        """每天最多念一次：想换手机/电脑就写一条记忆，聊到的时候她会说。"""
-        wish = self._device_wish()
-        if not wish:
-            return
-        today = today_str()
-        try:
-            if self.db.kv_get("device_wish_day", "") == today:
-                return
-        except Exception:
-            pass
-        name = "手机" if wish["kind"] == "phone" else "电脑"
-        text = ("我想换%s了（现在用的%s，%d 天了）：想要 %s，大概 ¥%.0f"
-                % (name, (wish.get("current") or {}).get("model") or "旧的",
-                   self._device_age_days(wish.get("current") or {}),
-                   wish.get("model"), float(wish.get("price") or 0)))
-        uid = self._primary_uid()
-        if uid:
-            try:
-                self._spawn(self._write_memory_checked(uid, text, kind="event", tier=0))
-            except Exception:
-                pass
-        try:
-            self.db.kv_set("device_wish_day", today)
-            self.db.kv_set("device_wish", wish)
-        except Exception:
-            pass
-        logger.info("[amo] 想换设备：%s" % text)
 
     @filter.llm_tool(name="amo_buy_asset")
     async def amo_buy_asset(self, event, asset: str = "house", full: bool = False) -> str:
@@ -4232,39 +3148,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         return False
 
 
-    def _period_feel_tick(self) -> None:
-        """生理期开始/结束时给心流发一次事件（每天最多一次）。"""
-        if getattr(self, "feelings", None) is None or FeelEvent is None:
-            return
-        # 医疗插件在的时候由它发 PERIOD_START/END（带痛经等级），终端只做兜底
-        try:
-            if self._medical() is not None:
-                return
-        except Exception:
-            pass
-        try:
-            info = self.state.period_info() or {}
-        except Exception:
-            return
-        day = int(info.get("day") or 0)
-        bleed = int(info.get("bleed_days") or 0)
-        if not day or not bleed:
-            return
-        today = today_str()
-        try:
-            marker = self.db.kv_get("period_feel", {}) or {}
-        except Exception:
-            marker = {}
-        if not isinstance(marker, dict):
-            marker = {}
-        if day == 1 and marker.get("start") != today:
-            self.feel(FeelEvent.PERIOD_START)
-            marker["start"] = today
-            self.db.kv_set("period_feel", marker)
-        elif day == bleed + 1 and marker.get("end") != today:
-            self.feel(FeelEvent.PERIOD_END)
-            marker["end"] = today
-            self.db.kv_set("period_feel", marker)
 
     def _heartflow_tick(self) -> None:
         """内驱动：按上次 tick 到现在的时间衰减，重启也不会一次性掉一大截。"""
@@ -4286,80 +3169,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         self._wake_energy_tick()
         self._energy_day_tick()
 
-    def _wake_energy_tick(self) -> None:
-        """早上睡醒精力回满，一天一次。
 
-        没有这一步，精力只会在 23:00–07:00 回涨，白天从 0 开始一路掉，
-        面板永远是「精力 0」，她也就一直显得没力气。
-        """
-        if getattr(self, "feelings", None) is None:
-            return
-        try:
-            import time as _time
-
-            now = _time.localtime()
-            hour, today = int(now.tm_hour), _time.strftime("%Y-%m-%d", now)
-        except Exception:
-            return
-        if hour < 7 or hour >= 23:
-            return
-        try:
-            if str(self.db.kv_get("energy_wake_date", "") or "") == today:
-                return
-        except Exception:
-            pass
-        try:
-            values = self.feelings.values()
-            if float(values.get("energy") or 0) >= 70:
-                self.db.kv_set("energy_wake_date", today)
-                return
-            self.feelings.set_physiology(energy=88.0)
-            self.db.kv_set("energy_wake_date", today)
-            logger.info("[amo] 早上醒了，精力回满")
-        except Exception as exc:
-            logger.debug("[amo] 睡醒回精力失败: %s" % exc)
-
-    def _energy_day_tick(self) -> None:
-        """白天也回点力气：午后眯一会儿、晚上到家歇一歇，各补一次（一天各一次）。
-
-        以前精力只有两个来源（23:00-07:00 睡着、07:00 醒来补到 88），之后一路掉，
-        中午就剩二十几、傍晚趴到 0，面板上永远是「累得睁不开眼」。
-        """
-        if getattr(self, "feelings", None) is None:
-            return
-        try:
-            import time as _time
-
-            now = _time.localtime()
-            hour, today = int(now.tm_hour), _time.strftime("%Y-%m-%d", now)
-            energy = float(self.feelings.values().get("energy") or 0)
-        except Exception:
-            return
-        # (标记键, 起始小时, 结束小时, 低于这个值才补, 补到多少)
-        windows = (
-            ("energy_noon_date", 13, 16, 66.0, 66.0),
-            ("energy_evening_date", 18, 22, 52.0, 52.0),
-        )
-        for key, start, end, floor, target in windows:
-            if not (start <= hour < end):
-                continue
-            try:
-                if str(self.db.kv_get(key, "") or "") == today:
-                    continue
-            except Exception:
-                continue
-            try:
-                self.db.kv_set(key, today)
-            except Exception:
-                pass
-            if energy >= floor:
-                continue
-            try:
-                self.feelings.set_physiology(energy=target)
-                logger.info("[amo] 歇了一会儿，精力回到 %d" % int(target))
-            except Exception as exc:
-                logger.debug("[amo] 白天回精力失败: %s" % exc)
-            return
 
     def _sync_hunger_from_vitals(self) -> None:
         """心流的「饿」直接跟着记忆库的饱食度走（饿 = 100 - 饱食度）。
@@ -4484,43 +3294,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         "ambient": {"joy": 0.03, "desire_ear": 0.02, "desire_mind": 0.02},
     }
 
-    def _chat_feel(self, text: str, ambient: bool = False, uid: str = "") -> None:
-        """每一句话都让她的七情六欲动一点。
-
-        13.0.0 那套「一条只推一个方向 + 900~1800 秒冷却 + 每天 14 点额度」已经拆掉：
-        额度早上被群聊花光之后，一整天怎么聊都不动，看起来就是「情绪死了」。
-        现在每一句都算，靠小量 + 向上饱和 + 自然回落防止顶死。
-        """
-        engine = getattr(self, "feelings", None)
-        if engine is None or FeelEvent is None:
-            return
-        body = str(text or "").strip()
-        if not body:
-            return
-        key = "ambient" if ambient else "reply"
-        if not ambient:
-            for name, words in (
-                ("insult", self.INSULT_WORDS),
-                ("praise", self.PRAISE_WORDS),
-                ("tease", self.CHAT_TEASE_WORDS),
-                ("food", self.CHAT_FOOD_WORDS),
-                ("affection", self.CHAT_AFFECTION_WORDS),
-                ("greed", self.CHAT_GREED_WORDS),
-            ):
-                if any(word in body for word in words):
-                    key = name
-                    break
-        # 说得越多，这一下越重（一句话比三个字重），最多 1.8 倍
-        scale = 1.0 + min(0.8, max(0.0, (len(body) - 6) / 80.0))
-        # 谁说的才算数：恋人的一句顶陌生人的六句（关系权重）
-        scale *= self.state.relation_feel_weight(uid)
-        steps = {dim: value * scale for dim, value in self.CHAT_FEEL_WEIGHTS.get(key, {}).items()}
-        if not steps:
-            return
-        try:
-            engine.bump(steps)
-        except Exception as exc:
-            logger.debug("[amo] 心流写入失败: %s" % exc)
 
 
 
@@ -4691,47 +3464,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         logger.info("[amo] 直接发送 -> %s: %s" % (event.unified_msg_origin, text[:300]))
         return True
 
-    async def _send_to_umo(self, umo, text, quote_id=None, group=False):
-        text = clean_reply(text, self.cfg_int("max_reply_chars", 220))
-        if looks_like_model_leak(text):
-            text = leak_deflect_text()
-        if not text or not umo:
-            return False
-        scene = "group" if (group or "GroupMessage" in str(umo)) else "private"
-        # 主动消息也交给守护润色/分段/发送，终端不再自己拆条。
-        if _guard_deliver_reply is not None and self.cfg_bool("guard_deliver_enable", False):
-            try:
-                delivered = await _guard_deliver_reply(
-                    self, text, scene, umo,
-                    quote_id=quote_id, group=(scene == "group"),
-                    timeout_ms=self.cfg_int("guard_text_timeout_ms", 2000),
-                )
-            except Exception as exc:
-                logger.debug("[amo] 主动消息交给守护失败: %s" % exc)
-                delivered = None
-            if delivered and delivered.get("sent"):
-                self._remember_bot_message(umo, text)
-                self._last_reply_at[umo] = now_ts()
-                logger.info("[amo] 主动（守护） -> %s: %s" % (umo, text[:300]))
-                return True
-        # 守护缺席/失败：整条原文直接发，宁可长一点也不能把话吞了。
-        # 打字状态由守护负责；直发这条兜底路径不再调用已经下线的 _typing。
-        chain = []
-        if quote_id is not None and self._quote_allowed(umo, scene == "group"):
-            try:
-                chain.append(Comp.Reply(id=quote_id))
-            except Exception:
-                pass
-        chain.append(Comp.Plain(text))
-        try:
-            await self.context.send_message(umo, MessageChain(chain))
-        except Exception as exc:
-            logger.warning("[amo] 主动发送失败: %s" % exc)
-            return False
-        self._last_reply_at[umo] = now_ts()
-        logger.info("[amo] 主动 -> %s: %s" % (umo, text[:300]))
-        self._remember_bot_message(umo, text)
-        return True
 
     # ---------- LLM 注入 ----------
     @staticmethod
@@ -4858,55 +3590,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 return camp, str(part or "")[:60]
         return "", ""
 
-    async def _run_due_promises(self):
-        """条件到了就真的做：答应的照片这时候补拍发过去。"""
-        try:
-            if self.promises is None:
-                return
-            try:
-                if quiet_now(self.cfg_str("quiet_hours", "23:30-07:30")):
-                    return
-            except Exception:
-                pass
-            activity = {}
-            try:
-                activity = self.state.current_activity() or {}
-            except Exception:
-                activity = {}
-            if driving and driving(activity):
-                return
-            self.promises.prune()
-            for row in self.promises.due_rows(activity, kind=KIND_PHOTO):
-                umo = str(row.get("umo") or "")
-                pid = row.get("id")
-                if not umo:
-                    self.promises.mark_done(pid)
-                    continue
-                look = str(row.get("look") or "").strip()
-                style = str(row.get("style") or "").strip()
-                if style:
-                    changed = await self._promise_change_outfit(
-                        style, str(row.get("want") or ""))
-                    if changed:
-                        look = changed
-                prompt = self._selfie_prompt(look=look)
-                data = await self._image_bytes(
-                    prompt, umo, str(row.get("uid") or ""), selfie=True)
-                if not data:
-                    logger.info("[amo] 答应的照片没拍成，等下一轮：%s" % row.get("text"))
-                    continue
-                ok = await self._send_image_to_umo(
-                    umo, data, text="", label="自拍", prompt=prompt)
-                if ok:
-                    self.promises.mark_done(pid)
-                    self._promise_settle_siblings(row)
-                    logger.info("[amo] 答应的照片补拍发出（%s）：%s"
-                                % (look or "此刻穿着", row.get("text")))
-                return  # 一轮只补一张
-        except Exception as exc:
-            logger.warning("[amo] 兑现承诺失败: %s" % exc)
-        finally:
-            self._promise_inflight = False
 
 
     def _promise_settle_siblings(self, row):
@@ -5877,38 +4560,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         text = await self._data_call("diary_get", self._data_bot_id(), iso)
         return text if isinstance(text, str) else ""
 
-    async def _diary_store_tree(self):
-        rows = await self._data_call("diary_list", self._data_bot_id())
-        if not isinstance(rows, list) or not rows:
-            return {"total": 0, "latest": "", "years": [], "root": "记忆库"}
-        years = {}
-        latest = ""
-        for row in rows:
-            day = str((row or {}).get("day") or "")
-            if len(day) != 10:
-                continue
-            try:
-                y, m, d = int(day[:4]), int(day[5:7]), int(day[8:10])
-            except ValueError:
-                continue
-            latest = max(latest, day)
-            years.setdefault(y, {}).setdefault(m, []).append({
-                "date": day, "day": d,
-                "title": str((row or {}).get("title") or "我的日记"),
-                "chars": int((row or {}).get("chars") or 0),
-                "size": int((row or {}).get("chars") or 0),
-                "path": "memory:" + day,
-            })
-        total = 0
-        tree_years = []
-        for y in sorted(years, reverse=True):
-            months = []
-            for m in sorted(years[y], reverse=True):
-                days = sorted(years[y][m], key=lambda item: item["date"], reverse=True)
-                total += len(days)
-                months.append({"month": m, "days": days})
-            tree_years.append({"year": y, "months": months})
-        return {"total": total, "latest": latest, "years": tree_years, "root": "记忆库"}
 
 
     async def _diary_chat_lines(self, day):
@@ -5935,86 +4586,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             lines.append(who + "：" + text[:200])
         return lines
 
-    def _diary_hourly_lines(self, day):
-        """当天每小时小日记 → 「HH:MM 内容」行。"""
-        try:
-            cursor = self.db.conn.execute(
-                "SELECT hour, text FROM schedule_diary WHERE day=? ORDER BY hour ASC",
-                (day.isoformat(),),
-            )
-            rows = cursor.fetchall()
-        except Exception:
-            return []
-        lines = []
-        for hour, text in rows:
-            text = str(text or "").strip()
-            if text:
-                lines.append(str(hour)[:5] + " " + text[:160])
-        try:
-            log = self.db.kv_get("travel_log", []) or []
-            for entry in log[-10:]:
-                if not isinstance(entry, dict):
-                    continue
-                if str(entry.get("day") or "") != day.isoformat():
-                    continue
-                city = str(entry.get("city") or "").strip()
-                hour = str(entry.get("hour") or "").strip()
-                if city and hour:
-                    if entry.get("journey"):
-                        lines.append(hour + " 她坐车去" + city + "陪他，路上约 2 小时")
-                    elif entry.get("solo"):
-                        if entry.get("back"):
-                            lines.append(hour + " 她自己从" + city + "旅游回来了")
-                        else:
-                            lines.append(hour + " 她自己出门去" + city + "旅游，晚上住酒店")
-                    elif entry.get("back"):
-                        lines.append(hour + " 跟他从" + city + "回来了")
-                    else:
-                        lines.append(hour + " 跟他出门到了" + city + "，晚上住酒店")
-        except Exception:
-            pass
-        try:
-            rejects = self.db.kv_get("follow_reject_log", []) or []
-            for entry in rejects[-5:]:
-                if not isinstance(entry, dict):
-                    continue
-                if str(entry.get("day") or "") != day.isoformat():
-                    continue
-                city = str(entry.get("city") or "").strip()
-                hour = str(entry.get("hour") or "").strip()
-                if city:
-                    lines.append(hour + " 她说想陪他去" + city + "，他说让她好好上班，她闷闷不乐")
-        except Exception:
-            pass
-        return lines
 
-    async def _generate_daily_diary(self, day):
-        """用当天的聊天 + 每小时日程小日记，写一篇大肥鱼口吻的日记。"""
-        chat_lines = await self._diary_chat_lines(day)
-        hourly_lines = self._diary_hourly_lines(day)
-        if not chat_lines and not hourly_lines:
-            return ""
-        umo = self._last_umo or self._first_private_umo()
-        try:
-            persona = await self.llm.persona(umo)
-        except Exception:
-            persona = ""
-        system = (
-            (persona or "你是一个生活在中国城市的普通女孩，说话自然口语化。") +
-            "\n\n你现在要保持这个人格，用自己的口吻写日记：第一人称、像真人写给自己的，"
-            "不是助手汇报，也不要提 AI、模型、插件、日程表这些词。"
-        )
-        prompt = self._diary_prompt(day, chat_lines, hourly_lines)
-        try:
-            text = await self.llm.chat_raw(umo, system, prompt)
-        except Exception as exc:
-            logger.warning("[amo] 日记生成失败: %s" % exc)
-            return ""
-        text = str(text or "").strip()
-        text = re.sub(r"^```[a-zA-Z]*\s*", "", text)
-        text = re.sub(r"\s*```$", "", text).strip()
-        text = re.sub(r"^我的日记[^\n]*\n+", "", text)
-        return text if len(text) >= 10 else ""
 
 
 
@@ -6270,35 +4842,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         except Exception:
             pass
 
-    async def _ritual_pending(self, profile):
-        """现在是否正处在「还没发」的问候时段。
-
-        主动消息要让路：早晨 8 点主动搭话和早安问候撞在一起，就是
-        「两个地方各响一次」的来源。非恋人的好友、刚问候过的、没有会话可发的，
-        都不算待发，否则会白让路一整个时段。
-        """
-        if not self.cfg_bool("ritual_enabled", True):
-            return False
-        if str(profile.get("relation") or "") != "相恋":
-            return False
-        uid = str(profile.get("uid") or "")
-        umos = self._ritual_umos(profile)
-        if not uid or not umos:
-            return False
-        if self._recent_greeting(uid, self.cfg_int("ritual_min_gap_minutes", 30)):
-            return False
-        for kind, _enabled_key, window_key, default_window in self.RITUAL_SPECS:
-            # 早/午/晚安已经合成一个总开关：开就三个时段都问，关就都不问
-            if not self.cfg_bool("ritual_enabled", True):
-                continue
-            if not self._ritual_in_window(self.cfg_str(window_key, default_window)):
-                continue
-            if self.db.kv_get("ritual_" + kind + "_" + uid + "_" + today_str(), False):
-                continue
-            if not await self._ritual_should_send_async(umos, kind, uid):
-                continue
-            return True
-        return False
 
     #: 每个问候从当天几点开始算「今天已经聊过」；不在表里的按 45 分钟活跃窗。
     RITUAL_FROM_HOURS = {"morning": 5, "lunch": 11, "goodnight": 21}
@@ -6693,58 +5236,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
     # ---------- Web 面板 ----------
         # 不注册无前缀的旧路由，避免和其他插件或 AstrBot 自带路由冲突。
 
-    def _web_guard(self, handler, is_write=False):
-        """写操作的前置检查：只收 POST + 拒绝跨站来源。
-
-        这不是完整鉴权（AstrBot 侧有它自己的登录态），而是挡住
-        <img src>/聊天预览/外链/跨站表单这类最容易触发的 CSRF 面。
-
-        - 写路由在 `_safe_register` 里已经只注册 POST，这里再兜一层（防止别的注册路径漏掉）；
-        - `Sec-Fetch-Site: cross-site` 直接 403（浏览器自己标的跨站，最可靠）；
-        - Origin/Referer 与 Host 不一致：带 `same-origin/same-site` 的放行（反向代理/内网穿透下
-          Host 常被改写），没有 Sec-Fetch-Site 的按跨站处理。
-        """
-        async def wrapper(*args, **kwargs):
-            try:
-                method = ""
-                origin = ""
-                host = ""
-                site = ""
-                headers = None
-                if web_request is not None:
-                    method = str(getattr(web_request, "method", "") or "").upper()
-                    headers = getattr(web_request, "headers", None)
-                    if headers is not None:
-                        origin = str(headers.get("origin") or headers.get("referer") or "")
-                        host = str(headers.get("host") or "")
-                        site = str(headers.get("sec-fetch-site") or "").strip().lower()
-                if is_write and method and method != "POST":
-                    logger.warning("[amo] 拒绝非 POST 的 Web 写操作（%s）" % method)
-                    return {"code": 403, "msg": "写操作只接受 POST（面板请刷新到最新版）"}
-                if is_write and site == "cross-site":
-                    logger.warning("[amo] 拒绝跨站 Web 写操作（origin=%s）" % origin)
-                    return {"code": 403, "msg": "拒绝跨站请求"}
-                if is_write and origin and host:
-                    from urllib.parse import urlparse
-                    origin_host = (urlparse(origin).hostname or "").lower()
-                    allowed_hosts = {(host.split(":")[0] or "").strip().lower()}
-                    if headers is not None:
-                        for key in ("x-forwarded-host", "x-real-host"):
-                            value = str(headers.get(key) or "").split(",")[0].strip()
-                            if value:
-                                allowed_hosts.add(value.split(":")[0].strip().lower())
-                    allowed_hosts.discard("")
-                    if origin_host and allowed_hosts and origin_host not in allowed_hosts:
-                        if site in ("same-origin", "same-site"):
-                            logger.debug("[amo] Web 写操作 Host 与 Origin 不一致（同源请求，放行）: %s -> %s"
-                                         % (origin, host))
-                        else:
-                            logger.warning("[amo] 拒绝来源不一致的 Web 写操作: %s -> %s" % (origin, host))
-                            return {"code": 403, "msg": "拒绝来源不一致的请求"}
-            except Exception as exc:
-                logger.debug("[amo] Web 守卫检查失败（放行）: %s" % exc)
-            return await handler(*args, **kwargs)
-        return wrapper
 
     #: 排障用的调试接口：默认不注册，配置文件里 debug_enabled=true 才出现
     DEBUG_ROUTES = frozenset({
@@ -6753,35 +5244,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         "/heartflow_log", "/kb/regen", "/scenic_kb/regen", "/worldview/regen",
     })
 
-    def _safe_register(self, route, handler, methods, desc):
-        # 写接口只收 POST：面板的 WRITE_ACTIONS 已经强制带 body 走 POST，
-        # 老版本面板桥接没有 apiPost 时会收到 405/403，然后自动退回 fetch POST（前端有兜底）。
-        # 读接口不套守卫，避免给状态轮询加额外开销。
-        # 注意：route 带插件名前缀（/Astrbot_Amo_forever/...），WRITE_ROUTES 里存的是不带前缀的
-        # 路径，所以要拿 desc（注册时传的 path）来判定，否则所有写路由都会被漏掉。
-        path = str(desc or "")
-        if path in self.DEBUG_ROUTES and not self.cfg_bool("debug_enabled", False):
-            logger.debug("[amo] 调试接口没注册（debug_enabled=false）：%s" % path)
-            return False
-        is_write = path in WRITE_ROUTES
-        if is_write:
-            methods = ["POST"]
-        if is_write:
-            handler = self._web_guard(handler, is_write=True)
-        try:
-            self.context.register_web_api(route, handler, methods, desc)
-            return True
-        except TypeError:
-            pass
-        except Exception as exc:
-            logger.debug("[amo] Web API 注册失败 %s: %s" % (route, exc))
-            return False
-        try:
-            self.context.register_web_api(route, methods, desc, handler)
-            return True
-        except Exception as exc:
-            logger.debug("[amo] Web API 兼容注册失败 %s: %s" % (route, exc))
-            return False
 
     def _q(self, key, default=None):
         try:
@@ -6861,62 +5323,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             return "*" * len(text)
         return text[:4] + "*" * (len(text) - 8) + text[-4:]
 
-    def _config_schema_items(self):
-        schema = self._schema_map()
-        items = []
-        for key, meta in schema.items():
-            if not isinstance(meta, dict):
-                continue
-            if key in FORCED_ON_CONFIG_KEYS:
-                # 默认常开、关了会整块失效的开关：不在面板显示，值固定为开。
-                continue
-            if key in PANEL_HIDDEN_KEYS:
-                # 面板不展示（配置文件仍可改）：评分规则、判定提示词这类「改错了很难查」的项
-                continue
-            if key.startswith("hf_"):
-                group = "心流"
-            elif key.startswith("voice_"):
-                group = "语音"
-            elif key.startswith("image_share_") or key.startswith("draw_") or key.startswith("photo_"):
-                group = "照片"
-            elif key.startswith("companion_") or key.startswith("memory_") or key in ("admin_uids",):
-                group = "记忆"
-            elif key.startswith("proactive_") or key.startswith("delay_") or key.startswith("disturb_") or key in ("quiet_hours", "auto_active_msg"):
-                group = "私聊"
-            elif key.startswith("period_") or key.startswith("enable_period") or key.startswith("enable_sick"):
-                group = "状态"
-            elif (
-                key in ("timezone", "hefeng_key", "weather_city", "weather_city_name",
-                        "weather_host", "weather_geo_host")
-                or key.startswith("weather_alert_")
-                or key.startswith("city_follow_")
-                or key == "city_travel_schedule"
-            ):
-                group = "时间天气"
-            else:
-                group = "基础"
-            items.append({
-                "key": key,
-                "type": meta.get("type", "string"),
-                "description": meta.get("description") or key,
-                "hint": meta.get("hint", ""),
-                "default": meta.get("default"),
-                "options": meta.get("options") or [],
-                "special": meta.get("_special", ""),
-                "group": group,
-                "value": (
-                    self._mask_secret(self.cfg(key, meta.get("default")))
-                    if key in self.SENSITIVE_KEYS
-                    else self.cfg(key, meta.get("default"))
-                ),
-                "configured": (
-                    bool(str(self.cfg(key, "") or "").strip())
-                    if key in self.SENSITIVE_KEYS
-                    else True
-                ),
-                "sensitive": key in self.SENSITIVE_KEYS,
-            })
-        return items
 
 
     # ---- 中文城市名 → LocationID（离线表，见 amo_city_index.py） ----
@@ -7021,38 +5427,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         return start.timestamp()
 
     # ---- 供应商识别 / 多模型用量 ----
-    def _provider_inventory(self):
-        """读取 AstrBot 已配置的对话供应商；只返回脱敏信息，绝不回传密钥。"""
-        items = []
-        try:
-            providers = self.context.get_all_providers() or []
-        except Exception:
-            providers = []
-        for provider in providers:
-            config = getattr(provider, "provider_config", None) or {}
-            pid = str(config.get("id") or "")
-            if not pid:
-                continue
-            model = ""
-            try:
-                model = str(provider.get_model() or "")
-            except Exception:
-                model = str(config.get("model") or "")
-            api_base = str(config.get("api_base") or config.get("url") or "").strip()
-            key = config.get("key") or ""
-            if isinstance(key, list):
-                has_key = any(str(item or "").strip() for item in key)
-            else:
-                has_key = bool(str(key or "").strip())
-            items.append({
-                "id": pid,
-                "model": model,
-                "type": str(config.get("type") or ""),
-                "enable": config.get("enable", True) is not False,
-                "has_key": has_key,
-                "api_base": api_base,
-            })
-        return items
 
     def _judge_provider_id(self):
         try:
@@ -7079,46 +5453,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             return "siliconflow"
         return "openai_bill"
 
-    async def _provider_balances_cached(self, providers):
-        """逐个探测供应商余额；60 秒缓存，失败不阻塞面板。"""
-        now = time.time()
-        signature = "|".join(sorted(
-            item["id"] + ":" + item["api_base"] + ":" + str(item["has_key"]) for item in providers
-        ))
-        cache = getattr(self, "_provider_balance_cache", None)
-        if (
-            isinstance(cache, dict)
-            and now - to_float(cache.get("at"), 0) < 60
-            and cache.get("signature") == signature
-        ):
-            return cache.get("data") or []
-        enabled = [item for item in providers if item["enable"] and item["has_key"] and item["api_base"]]
-
-        def probe(item):
-            kind = self._balance_probe_kind(item["api_base"])
-            key = self._provider_api_key(item)
-            result = {"id": item["id"], "model": item["model"], "kind": kind}
-            if not key:
-                result.update({"ok": False, "error": "未配置密钥"})
-                return result
-            data = fetch_provider_balance(key, item["api_base"], kind)
-            data["id"] = item["id"]
-            data["model"] = item["model"]
-            data["kind"] = kind
-            return data
-
-        results = []
-        if enabled:
-            def run_all():
-                return [probe(item) for item in enabled]
-
-            try:
-                results = await asyncio.to_thread(run_all)
-            except Exception as exc:
-                logger.debug("[amo] 供应商余额探测失败: %s" % exc)
-                results = []
-        self._provider_balance_cache = {"at": now, "signature": signature, "data": results}
-        return results
 
     def _provider_api_key(self, item):
         """从 AstrBot 供应商配置里取密钥；只在内存中使用，不写日志不回传。"""
@@ -7604,32 +5938,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         if result.get("ok"):
             logger.info("[amo] 股市赚了，奖励自己一顿 %.0f 元" % amount)
 
-    def _sync_health_from_medical(self) -> None:
-        """身体状态以医疗插件为准。
-
-        医疗说「恢复中」就写恢复中，别抢着改成健康——否则人格资料里会出现
-        「刚看完病」和「身体：健康」并存的自相矛盾。
-        """
-        medical = self._medical()
-        if medical is None:
-            return
-        try:
-            info = medical.status()
-        except Exception:
-            return
-        status = str(info.get("status") or "").strip() or "健康"
-        note = str(info.get("note") or "")
-        current = self.state.health or {}
-        if str(current.get("status") or "") == status and str(current.get("note") or "") == note:
-            return
-        hours = 0
-        try:
-            until = float(info.get("until") or 0)
-            if until > time.time():
-                hours = max(1, int((until - time.time()) / 3600.0) + 1)
-        except Exception:
-            hours = 0
-        self.state.set_health(status, hours, note)
 
     #: 只有「他带她去」才触发手动就医；单纯催促（“去医院看看”“病成这样”）
     #: 不触发——留给她回一句“没钱”，等他转钱、带她去再治。
@@ -7687,33 +5995,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         parts.extend(["自然光", "手机前置摄像头", "生活感"])
         return "，".join(parts)
 
-    async def _image_bytes(self, prompt, umo="", uid="", selfie=None, scene=None):
-        """出图兜底入口：让生图插件（Astrbot_Amo_Image）直接吐图片字节。
-
-        画图/照片引擎原先只认万象画卷（OmniDraw），机器上没装就一张都出不来；
-        有了这个兜底，装万象画卷或装生图插件都能出图。
-        """
-        plugin = self._image_plugin()
-        if plugin is None:
-            return None
-        prompt = str(prompt or "").strip()
-        if not prompt:
-            return None
-        scene = scene if isinstance(scene, dict) else self._activity_snapshot(umo)
-        place = str((scene or {}).get("place") or "").strip()
-        activity = str((scene or {}).get("activity") or "").strip()
-        zone = str((scene or {}).get("zone") or "").strip()
-        logger.info("[amo] 出图场景：%s / %s" % (place or "未定", activity or "未定"))
-        try:
-            return await asyncio.wait_for(
-                plugin.draw_for(str(umo or ""), str(uid or ""), prompt, selfie=selfie,
-                                place=place, activity=activity, zone=zone),
-                timeout=180,
-            )
-        except Exception as exc:
-            logger.error("[amo] 生图失败（Astrbot_Amo_Image.draw_for）: %s" % exc)
-            self._image_star = None   # 下次重新解析实例，别一直抱着可能已失效的那个
-            return None
 
     # ---------- 世界页照片：状态与接口都在生图插件（面板直接调它） ----------
 
