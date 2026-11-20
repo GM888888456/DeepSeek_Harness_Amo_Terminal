@@ -1245,6 +1245,118 @@ class WebApiMixin:
         ok = await self._send_to_umo(umo, text)
         return {"code": 0 if ok else 1, "msg": "已发送" if ok else "发送失败"}
 
+    def _register_web_apis(self):
+        prefixes = uniq([
+            getattr(self, "name", None),
+            PLUGIN_NAME,
+            os.path.basename(self.plugin_dir),
+            "astrbot_plugin_Astrbot_Amo_forever",
+            "astrbot_plugin_amo_forever",
+        ])
+        # 清除上一实例/旧版本残留的 Web API 路由。
+        # AstrBot 重载插件时不会自动清理 registered_web_apis，旧路由会继续
+        # 指向已经 terminate 的旧实例，表现为 "Cannot operate on a closed database"。
+        try:
+            own_prefixes = tuple(
+                "/" + str(prefix).strip("/") + "/"
+                for prefix in prefixes
+                if str(prefix).strip("/")
+            )
+            holders = (type(self.context), self.context)
+            seen_holders = set()
+            for holder in holders:
+                if id(holder) in seen_holders:
+                    continue
+                seen_holders.add(id(holder))
+                registry = getattr(holder, "registered_web_apis", None)
+                if not isinstance(registry, list):
+                    continue
+                registry[:] = [
+                    item
+                    for item in registry
+                    if not (
+                        isinstance(item, tuple)
+                        and item
+                        and (
+                            str(item[0]).startswith(own_prefixes)
+                            or str(item[0]) in ("get_status", "get_profile", "refresh_status")
+                        )
+                    )
+                ]
+        except Exception as exc:
+            logger.warning("[amo] 清理旧 Web API 路由失败（插件重载后如遇 closed database，请完整重启）: %s" % exc)
+        routes = [
+            ("/status", self.api_status, ["GET"]),
+            ("/records", self.api_records, ["GET", "POST"]),
+            ("/get_status", self.api_get_status, ["GET"]),
+            ("/events", self.api_events, ["GET", "POST"]),
+            ("/profiles", self.api_profiles, ["GET", "POST"]),
+            ("/get_profile", self.api_get_profile, ["GET", "POST"]),
+            ("/profiles/sync", self.api_profiles_sync, ["GET", "POST"]),
+            ("/relations", self.api_relations, ["GET", "POST"]),
+            ("/brain", self.api_brain, ["GET", "POST"]),
+            ("/relation/save", self.api_relation_save, ["GET", "POST"]),
+            ("/relation_save", self.api_relation_save, ["GET", "POST"]),
+            ("/relation/delete", self.api_relation_delete, ["GET", "POST"]),
+            ("/relation_delete", self.api_relation_delete, ["GET", "POST"]),
+            ("/profiles_sync", self.api_profiles_sync, ["GET", "POST"]),
+            ("/config", self.api_config, ["GET"]),
+            ("/voice/save", self.api_voice_save, ["GET", "POST"]),
+            ("/weather/brief", self.api_weather_brief, ["GET", "POST"]),
+            ("/city/search", self.api_city_search, ["GET", "POST"]),
+            ("/city/set", self.api_city_set, ["GET", "POST"]),
+            ("/draw/status", self.api_draw_status, ["GET", "POST"]),
+            ("/draw/test", self.api_draw_test, ["GET", "POST"]),
+            ("/draw/decide", self.api_draw_decide, ["GET", "POST"]),
+            ("/usage", self.api_usage, ["GET"]),
+            ("/providers", self.api_providers, ["GET"]),
+            ("/providers_list", self.api_providers, ["GET"]),
+            ("/balance", self.api_balance, ["GET"]),
+            ("/config/save", self.api_config_save, ["GET", "POST"]),
+            ("/config_save", self.api_config_save, ["GET", "POST"]),
+            ("/profile/save", self.api_profile_save, ["GET", "POST"]),
+            ("/profile/links", self.api_profile_links, ["GET", "POST"]),
+            ("/profile_save", self.api_profile_save, ["GET", "POST"]),
+            ("/profile/delete", self.api_profile_delete, ["GET", "POST"]),
+            ("/profile_delete", self.api_profile_delete, ["GET", "POST"]),
+            ("/memories", self.api_memories, ["GET", "POST"]),
+            ("/chat/history", self.api_chat_history, ["GET", "POST"]),
+            ("/chat_history", self.api_chat_history, ["GET", "POST"]),
+            ("/memory/add", self.api_memory_add, ["GET", "POST"]),
+            ("/memory_add", self.api_memory_add, ["GET", "POST"]),
+            ("/memory/delete", self.api_memory_delete, ["GET", "POST"]),
+            ("/memory_delete", self.api_memory_delete, ["GET", "POST"]),
+            ("/schedule", self.api_schedule, ["GET", "POST"]),
+            ("/wardrobe", self.api_wardrobe, ["GET", "POST"]),
+            ("/wardrobe/save", self.api_wardrobe_save, ["GET", "POST"]),
+            ("/wardrobe/delete", self.api_wardrobe_delete, ["GET", "POST"]),
+            ("/wardrobe/wear", self.api_wardrobe_wear, ["GET", "POST"]),
+            ("/schedule/detail", self.api_schedule_detail, ["GET", "POST"]),
+            ("/schedule_detail", self.api_schedule_detail, ["GET", "POST"]),
+            ("/schedule/regen", self.api_schedule_regen, ["GET", "POST"]),
+            ("/kb/regen", self.api_kb_regen, ["GET", "POST"]),
+            ("/scenic_kb/regen", self.api_scenic_kb_regen, ["GET", "POST"]),
+            ("/scenic_kb_regen", self.api_scenic_kb_regen, ["GET", "POST"]),
+            ("/kb_regen", self.api_kb_regen, ["GET", "POST"]),
+            ("/schedule_regen", self.api_schedule_regen, ["GET", "POST"]),
+            ("/weather", self.api_weather, ["GET"]),
+            ("/photo/self", self.api_photo_self, ["GET", "POST"]),
+            ("/photo/job", self.api_photo_job, ["GET", "POST"]),
+            ("/photo/last", self.api_photo_last, ["GET", "POST"]),
+            ("/photo/clear", self.api_photo_clear, ["GET", "POST"]),
+            ("/worldview", self.api_worldview, ["GET"]),
+            ("/worldview/regen", self.api_worldview_regen, ["GET", "POST"]),
+            ("/worldview_regen", self.api_worldview_regen, ["GET", "POST"]),
+            ("/say", self.api_say, ["GET", "POST"]),
+            ("/refresh_status", self.api_refresh_status, ["GET"]),
+        ]
+        for prefix in prefixes:
+            clean = str(prefix).strip("/")
+            if not clean:
+                continue
+            for path, handler, methods in routes:
+                self._safe_register("/" + clean + path, handler, methods, path)
+
 
 __all__ = [
     "_AUTO_NOTE_RE",

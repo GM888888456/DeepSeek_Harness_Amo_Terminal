@@ -23,6 +23,11 @@ try:
     from .amo_core.human_state import *  # noqa: F401,F403
     from .amo_core.llm_service import *  # noqa: F401,F403
     from .amo_core.reply_gate import *  # noqa: F401,F403
+    from .amo_core.relations import *  # noqa: F401,F403
+    from .amo_core.presence import *  # noqa: F401,F403
+    from .amo_core.outfit import *  # noqa: F401,F403
+    from .amo_core.weather import *  # noqa: F401,F403
+    from .amo_core.economy import *  # noqa: F401,F403
     from .amo_core.learn import *  # noqa: F401,F403
     from .amo_core.sync import *  # noqa: F401,F403
     from .amo_core.reply import *  # noqa: F401,F403
@@ -40,6 +45,11 @@ except ImportError:  # 非包方式加载时的回退
     from amo_core.human_state import *  # noqa: F401,F403
     from amo_core.llm_service import *  # noqa: F401,F403
     from amo_core.reply_gate import *  # noqa: F401,F403
+    from amo_core.relations import *  # noqa: F401,F403
+    from amo_core.presence import *  # noqa: F401,F403
+    from amo_core.outfit import *  # noqa: F401,F403
+    from amo_core.weather import *  # noqa: F401,F403
+    from amo_core.economy import *  # noqa: F401,F403
     from amo_core.learn import *  # noqa: F401,F403
     from amo_core.sync import *  # noqa: F401,F403
     from amo_core.reply import *  # noqa: F401,F403
@@ -127,9 +137,7 @@ except Exception:
 #: 老版本「Memory Companion」会把「记忆 N 条」这种机器统计写进画像备注；
 #: 插件删了以后这些值还留在两边的库里，同步时又会被拉回来。读到就直接当没有。
 #: 他说「要睡 / 在睡」——她不能再问上班、到家、吃没吃，也不能催照片。
-_HIS_SLEEP_RE = re.compile(r"要睡|去睡|睡觉|睡了|想睡|困了|困死|眯一会|眯一会儿|躺一会|躺一会儿|晚安|闭眼")
 #: 他说「不在这儿 / 不上班」——「下班没 / 到家没」这种话就不成立。
-_HIS_AWAY_RE = re.compile(r"在外地|出差|不在家|回不去|放假|休假|年假|请假|不上班|不用上班|明天.{0,6}早起")
 
 
 
@@ -379,14 +387,6 @@ def same_sentence(a, b, threshold=0.8) -> bool:
 
 
 
-def uniq(items):
-    out = []
-    seen = set()
-    for item in items:
-        if item and item not in seen:
-            seen.add(item)
-            out.append(item)
-    return out
 
 
 
@@ -743,13 +743,6 @@ def typing_delay_ms(text, base=700, per_char=400, cap=20000):
 # ---- 用量统计（读 AstrBot 的 data_v4.db provider_stats） ----
 
 
-def _hhmm_minutes(value) -> int:
-    """HH:MM → 分钟；坏值返回 -1。"""
-    try:
-        hour, minute = str(value).split(":")[:2]
-        return int(hour) * 60 + int(minute)
-    except Exception:
-        return -1
 
 
 
@@ -1100,17 +1093,6 @@ def merge_uid_alias_data(conn, alias_map):
 # 状态：九维心情 / 生理期 / 健康 / 天气 / 世界观 / 日程
 # ---------------------------------------------------------------------------
 
-def proactive_pending_block_seconds(cfg_int) -> float:
-    """发过主动消息后，多久之内不再发下一条。
-
-    原来是写死 6 小时：他只要没在私聊回一句，她半天都不能再开口；
-    实际上他在群里聊得火热也算「人在」，这条要跟着放宽。
-    """
-    try:
-        minutes = max(0, int(cfg_int("proactive_pending_max_minutes", 120)))
-    except Exception:
-        minutes = 120
-    return minutes * 60
 
 
 #: 洗掉「他」之后只剩状语的残句：「顺便跟闲聊两句」「和在说」这种。
@@ -1225,7 +1207,7 @@ WRITE_ROUTES = frozenset({
 })
 
 
-class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, ReplyMixin, SyncMixin, LearnMixin, Star):
+class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, ReplyMixin, SyncMixin, LearnMixin, EconomyMixin, WeatherMixin, OutfitMixin, PresenceMixin, RelationsMixin, Star):
     def __init__(self, context: Context, config: dict = None):
         super().__init__(context)
         self.config = config or {}
@@ -1454,43 +1436,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             "mention": bool(settings.get("reply_with_mention", False)),
         }
 
-    async def _resolve_persona(self, umo=""):
-        """解析当前会话的人格对象（300 秒缓存）；读不到返回 None。"""
-        key = str(umo or "default")
-        cache = getattr(self, "_persona_obj_cache", None)
-        if cache is None:
-            cache = {}
-            self._persona_obj_cache = cache
-        hit = cache.get(key)
-        if hit and now_ts() - hit[0] < 300:
-            return hit[1]
-        manager = getattr(self.context, "persona_manager", None)
-        persona = None
-        if manager is not None:
-            try:
-                conversation_persona_id = None
-                cm = getattr(self.context, "conversation_manager", None)
-                if cm is not None:
-                    cid = await cm.get_curr_conversation_id(key)
-                    if cid:
-                        conv = await cm.get_conversation(key, cid)
-                        conversation_persona_id = getattr(conv, "persona_id", None)
-                platform_name = key.split(":", 1)[0] if ":" in key else ""
-                _, persona, _, _ = await manager.resolve_selected_persona(
-                    umo=key,
-                    conversation_persona_id=conversation_persona_id,
-                    platform_name=platform_name,
-                    provider_settings={},
-                )
-            except Exception as exc:
-                logger.debug("[amo] 解析当前人格失败: %s" % exc)
-            if persona is None:
-                try:
-                    persona = await manager.get_default_persona_v3(key or None)
-                except Exception as exc:
-                    logger.debug("[amo] 读取默认人格失败: %s" % exc)
-        cache[key] = (now_ts(), persona)
-        return persona
 
     async def _persona_name_for(self, umo=""):
         """读取当前会话的人格名；读不到时返回空字符串。"""
@@ -1714,40 +1659,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             return ""
 
 
-    async def _sync_persona_name(self, event_or_umo):
-        umo = getattr(event_or_umo, "unified_msg_origin", event_or_umo)
-        try:
-            name, aliases = await self._persona_names_for(umo)
-        except Exception as exc:
-            logger.debug("[amo] 同步人格名失败: %s" % exc)
-            return
-        if not name:
-            return
-        changed = name != self.persona_name
-        self.persona_name = name
-        self.bot_name = name
-        if aliases:
-            # 别名以人格里写的那一套为准（2026-11-20 用户口径），不是写死一个短名
-            self.bot_aliases = aliases
-        try:
-            # 记住名字和别名：下次重启、人格还没解析出来时先用这个，别让她几秒钟里叫不出名字
-            if str(self.db.kv_get("bot_name_last", "") or "") != name:
-                self.db.kv_set("bot_name_last", name)
-            if aliases and self.db.kv_get("bot_aliases_last", []) != aliases:
-                self.db.kv_set("bot_aliases_last", aliases)
-        except Exception:
-            pass
-        if self.heartflow is not None:
-            self.heartflow.set_identity(self.bot_name, self.bot_aliases)
-        # 世界观挂在 HumanState 上，不是插件实例；这里以前写成了 self.worldview，
-        # 一旦人格名变化就会 AttributeError，整条消息处理直接中断。
-        world = getattr(getattr(self, "state", None), "worldview", None)
-        if changed and isinstance(world, dict) and world.get("name") != name:
-            world["name"] = name
-            try:
-                self.db.kv_set("worldview", world)
-            except Exception:
-                pass
 
     def _migrate_legacy_config(self):
         """把旧版 amo_forever_config.json 合并到 Astrbot_Amo_forever_config.json。"""
@@ -1961,61 +1872,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         "礼服", "睡衣", "家居", "鞋", "袜", "制服", "水手", "一套", "一件", "一身", "衣服",
     )
 
-    def _outfit_request_style(self, text):
-        """他这句是不是在要她换衣服；是就返回款式（只说「换一套」返回「一套」）。
 
-        他自己的事（「我想换一套衣服」）、聊换衣服但没要求（「换衣服的话穿哪件」）
-        都不算，免得凭空塞一条换装提示。
-        """
-        body = str(text or "").strip()
-        if not body or len(body) > 100:
-            return ""
-        if re.match(r"^(我|咱|我们)", body):
-            return ""
-        match = self.OUTFIT_REQUEST_RE.search(body)
-        if not match:
-            return ""
-        tail = re.split(r"[。！？!?，,]", body[match.end():], 1)[0].strip()
-        for word in ("给我看看", "给我看", "看看", "看一下", "好吗", "好不好", "行吗", "吧", "呀", "啊"):
-            if tail.endswith(word):
-                tail = tail[:-len(word)].strip()
-        tail = tail.strip("的了吧呀啊哦嘛 ")
-        if tail and any(word in tail.lower() for word in self.OUTFIT_STYLE_WORDS):
-            return tail[:20]
-        # 「换jk」这种款式就写在前缀里，匹配段本身带款式
-        extra = re.sub(r"^换", "", match.group(0)).strip()
-        if extra and extra not in ("一套", "一件", "一身") and any(
-                word in extra.lower() for word in self.OUTFIT_STYLE_WORDS):
-            return extra[:20]
-        return "一套"
-
-    async def _outfit_request_hint(self, event):
-        """他要她换衣服：只给事实（在家/在外面、衣柜里有什么）；换不换她自己定。"""
-        style = self._outfit_request_style(getattr(event, "message_str", "") or "")
-        if not style:
-            return ""
-        try:
-            event.amo_outfit_request = style
-        except Exception:
-            pass
-        engine = getattr(self, "outfits", None)
-        if engine is None:
-            return ""
-        try:
-            activity = self.state.current_activity() or {}
-        except Exception:
-            activity = {}
-        if not at_home(activity):
-            return ("【换装】他想让你换「%s」，你现在在%s，换不了衣服；回家以后才能换。"
-                    % (style, str(activity.get("place") or "外面")))
-        names = engine.find_sets(style, exclude=engine.current_set())
-        lines = ["【换装】他想让你换「%s」，你现在在家。" % style]
-        if names:
-            lines.append("衣柜里这类有：" + "、".join(names[:8]) + "（挑一套就是整套穿）。")
-        else:
-            lines.append("衣柜里没有这类；市场有的话可以自己去买。")
-        lines.append("换不换、穿哪套你自己定。")
-        return "".join(lines)
 
     def _remember_outfit_pending(self, style, umo=""):
         try:
@@ -2041,32 +1898,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             logger.debug("[amo] 换装后写日程失败: %s" % exc)
         return items
 
-    async def _change_outfit_now(self, style="", set_name=""):
-        """她答应换：从衣柜挑一整套，写进今天（从现在穿到今晚睡觉）。"""
-        engine = getattr(self, "outfits", None)
-        if engine is None:
-            return {"ok": False, "reason": "穿搭引擎不可用"}
-        text = str(style or "").strip()
-        if not text or text in ("一套", "衣服", "换一套", "随便"):
-            text = "换一套衣服"
-        set_name = str(set_name or "").strip() or engine.pick_set(
-            text, exclude=engine.current_set(), seed=str(now_ts()))
-        if not set_name:
-            return {"ok": False, "reason": "衣柜里没有", "hint": self._outfit_market_hint(text)}
-        look = engine.compose_set(set_name) or set_name
-        ok, place = engine.can_change_to(look)
-        if not ok:
-            return {"ok": False, "reason": "现在在%s，贴身衣物不能换" % place, "outside": True}
-        day = today_str()
-        engine.change_outfit(day, look, from_hour=time.strftime("%H:00"),
-                             note="换装：%s" % text[:40])
-        self._rewrite_today_schedule(day)
-        try:
-            engine.remember_camp(engine.camp_of(set_name))
-        except Exception:
-            pass
-        logger.info("[审批] 换装放行（%s）：%s" % (text, look))
-        return {"ok": True, "look": look, "set": set_name}
 
     def _outfit_market_hint(self, style=""):
         """衣柜里没有时：市场有没有类似的（有就说价格，没有就说没开门）。"""
@@ -2086,36 +1917,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 return "市场有「%s」%.2f¥" % (name, float(row.get("price") or 0))
         return "市场也没有类似的"
 
-    async def _fulfill_outfit_pending(self):
-        """在外面答应「回家换」的：到家后真的换，并留一句事实给她。"""
-        try:
-            data = self.db.kv_get("outfit_pending", {}) or {}
-        except Exception:
-            return ""
-        if not isinstance(data, dict) or not data.get("style"):
-            return ""
-        if str(data.get("day") or "") != today_str():
-            try:
-                self.db.kv_set("outfit_pending", {})
-            except Exception:
-                pass
-            return ""
-        try:
-            activity = self.state.current_activity() or {}
-        except Exception:
-            activity = {}
-        if not at_home(activity):
-            return ""
-        style = str(data.get("style") or "")
-        result = await self._change_outfit_now(style)
-        try:
-            self.db.kv_set("outfit_pending", {})
-        except Exception:
-            pass
-        if not result.get("ok"):
-            return ""
-        return ("【换装】你答应他回家换「%s」，现在到家已经换上了：%s。"
-                % (style or "一套", result.get("look") or ""))
 
     async def _settle_outfit_reply(self, event, text):
         """她嘴里说「换好了」但没调工具：答应就真换（只在这一轮被要求换装时）。"""
@@ -2475,53 +2276,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         await self.terminate()
 
     # ---- 跨平台账号合并 ----
-    def _uid_alias_mapping(self):
-        """读映射表（配置优先，其次数据目录 uid_map.json）；按内容+mtime 缓存。"""
-        cache_key = None
-        try:
-            text = str(self.cfg_str("uid_alias_map", "") or "").strip().lstrip("﻿")
-            map_path = os.path.join(os.path.dirname(str(self.db.path)), "uid_map.json")
-            stamp = os.path.getmtime(map_path) if os.path.exists(map_path) else 0
-            cache_key = (text, stamp)
-        except Exception:
-            cache_key = None
-        if getattr(self, "_uid_alias_cache_key", None) != cache_key:
-            raw = {}
-            try:
-                text = str(self.cfg_str("uid_alias_map", "") or "").strip().lstrip("﻿")
-                parsed = json.loads(text) if text else {}
-                if isinstance(parsed, dict):
-                    raw.update(parsed)
-            except Exception as exc:
-                logger.warning("[amo] uid_alias_map 配置解析失败: %s" % exc)
-            try:
-                map_path = os.path.join(os.path.dirname(str(self.db.path)), "uid_map.json")
-                if os.path.exists(map_path):
-                    # utf-8-sig：Windows 记事本另存的 JSON 常带 BOM，用 utf-8 会直接解析失败
-                    with open(map_path, "r", encoding="utf-8-sig") as fh:
-                        parsed = json.load(fh)
-                    if isinstance(parsed, dict):
-                        for key, value in parsed.items():
-                            raw.setdefault(key, value)
-            except Exception as exc:
-                logger.warning("[amo] uid_map 读取失败: %s" % exc)
-            raw = {str(k): str(v) for k, v in raw.items() if k and v}
-            # 解析链式映射（A→B、B→C 归到 A→C），并丢掉自映射
-            resolved = {}
-            for key in raw:
-                current = key
-                seen = {key}
-                while current in raw:
-                    nxt = raw[current]
-                    if nxt in seen:
-                        break
-                    seen.add(nxt)
-                    current = nxt
-                if current != key:
-                    resolved[key] = current
-            self._uid_alias_map = resolved
-            self._uid_alias_cache_key = cache_key
-        return getattr(self, "_uid_alias_map", {}) or {}
 
     def _canonical_uid(self, event):
         """把平台账号换算成同一个人的主 uid；关掉开关就返回原 uid。"""
@@ -2630,53 +2384,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                     aliases[name] = uid
         return aliases
 
-    def _detect_impersonation(self, event):
-        """群里非恋人 UID 使用/冒充恋人的名字或爱称时，5 分钟内累计降级。"""
-        group_id = str(event.get_group_id() or "")
-        if not group_id:
-            return False
-        uid = self._canonical_uid(event)
-        lovers = self._lover_aliases()
-        if not lovers or uid in set(lovers.values()) or self._is_registered_lover(uid):
-            return False
-        sender_name = str(event.get_sender_name() or "").strip()
-        text = str(event.message_str or "").strip()
-        hit = ""
-        if sender_name in lovers:
-            hit = sender_name
-        elif text in lovers:
-            hit = text
-        else:
-            for alias in lovers:
-                if re.search(r"(?:我才是|我是|叫我|叫我做|以后叫我|我才是那个)\s*" + re.escape(alias), text):
-                    hit = alias
-                    break
-        if not hit:
-            return False
-        setattr(event, "amo_impersonation", True)
-        key = "impersonate_%s_%s" % (group_id, uid)
-        now = now_ts()
-        stamps = self.db.kv_get(key, [])
-        if not isinstance(stamps, list):
-            stamps = []
-        stamps = [to_float(item, 0) for item in stamps if now - to_float(item, 0) <= 300]
-        stamps.append(now)
-        self.db.kv_set(key, stamps)
-        count = len(stamps)
-        profile = self.db.get_profile(uid) or {}
-        current = str(profile.get("relation") or "普通")
-        relation = current
-        if count >= 3 and current != "仇恨":
-            relation = "仇恨"
-        elif count == 1 and current != "仇恨":
-            relation = "抵触"
-        if relation != current:
-            self.db.update_profile(uid, relation=relation)
-            logger.info(
-                "[amo] 识别到冒充恋人称呼: %s -> %s（%s，5分钟内第%d次）"
-                % (uid, relation, hit, count)
-            )
-        return True
 
 
     # ---------- 近聊上下文（内存缓冲 + 记忆终端钩子） ----------
@@ -3118,86 +2825,9 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         except Exception:
             return {}
 
-    def _market_plugin(self):
-        """找市场插件（Astrbot_Amo_Marketplace）；没装返回 None。"""
-        names = ("DeepSeek_Harness_Amo_Market", "DeepSeek_Harness_Amo_Finance")
-        try:
-            for name in names:
-                try:
-                    meta = self.context.get_registered_star(name)
-                except Exception:
-                    meta = None
-                for attr in ("star_cls", "instance", "star", "plugin"):
-                    star = getattr(meta, attr, None) if meta is not None else None
-                    if star is not None and not isinstance(star, type) and hasattr(star, "outfits"):
-                        return star
-        except Exception:
-            pass
-        try:
-            for meta in self.context.get_all_stars():
-                marker = ((getattr(meta, "name", "") or "") + " "
-                          + (getattr(meta, "module_path", "") or "")).lower()
-                if "market" not in marker:
-                    continue
-                for attr in ("star_cls", "instance", "star", "plugin"):
-                    star = getattr(meta, attr, None)
-                    if star is not None and not isinstance(star, type) and hasattr(star, "outfits"):
-                        return star
-        except Exception:
-            pass
-        return None
 
     WARDROBE_SEED = "hanfu-white-v4"
 
-    async def _reseed_wardrobe_from_market(self) -> None:
-        """衣柜按内置汉服/JK 套装重建；只在版本标记不对时做一次，旧衣服全清。"""
-        if self.wardrobe is None:
-            return
-        items = (list(hanfu_jk_items())
-                 if hanfu_jk_items is not None else [])
-        if not items:
-            return
-        # 保留她自己在市场买的衣服：只补内置套装，不整库清空
-        try:
-            existing = self.wardrobe.items() or []
-        except Exception:
-            existing = []
-        names = {str(row.get("name") or "") for row in items}
-        for row in existing:
-            name = str(row.get("name") or "")
-            # 只保留她在市场买的；旧版 108 件现代衣服不再带回来
-            if not name or name in names:
-                continue
-            # 只有真正在 market 买过的（amo_buy 写「市场买」）才保留；
-            # 旧版「市场目录」播种的现代衣服不再带回来
-            if str(row.get("note") or "") != "市场买":
-                continue
-            items.append(row)
-            names.add(name)
-        try:
-            await self.wardrobe.replace_all(items)
-        except Exception as exc:
-            logger.warning("[amo] 衣柜重建失败: %s" % exc)
-            return
-        # 重建只是写库：Wardrobe 读的是内存快照，不 refresh 的话 pool 还是空的，
-        # 日程里就一个 outfit 都写不上（今天这一批踩到的就是这个）。
-        try:
-            await self.wardrobe.refresh(force=True)
-            logger.info("[amo] 衣柜快照已刷新：%d 件" % self.wardrobe.count())
-        except Exception as exc:
-            logger.warning("[amo] 衣柜快照刷新失败: %s" % exc)
-        # 撤私密功能后：旧 override 里如果有私密/肚兜/内裤，清掉并重排今天
-        try:
-            day = today_str()
-            override = self.db.kv_get("outfit_override:" + day, {}) or {}
-            name = str((override or {}).get("name") or "")
-            if name and any(word in name for word in ("私密", "肚兜", "内裤")):
-                self.db.kv_set("outfit_override:" + day, {})
-            self._rewrite_today_schedule(day)
-        except Exception as exc:
-            logger.debug("[amo] 清理旧换装/重排日程失败: %s" % exc)
-        self.db.kv_set("wardrobe_seed", self.WARDROBE_SEED)
-        logger.info("[amo] 衣柜已重建（内置汉服/JK）：%d 件" % len(items))
 
     def _image_plugin(self):
         """生图插件实例：_image_plugin 永远拿最新实例（每次按插件名重新解析）。
@@ -3524,41 +3154,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         "夹克", "背心", "短袖", "T恤", "t恤", "西装", "礼服", "睡衣", "家居",
     )
 
-    def _outfit_change_request(self, text):
-        """「换上那条蓝裙子」→ 返回衣服名；不是在说换装就返回空。"""
-        body = str(text or "").strip()
-        if not body or len(body) > 80:
-            return ""
-        wants_change = bool(self.OUTFIT_CHANGE_RE.search(body))
-        if not wants_change:
-            # 「今天穿白衬衫」也算，但必须提到衣服，避免「穿得好看」误触
-            if "穿" not in body or not any(word in body for word in self.CLOTHES_WORDS):
-                return ""
-        store = getattr(self, "wardrobe", None)
-        if store is not None:
-            try:
-                hit = store.match_text(body)
-                if hit:
-                    return hit["name"]
-            except Exception:
-                pass
-        # 库里没有：从原话里抠一个像衣服的短描述
-        match = re.search(
-            r"(?:换上|换成|穿|换)(?:上|一件|一条|一身|一套|那件|这件)?\s*"
-            r"([\u4e00-\u9fa5A-Za-z0-9，、]{2,18}?)(?:吧|呀|啊|了|好不好|行不行|[。！？!?]|$)",
-            body,
-        )
-        if not match:
-            return ""
-        candidate = match.group(1).strip("，、 ")
-        for filler in ("那条", "这条", "那件", "这件", "那套", "这套", "一身", "一套"):
-            if candidate.startswith(filler) and len(candidate) > len(filler):
-                candidate = candidate[len(filler):].strip("，、 ")
-        if len(candidate) < 2:
-            return ""
-        if not any(word in candidate for word in self.CLOTHES_WORDS):
-            return ""
-        return candidate[:20]
 
 
     def _data_plugin(self):
@@ -3850,41 +3445,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             logger.error("[amo] 记忆库 %s 调用失败: %s" % (name, exc))
             return None
 
-    async def _push_profile_to_data(self, uid, profile=None, platform=""):
-        """把本地画像推给数据插件（名字/称呼/关系/备注），顺带记下平台身份。
-
-        返回“是否真的写进去了”：数据插件没装、旧版没有 platform 参数、或者内部报错，
-        都会返回 False，调用方好统计失败条数，不再假装成功。
-        """
-        if not uid:
-            return False
-        profile = profile or self.db.get_profile(uid) or {}
-        name = str(profile.get("name") or "")
-        # 本地画像自己记着这个人是哪个平台的，补推时别把飞书用户错标成 QQ
-        platform = str(platform or profile.get("platform") or "").strip().lower()
-        fields = {
-            "name": name,
-            "alias": str(profile.get("alias") or ""),
-            "relation": str(profile.get("relation") or ""),
-            "remark": ("" if _looks_auto_note(profile.get("notes"))
-                       else str(profile.get("notes") or "")),
-        }
-        mem = self._data_mem()
-        save = getattr(mem, "save_profile", None) if mem is not None else None
-        result = None
-        if callable(save):
-            # 直接调一次，异常不再被 _data_call 吞掉，好定位到底哪一步失败
-            try:
-                result = await save(self._data_bot_id(), str(uid), platform=platform, **fields)
-            except Exception as exc:
-                self._log_push_failure(uid, exc)
-                result = None
-            except Exception as exc:
-                self._log_push_failure(uid, exc)
-                result = None
-        if isinstance(result, dict) and result.get("uid"):
-            return True
-        return False
 
     def _log_push_failure(self, uid, exc):
         """同一次同步里最多打 3 条 warning，避免刷屏。"""
@@ -3895,60 +3455,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 "[amo] 推送画像 %s 失败: %s: %s" % (uid, type(exc).__name__, exc)
             )
 
-    async def _sync_relations_from_data(self):
-        """把记忆终端里的关系网拉回本地（面板改过的也能生效，不用重启）。"""
-        try:
-            rows = await self._data_call("list_relations", self._data_bot_id())
-        except Exception:
-            return 0
-        if rows is None:
-            # 终端不可用时不要动本地，避免把关系网清空
-            return 0
-        remote = set()
-        count = 0
-        for edge in rows:
-            a_uid = str(edge.get("a_uid") or "")
-            b_uid = str(edge.get("b_uid") or "")
-            if not a_uid or not b_uid:
-                continue
-            if a_uid in INTERNAL_RELATION_NODES or b_uid in INTERNAL_RELATION_NODES:
-                # 老版本可能推过 bot 边：不参与比较，也不动本地
-                continue
-            remote.add(tuple(sorted([a_uid, b_uid])))
-            try:
-                self.db.upsert_relation(a_uid, b_uid, edge.get("relation") or "朋友", edge.get("note") or "")
-                count += 1
-            except Exception:
-                continue
-        # 面板上删掉的关系，本地也同步删掉（终端为准）；
-        # 终端返回空、或远端的边比本地还少时都不删——那多半是换库/重装/恢复残缺备份，
-        # 照删一次就能把本地关系网清空（之后还得靠聊天慢慢沉淀）。
-        try:
-            local_rows = self.db.list_relations()
-        except Exception:
-            local_rows = []
-        # bot/self 边推不到远端，比较前先排掉：不然远端永远"比本地少"，
-        # 这条 warning 会每轮都响，而且下面"终端删了本地也删"永远不会执行。
-        local_rows = [
-            item for item in local_rows
-            if str(item.get("a_uid") or "") not in INTERNAL_RELATION_NODES
-            and str(item.get("b_uid") or "") not in INTERNAL_RELATION_NODES
-        ]
-        if not remote or len(remote) < len(local_rows):
-            if remote:
-                logger.warning(
-                    "[amo] 关系网不同步：远端 %d 条 < 本地 %d 条，先不删本地"
-                    % (len(remote), len(local_rows))
-                )
-            return count
-        try:
-            for item in local_rows:
-                pair = tuple(sorted([str(item.get("a_uid") or ""), str(item.get("b_uid") or "")]))
-                if pair not in remote:
-                    self.db.delete_relation(pair[0], pair[1])
-        except Exception:
-            pass
-        return count
 
 
     def _apply_remote_profile(self, uid, remote_row, local_profile):
@@ -4426,27 +3932,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                     r"(人民币|美元|美金|港币|港元|CNY|RMB|USD|HKD|元|块)?", re.I), "red"),
     )
 
-    def _parse_money_gift(self, text):
-        """从私聊消息里认出「他给我钱」。返回 (channel, amount, currency) 或 None。"""
-        body = str(text or "").strip()
-        if not body:
-            return None
-        for pattern, channel in self.MONEY_TEMPLATES:
-            match = pattern.search(body)
-            if not match:
-                continue
-            try:
-                amount = float(match.group(1))
-            except (TypeError, ValueError):
-                continue
-            if (match.group(2) or "") == "万":
-                amount *= 10000
-            if amount <= 0:
-                continue
-            raw = str(match.group(3) or "").strip().upper()
-            currency = self.MONEY_CURRENCIES.get(raw, "CNY")
-            return channel, round(amount, 2), currency
-        return None
 
     #: 收到他转账/红包之后的反应。
     #: 以前只有 4 条、第一条是「老公今天怎么对我这么好」，抽到它就像复读机；
@@ -4729,28 +4214,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         return "换了新%s：%s（¥%.0f，余额 ¥%.0f）。" % (
             name, wish.get("model"), price, float(result.get("balance") or 0))
 
-    async def _eat_with_charge(self, amount: float, dish: str = "饭") -> None:
-        """日程里吃饭也要「真吃」：以前只扣钱不涨饱食度，于是她天天花钱、天天饿。"""
-        plugin = self._data_plugin()
-        eat = getattr(plugin, "eat", None) if plugin is not None else None
-        if not callable(eat):
-            return
-        try:
-            await asyncio.to_thread(eat, float(amount), "", str(dish or "饭"))
-        except Exception as exc:
-            logger.debug("[amo] 记吃饭失败: %s" % exc)
-            return
-        try:
-            self.db.kv_set("last_meal", {"ts": now_ts(), "dish": str(dish or "饭"),
-                                         "method": "schedule"})
-        except Exception:
-            pass
-        try:
-            self.feel(FeelEvent.MEAL)
-        except Exception:
-            pass
-        self._sync_hunger_from_vitals()
-        logger.info("[amo] 日程吃饭：%s（饱食度 +%.0f）" % (dish, float(amount)))
 
     @staticmethod
     def _meal_slot(item: dict) -> bool:
@@ -4768,85 +4231,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             return True
         return False
 
-    def _bill_meals(self) -> None:
-        """日程里吃饭却一直没扣钱：按活动补扣，同一天同一格只扣一次。
-
-        以前只认 ``category == "meal"``，但模型生成的日程常把「点外卖」
-        写成 rest；而且只在当前格检查，错过就永远不补。现在按活动词识别，
-        并且把今天已经过去、还没扣过的吃饭格一起补上。
-        """
-        if getattr(self, "state", None) is None:
-            return
-        now = _clock_now()
-        today = now.date().isoformat()
-        items = self.state.schedule.get(today) or []
-        current_minute = now.hour * 60 + now.minute
-        billing = getattr(self, "_meal_billing", None)
-        if billing is None:
-            billing = set()
-            self._meal_billing = billing
-
-        pending = []
-        for item in items:
-            start = _hhmm_minutes(item.get("start"))
-            if start > current_minute:
-                continue
-            if not self._meal_slot(item):
-                continue
-            rid = "meal:%s:%s" % (today, str(item.get("start") or ""))
-            try:
-                if self.db.kv_get("meal_billed:" + rid, False):
-                    continue
-            except Exception:
-                pass
-            if rid in billing:
-                continue
-            try:
-                last_try = float(self.db.kv_get("meal_retry:" + rid, 0) or 0)
-                if now_ts() - last_try < 600:
-                    continue
-            except Exception:
-                pass
-            pending.append((start, item, rid))
-
-        # 只补最近 3 格，避免停机很久后一次扣一串
-        for start, item, rid in sorted(pending, key=lambda row: row[0])[-3:]:
-            activity = str(item.get("activity") or "")
-            place = str(item.get("place") or "")
-            if "做饭" in activity or "下厨" in activity:
-                cost, payee, reason = 22.0, "菜场", "做饭"
-            elif "外卖" in activity or "家" in place:
-                cost, payee, reason = 36.0, "外卖", "外卖"
-            else:
-                cost, payee, reason = 58.0, (place or "餐馆"), "吃饭"
-            satiety = 38 if ("做饭" in activity or "下厨" in activity) else (
-                34 if ("外卖" in activity or "家" in place) else 42)
-
-            billing.add(rid)
-            try:
-                self.db.kv_set("meal_retry:" + rid, now_ts())
-            except Exception:
-                pass
-
-            async def run(item=item, rid=rid, cost=cost, payee=payee,
-                          reason=reason, satiety=satiety, activity=activity):
-                try:
-                    result = await self.charge(cost, reason=reason, payee=payee,
-                                               request_id=rid, source="meal")
-                    if isinstance(result, dict) and result.get("ok"):
-                        try:
-                            self.db.kv_set("meal_billed:" + rid, True)
-                        except Exception:
-                            pass
-                        await self._eat_with_charge(satiety, activity or reason)
-                finally:
-                    billing.discard(rid)
-
-            try:
-                self._spawn(run())
-            except Exception as exc:
-                billing.discard(rid)
-                logger.debug("[amo] 吃饭扣款任务起不来: %s" % exc)
 
     def _period_feel_tick(self) -> None:
         """生理期开始/结束时给心流发一次事件（每天最多一次）。"""
@@ -5140,109 +4524,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
 
 
 
-    async def _learn_relations(self, event, text, uid):
-        """从对话里认关系：他说「小明是我同事」就记一条边。
 
-        只认明确陈述 + 能在画像里唯一定位到人；管理员手动设过的不覆盖。
-        """
-        if parse_relations is None or not text or not uid:
-            return
-        try:
-            pairs = parse_relations(text)
-        except Exception:
-            return
-        if not pairs:
-            return
-        name_map = {}
-        try:
-            for item in self.db.list_profiles(limit=500):
-                for key in ("name", "alias"):
-                    raw = str(item.get(key) or "").strip()
-                    if not raw:
-                        continue
-                    for piece in re.split(r"[;；,，、/|]", raw):
-                        name = piece.strip()
-                        if len(name) >= 2:
-                            name_map.setdefault(name, set()).add(str(item.get("uid") or ""))
-        except Exception:
-            return
-        try:
-            existing = {}
-            for edge in self.db.list_relations():
-                pair = tuple(sorted([str(edge.get("a_uid") or ""), str(edge.get("b_uid") or "")]))
-                existing[pair] = str(edge.get("note") or "")
-        except Exception:
-            existing = {}
-        for who, relation, evidence in pairs:
-            targets = [item for item in name_map.get(who, set()) if item and item != str(uid)]
-            if len(targets) != 1:
-                continue
-            target = targets[0]
-            pair = tuple(sorted([str(uid), target]))
-            old_note = existing.get(pair, "")
-            if old_note and not old_note.startswith("对话："):
-                # 管理员手动设过的关系，不拿聊天内容覆盖
-                continue
-            note = "对话：" + truncate(evidence, 24)
-            try:
-                if not self.db.upsert_relation(uid, target, relation, note):
-                    continue
-                logger.debug("[amo] 关系网自动记录: %s --%s--> %s" % (uid, relation, target))
-                await self._push_relation_to_data(uid, target, relation, note)
-            except Exception as exc:
-                logger.debug("[amo] 自动关系写入失败: %s" % exc)
-
-    def _relation_network_text(self, uid):
-        """给当前用户生成两跳内的关系网摘要；只读。
-
-        「陌生人」只在面板图谱里出现，不进提示词——不然每句都带一串「小明和小满是陌生人」。
-        """
-        try:
-            edges = [edge for edge in self.db.list_relations()
-                     if str(edge.get("relation") or "") != "陌生人"]
-        except Exception:
-            return ""
-        uid = str(uid or "")
-        if not edges:
-            return ""
-        names = {}
-        try:
-            for item in self.db.list_profiles(limit=500):
-                names[str(item.get("uid"))] = item.get("alias") or item.get("name") or str(item.get("uid"))
-        except Exception:
-            pass
-        names["bot"] = str(getattr(self, "bot_name", "") or "你")
-        picked = []
-        if _rank_edges is not None:
-            try:
-                # 图小的时候放宽到三跳，图大了只走两跳，避免噪声和 token 膨胀
-                hops = 3 if len(edges) <= 40 else 2
-                picked = _rank_edges(edges, uid, 12, hops)
-            except Exception:
-                picked = []
-        if not picked:
-            direct = []
-            neighbors = set()
-            for edge in edges:
-                a, b = str(edge.get("a_uid")), str(edge.get("b_uid"))
-                if uid in (a, b):
-                    direct.append(edge)
-                    neighbors.add(b if a == uid else a)
-            second = []
-            for edge in edges:
-                if edge in direct:
-                    continue
-                a, b = str(edge.get("a_uid")), str(edge.get("b_uid"))
-                if a in neighbors or b in neighbors:
-                    second.append(edge)
-            picked = (direct + second)[:12]
-        lines = []
-        for edge in picked[:12]:
-            a, b = str(edge.get("a_uid")), str(edge.get("b_uid"))
-            na = names.get(a, a)
-            nb = names.get(b, b)
-            lines.append("%s和%s是%s" % (na, nb, edge.get("relation", "朋友")))
-        return "\n".join(lines)
 
     def _disturb_category(self, snap):
         category = (snap.get("activity") or {}).get("category", "")
@@ -5282,36 +4564,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             self._disturb_last[str(umo)] = now
         logger.debug("[amo] 被打扰：消息过多，强制回复并降低心情（%s）" % umo)
 
-    def _disturb_pressure(self, umo, uid, text="", group=False):
-        """最近窗口内，同一个人连续发消息数 / 群里叫机器人的消息数。"""
-        try:
-            rows = self._recent(umo, 24)
-        except Exception:
-            return 0
-        window = max(1, self.cfg_int("disturb_window_minutes", 10)) * 60
-        cutoff = max(
-            now_ts() - window,
-            to_float(getattr(self, "_disturb_reset_at", {}).get(str(umo), 0), 0),
-        )
-        same_sender = 0
-        mentions = 0
-        names = [self.bot_name] + list(self.bot_aliases)
-        for row in reversed(rows):
-            if to_float(row.get("created_at"), 0) < cutoff:
-                continue
-            if row.get("role") == "bot":
-                break
-            if row.get("role") != "user":
-                continue
-            if group:
-                if str(row.get("uid")) == str(uid):
-                    same_sender += 1
-                content = str(row.get("content") or "")
-                if any(name and len(str(name)) >= 2 and str(name) in content for name in names):
-                    mentions += 1
-            else:
-                same_sender += 1
-        return max(same_sender, mentions) if group else same_sender
 
     def _mark_bot_initiated(self, umo):
         key = str(umo)
@@ -5373,81 +4625,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
 
 
 
-    async def _debounce_private(self, event, text):
-        """私聊防抖：同一会话连发的几条合并成一句，只让最后一条继续回复。
 
-        返回 True = 这条是这一批的最后一条（合并后的文本已写回 event.message_str）；
-        返回 False = 已被合并，事件保持 stop 状态，调用方直接 return。
-        """
-        umo = event.unified_msg_origin
-        delay = max(0.3, self.cfg_float("private_debounce_seconds", 6.0))
-        max_wait = max(delay + 0.1, self.cfg_float("private_debounce_max_wait", 14.0))
-        now = time.monotonic()
-        buffer = self._private_buffers.get(umo)
-        if buffer is None:
-            buffer = {"seq": 0, "texts": [], "started": now, "updated": now}
-            self._private_buffers[umo] = buffer
-        buffer["seq"] += 1
-        my_seq = buffer["seq"]
-        buffer["texts"].append(str(text or ""))
-        buffer["updated"] = now
-        event.stop_event()
-        deadline = buffer["started"] + max_wait
-        while True:
-            current = time.monotonic()
-            if self._private_buffers.get(umo) is not buffer:
-                return False  # 这一批已经被前面的某条发出去了
-            if my_seq != buffer["seq"]:
-                return False  # 后面又来了新的，交给最新的那条
-            quiet_at = buffer["updated"] + delay
-            if current >= quiet_at or current >= deadline:
-                break
-            try:
-                await asyncio.sleep(min(quiet_at, deadline) - current)
-            except asyncio.CancelledError:
-                return False
-        if self._private_buffers.get(umo) is buffer:
-            self._private_buffers.pop(umo, None)
-        merged = "｜".join(item for item in buffer["texts"] if item).strip()[:300]
-        if len(buffer["texts"]) > 1:
-            logger.info("[amo] 私聊合并 %d 条: %s" % (len(buffer["texts"]), merged[:200]))
-            try:
-                event.set_extra("amo_debounce_count", len(buffer["texts"]))
-            except Exception:
-                pass
-        event.message_str = merged or (event.message_str or "")
-        try:
-            event.continue_event()
-        except Exception:
-            pass
-        return True
-
-    def _schedule_delayed_reply(self, event, profile):
-        umo = event.unified_msg_origin
-        delay = random.randint(
-            self.cfg_int("delay_min_minutes", 4),
-            self.cfg_int("delay_max_minutes", 18),
-        ) * 60
-        text = event.message_str or ""
-
-        async def runner():
-            try:
-                await asyncio.sleep(delay)
-                if not self._running or not self._ready:
-                    return
-                snap = self.state.snapshot()
-                note = "你刚刚忙完，主动补一句；不要提等待时间，语气自然。"
-                reply = await self._compose_reply(
-                    event, text, snap, profile, [], "", False, note=note
-                )
-                if reply:
-                    await self._send_to_umo(umo, reply)
-            except asyncio.CancelledError:
-                return
-            except Exception as exc:
-                logger.debug("[amo] 延迟回复失败: %s" % exc)
-
-        self._spawn(runner())
 
     def _strip_place_marks(self, text):
         """兜底：把「东莞·商场·餐厅」这类内部地点串缩成口语的「餐厅」。"""
@@ -5582,65 +4760,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             )
         return value
 
-    async def _self_identity(self, event):
-        uid = ""
-        try:
-            uid = str(event.get_self_id() or "")
-        except Exception:
-            pass
-        role_name = str(self.persona_name or self.bot_name or "陪伴")
-        display_name = ""
-        for attr in ("get_self_name", "get_bot_name"):
-            try:
-                value = getattr(event, attr, None)
-                if callable(value):
-                    value = value()
-                if value:
-                    display_name = str(value)
-                    break
-            except Exception:
-                continue
-        qq_nick = ""
-        if uid and getattr(self, "_self_nickname_uid", "") == uid:
-            qq_nick = str(getattr(self, "_self_nickname", "") or "")
-        if uid and not qq_nick:
-            try:
-                api = getattr(getattr(event, "bot", None), "api", None)
-                action = getattr(api, "call_action", None)
-                if callable(action):
-                    result = action("get_login_info")
-                    if inspect.isawaitable(result):
-                        result = await asyncio.wait_for(result, timeout=3)
-                    data = result.get("data") if isinstance(result, dict) and isinstance(result.get("data"), dict) else result
-                    if isinstance(data, dict):
-                        qq_nick = str(data.get("nickname") or "")
-                        if data.get("user_id"):
-                            uid = str(data.get("user_id"))
-                    if not qq_nick and uid:
-                        stranger = action("get_stranger_info", user_id=int(uid))
-                        if inspect.isawaitable(stranger):
-                            stranger = await asyncio.wait_for(stranger, timeout=3)
-                        stranger_data = stranger.get("data") if isinstance(stranger, dict) and isinstance(stranger.get("data"), dict) else stranger
-                        if isinstance(stranger_data, dict):
-                            qq_nick = str(stranger_data.get("nickname") or "")
-            except Exception as exc:
-                logger.debug("[amo] 获取机器人QQ昵称失败: %s" % exc)
-        if not qq_nick:
-            qq_nick = display_name or role_name
-            logger.info("[amo] get_login_info 不可用，QQ昵称回退为 %s" % qq_nick)
-        if not display_name:
-            display_name = qq_nick
-        if uid:
-            self._self_nickname = qq_nick
-            self._self_nickname_uid = uid
-            self._self_display = display_name
-        if getattr(self, "_self_identity_logged", "") != (uid + "|" + qq_nick + "|" + display_name):
-            self._self_identity_logged = uid + "|" + qq_nick + "|" + display_name
-            logger.info(
-                "[amo] 自身身份 | 角色名=%s | QQ昵称=%s | 显示名=%s | UID=%s"
-                % (role_name, qq_nick, display_name, uid or "未知")
-            )
-        return role_name, uid, qq_nick, display_name
 
     LEAN_PARTS = {
         "【昵称区分】": None,
@@ -5678,232 +4797,12 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             out.append(part)
         return out
 
-    def _leek_lines(self, can_ask_money: bool = False) -> list:
-        """韭菜特质：涨了上头要加仓，亏了死扛半夜哭。
 
-        这是「心流设定」的一部分：不改判定阈值，只在上下文里给她这套反应，
-        让她在该吹牛的时候吹牛、该嘴硬的时候嘴硬。买卖是她自己的事，
-        这里没有任何按钮——她加没加仓、加没加成，都在上下文里告诉她。
 
-        ``can_ask_money`` 只有「私聊 + 恋人」才是 True：缺钱跟恋人开口是情侣间的事，
-        群里跟别人要钱既不体面也不该发生。
-        """
-        inv = getattr(self.state, "invest", None) or {}
-        stance = str(inv.get("stance") or "")
-        leek = inv.get("leek") or {}
-        lines = []
-        if stance == "overconfident":
-            lines.append(
-                "【韭菜·上头】今天账户涨得不错，你觉得自己就是巴菲特转世：可以吹牛、"
-                "说“我要把咱们买房钱全投进去”“我就是股神”。加仓是你自己的事，"
-                "想加就自己加，不用等他点头。"
-            )
-            kind = str(leek.get("kind") or "")
-            if kind == "bought":
-                lines.append(
-                    "【刚加了仓】你今天已经又买了 %s %s 股，觉得自己神了，"
-                    "可以邀功、可以得意，但别把数字说错。"
-                    % (leek.get("name") or "一只股票", int(leek.get("qty") or 0))
-                )
-            elif kind == "no_money":
-                if can_ask_money:
-                    lines.append(
-                        "【加仓加不了】你想加仓，但手头没钱（卡里和储蓄都不够）。别硬撑：可以跟他撒娇要钱"
-                        "（“给我转点嘛，这次真的能赚”），他不会主动给，得你自己开口。"
-                        "这种话只能在私聊跟他说。"
-                    )
-                else:
-                    lines.append(
-                        "【加仓加不了】你想加仓，但钱不够。自己嘟囔两句就得了（“差一点就能上了”），"
-                        "**别跟任何人开口要钱**，也别在群里提钱。"
-                    )
-            elif kind == "no_room":
-                if can_ask_money:
-                    lines.append(
-                        "【仓位到顶】你想加仓，但这一只已经压到你给自己定的上限了，只能作罢。"
-                        "嘟囔两句（“胆小鬼才不满仓”），可以换一只继续买，或者跟他撒个娇要点钱。"
-                    )
-                else:
-                    lines.append(
-                        "【仓位到顶】你想加仓，但这一只已经压到你给自己定的上限了，只能作罢。"
-                        "嘟囔两句（“胆小鬼才不满仓”），换一只继续买，或者就此作罢。"
-                    )
-        if stance == "hodl":
-            lines.append(
-                "【韭菜·死扛】今天亏了，你死扛不卖，嘴上要硬："
-                "“我不卖就不算亏”“跌了迟早会涨回来”。别承认自己慌。"
-            )
-            try:
-                hour = _clock_now().hour
-            except Exception:
-                hour = 12
-            if hour >= 22 or hour < 2:
-                lines.append(
-                    "【半夜哭诉】现在很晚了，你一个人越想越难受，可以小声跟他说"
-                    "“我不卖就不算亏对不对……呜呜”，要像真人，别像 AI 总结。"
-                )
-        return lines
 
-    def _money_pool(self):
-        """卡里 + 储蓄一起算：只看卡里，她会把「有存款」说成「我没钱」。"""
-        finance = getattr(self.state, "finance", None) or {}
-        try:
-            cash = float(finance.get("balance") or 0)
-        except Exception:
-            cash = 0.0
-        try:
-            savings = float(finance.get("savings") or 0)
-        except Exception:
-            savings = 0.0
-        return max(0.0, cash), max(0.0, savings)
 
-    def _money_line(self) -> str:
-        """她知道自己有多少钱——不知道就会说出「我没钱」这种和账本矛盾的话。
 
-        本能模式下只给 ``[Wallet: ...]`` 标签（执行文档 5.2）；「不缺钱、别开口要钱」
-        这条边界作为独立规则行保留，不塞进标签里（5.3）。
-        """
-        cash, savings = self._money_pool()
-        total = round(cash + savings, 2)
-        if self.cfg_bool("instinct_mode", False):
-            try:
-                owed = float((getattr(self.state, "finance", {}) or {}).get("owed") or 0)
-            except Exception:
-                owed = 0.0
-            fields = {
-                "Cash": round(float(cash or 0), 2),
-                "Savings": round(float(savings or 0), 2),
-                "Total": total,
-                "OweHim": round(owed, 2),
-            }
-            if _label_bus is not None:
-                line = _label_bus.format_tag("Wallet", fields, ts=now_ts())
-            else:  # 兜底
-                line = ("[Wallet: Cash=%.2f, Savings=%.2f, Total=%.2f, OweHim=%.2f]"
-                        % (fields["Cash"], fields["Savings"], fields["Total"], fields["OweHim"]))
-            if total >= 500 and cash < 500:
-                line += ("\n【规则】卡里不够时花销会先从储蓄里扣——你并不缺钱，"
-                         "别跟任何人开口要钱，也别哭穷。")
-            return line
-        text = ("【钱】你卡里还有 ¥%.0f，储蓄里 ¥%.0f，合计 ¥%.0f"
-                "（这是你自己的钱，花之前心里有数）" % (cash, savings, total))
-        if total >= 500 and cash < 500:
-            text += ("卡里不够时花销会先从储蓄里扣——你**并不缺钱**，"
-                     "别跟任何人开口要钱，也别哭穷。")
-        return text
 
-    def _gift_line(self, private: bool = True) -> str:
-        """他刚给过钱：让她记得甜一下、谢他，别装作没发生。只在私聊说。
-
-        这里**不给她指定台词**：以前写死「说一句『老公今天怎么对我这么好啊』」，
-        模型就每笔钱都复读那一句。现在只给事实 + 随机一种反应方向，让她自己组织语言。
-        """
-        if not private:
-            return ""
-        plugin = self._finance()
-        reader = getattr(plugin, "money_gift", None) if plugin is not None else None
-        if not callable(reader):
-            return ""
-        try:
-            note = reader() or {}
-            amount = float(note.get("amount") or 0)
-        except Exception:
-            return ""
-        if amount <= 0:
-            return ""
-        channel = "红包" if str(note.get("channel") or "") == "red" else "转账"
-        _, hint = self._gift_reaction_style()
-        return (
-            "【他刚给了你钱】%d 秒前他给你发了 %s %.0f（现在欠他 %.0f）。"
-            "这轮的反应：%s "
-            "怎么说：用你自己的话，一两句就行。别套用以前那种固定句（一上来就夸他对你多好），"
-            "也别每次都先道谢再报一遍欠款——那样听着像模板；上次说过的说法换个新的。"
-            "这钱是让你吃好的、买点喜欢的，不是拿去补仓；先把自己喂饱。"
-            % (int(note.get("seconds") or 0), channel, amount,
-               float(note.get("owed") or 0), hint)
-        )
-
-    def _borrow_line(self, can_ask: bool = False) -> str:
-        """没钱的时候她得开口借——但只在私聊、只跟恋人；群里绝不跟别人要钱。
-
-        ``can_ask`` 由 ``_dynamic_context`` 按「私聊 + 相恋」算好传进来，
-        这里不再自己判断会话——判断散在各处就是 bug 的温床。
-        """
-        if not can_ask:
-            return ""
-        cash, savings = self._money_pool()
-        if cash + savings >= 500:
-            return ""
-        plugin = self._finance()
-        info = {}
-        reader = getattr(plugin, "borrow_info", None) if plugin is not None else None
-        if callable(reader):
-            try:
-                info = reader() or {}
-            except Exception:
-                info = {}
-        return (
-            "【没钱了】卡里 ¥%.0f、储蓄 ¥%.0f，加起来也不够用了。这种话只能跟恋人说："
-            "在私聊跟他开口要钱，告诉他转账还是红包（转账每天最多一万、是**借款**要还；"
-            "红包单个最多 1000、是礼物**不用还**），他会用「[转账]多少钱」或「[红包]多少钱」给你"
-            "（已经欠他 ¥%.0f）。群里、别人面前一个字都别提钱。"
-            % (cash, savings, float(info.get("owed") or 0))
-        )
-
-    def _debt_line(self, can_ask: bool = False) -> str:
-        """欠他钱的时候：更依赖、更黏，但别把「还钱」天天挂嘴上。只在私聊说。"""
-        if not can_ask:
-            return ""
-        plugin = self._finance()
-        reader = getattr(plugin, "borrow_info", None) if plugin is not None else None
-        if not callable(reader):
-            return ""
-        try:
-            info = reader() or {}
-            owed = float(info.get("owed") or 0)
-        except Exception:
-            return ""
-        if owed <= 0:
-            return ""
-        cash, savings = self._money_pool()
-        usable = cash + savings
-        text = (
-            "【你欠他 ¥%.0f】借款，没有利息；你手里卡+储蓄 ¥%.0f。"
-            "还款走 amo_repay，记成还款（不是消费）。"
-            % (owed, usable)
-        )
-        try:
-            pending = self.db.kv_get("repay_pending", {}) or {}
-            amount = float(pending.get("amount") or 0) if isinstance(pending, dict) else 0.0
-            stamp = float(pending.get("ts") or 0) if isinstance(pending, dict) else 0.0
-            if amount >= 50 and stamp and now_ts() - stamp < 12 * 3600:
-                text += "你上次说过要还 ¥%.0f，账上还没动。" % amount
-        except Exception:
-            pass
-        return text
-
-    def _repay_line(self, private: bool = True) -> str:
-        """刚还过钱：让他知道，但别邀功。只在私聊说。"""
-        if not private:
-            return ""
-        plugin = self._finance()
-        reader = getattr(plugin, "money_repay", None) if plugin is not None else None
-        if not callable(reader):
-            return ""
-        try:
-            note = reader() or {}
-            amount = float(note.get("amount") or 0)
-        except Exception:
-            return ""
-        if amount <= 0:
-            return ""
-        return (
-            "【你刚还了他钱】%d 秒前你给他转了 %.0f，还欠 %.0f；"
-            "聊天里已经发过「[还款]%s」这条回执了。"
-            "可以自然地说一句「我还你钱啦」，别邀功、别把金额再报一遍。"
-            % (int(note.get("seconds") or 0), amount,
-               float(note.get("remaining") or 0), self._money_text(amount))
-        )
 
     # ---------- 她答应过的事 ----------
 
@@ -6009,38 +4908,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         finally:
             self._promise_inflight = False
 
-    async def _promise_change_outfit(self, style, want=""):
-        """答应穿那一款拍：在家就真换上（提了白色优先白袜那套），换来那套给照片用。"""
-        engine = getattr(self, "outfits", None)
-        if engine is None or not style:
-            return ""
-        try:
-            activity = self.state.current_activity() or {}
-        except Exception:
-            activity = {}
-        if not at_home(activity):
-            return ""
-        camp = engine.style_camp(want) or engine.style_camp(style) or style
-        set_name = ""
-        try:
-            names = engine.find_sets(camp, exclude=engine.current_set())
-            if "白" in str(want or ""):
-                white = [name for name in names
-                         if any("白" in str(row.get("name") or "")
-                                for row in (engine.sets().get(name) or []))]
-                names = white or names
-            if names:
-                set_name = names[0]
-        except Exception as exc:
-            logger.debug("[amo] 兑现承诺挑衣服失败: %s" % exc)
-        try:
-            result = await self._change_outfit_now(camp, set_name=set_name)
-        except Exception as exc:
-            logger.debug("[amo] 兑现承诺换装失败: %s" % exc)
-            return ""
-        if isinstance(result, dict) and result.get("ok"):
-            return str(result.get("look") or "")
-        return ""
 
     def _promise_settle_siblings(self, row):
         """同一场对话里等着的那几张照片，一张就算全兑现，别一分钟发一张。"""
@@ -6141,151 +5008,9 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             number = 0.0
         return round(total + section + number, 2)
 
-    def _note_repay_promise(self, event, text) -> None:
-        """她报了还款金额却没调 amo_repay：记一条事实，不替她扣钱。
 
-        以前这里是直接扣——那等于替她做决定。现在只在下一轮的上下文里说一句
-        「你上次说过要还 X，账上还没动」，补不补她自己拿主意。
-        """
-        if getattr(event, "amo_repay_done", False):
-            return
-        body = str(text or "")
-        if "还你" not in body:
-            return
-        try:
-            if not event.is_private_chat():
-                return
-        except Exception:
-            return
-        matched = self.REPAY_PROMISE_RE.search(body)
-        if not matched:
-            return
-        amount = self._parse_amount(matched.group(1))
-        if amount < 50:
-            return
-        try:
-            self.db.kv_set("repay_pending", {"ts": now_ts(), "amount": amount})
-            logger.info("[amo] 她说要还 %.0f，账上还没动（只记事实）" % amount)
-        except Exception:
-            pass
 
-    def _repay_message(self, amount, remaining) -> str:
-        """还款回执：第一行 [还款]金额，第二行说人话。
 
-        用户要求：还款必须在聊天里看得见，而且写成 [还款]金额（和 [转账]500 一致），
-        不能只在账本里静默扣掉。
-        """
-        try:
-            amount = float(amount or 0)
-            remaining = float(remaining or 0)
-        except Exception:
-            return ""
-        if amount <= 0:
-            return ""
-        head = "[还款]" + self._money_text(amount)
-        if remaining > 0:
-            tail = "老公，我先还你 %s，还欠你 %s，剩下的我慢慢还。" % (
-                self._money_text(amount), self._money_text(remaining))
-        else:
-            tail = "老公，欠你的还清啦，一共还你 %s。" % self._money_text(amount)
-        return head + "\n" + tail
-
-    async def notify_repay(self, amount, remaining=0.0) -> bool:
-        """金融自动还款后，主动发一条私聊：还款记录 + 一句人话。"""
-        umo = self._last_umo or self._first_private_umo()
-        if not umo:
-            return False
-        text = self._repay_message(amount, remaining)
-        if not text:
-            return False
-        try:
-            amount = float(amount or 0)
-            remaining = float(remaining or 0)
-        except Exception:
-            return False
-        try:
-            await self.context.send_message(umo, text)
-        except Exception as exc:
-            logger.debug("[amo] 还款消息发送失败: %s" % exc)
-            return False
-        self._sync_finance()
-        logger.info("[amo] 已发还款消息：%.2f，剩 %.2f" % (amount, remaining))
-        return True
-
-    def _invest_line(self) -> str:
-        """她知道自己有股票、持了什么、今天赚赔——不然用户让她买，她完全不知道有这回事。"""
-        inv = getattr(self.state, "invest", None) or {}
-        positions = inv.get("positions") or []
-        aggressive = bool(inv.get("aggressive"))
-        bankrupt = inv.get("bankrupt") or {}
-        if not positions:
-            if aggressive:
-                return ("【投资】你还没有持仓，但你是 FX 战士：看准了就该重仓上，"
-                        "别只买一手、别怕亏。")
-            return "【投资】你还没有持仓，闲钱可以买一点（别一把梭，别超过总资产三成）。"
-        parts = []
-        for pos in positions[:6]:
-            # 带上现价与浮盈金额：只报「股数+百分比」，她聊起来说不出重点
-            try:
-                price = float(pos.get("last") or 0)
-                amount = float(pos.get("pnl") or 0)
-            except Exception:
-                price = amount = 0.0
-            bits = "%s %d股" % (pos.get("name") or "?", int(pos.get("qty") or 0))
-            if price > 0:
-                bits += "（现价 %.2f）" % price
-            bits += "，%s%.1f%%" % ("赚" if float(pos.get("pnl_pct") or 0) >= 0 else "亏",
-                                    abs(float(pos.get("pnl_pct") or 0)))
-            if abs(amount) >= 1:
-                bits += "／%s¥%.0f" % ("+" if amount >= 0 else "-", abs(amount))
-            parts.append(bits)
-        day = float(inv.get("day_pnl") or 0)
-        text = "【投资】你持有：" + "、".join(parts)
-        text += "；今天%s¥%.0f" % ("赚了" if day >= 0 else "亏了", abs(day))
-        try:
-            savings = float(inv.get("savings") or 0)
-            leverage = int(inv.get("leverage") or 1)
-            power = float(inv.get("buying_power") or 0)
-            debt = float(inv.get("margin_debt") or 0)
-        except Exception:
-            savings = leverage = power = debt = 0
-        if savings > 0:
-            text += "。储蓄里还有 ¥%.0f（也算你的钱，别当没有）" % savings
-        if leverage > 1 or debt > 0:
-            text += ("；你现在开了 %d 倍杠杆（跌 %.1f%% 就强平），还能动用约 ¥%.0f，"
-                     "保证金借款 ¥%.0f" % (max(1, leverage),
-                                          100.0 / max(1, leverage), power, debt))
-        # 杠杆是她自己的决定：不点明她以为只能后台改，就一直不敢动
-        text += "。杠杆你自己能调（amo_leverage，1–100 倍，1 倍=不借钱），别默认顶格"
-        futures = inv.get("futures") or {}
-        frows = futures.get("positions") or []
-        if frows:
-            bits = []
-            for row in frows[:4]:
-                bits.append("%s%s%d手（%+.0f）" % (
-                    row.get("name") or row.get("code") or "?",
-                    "多" if str(row.get("side") or "") == "long" else "空",
-                    int(row.get("contracts") or 0), float(row.get("pnl") or 0)))
-            text += "。期货：" + "、".join(bits) + "（保证金 ¥%.0f）" % float(
-                futures.get("margin") or 0)
-        text += "。有人问你股票、亏没亏、买没买，就照这个说，别装作没有这回事。"
-        if aggressive:
-            text += ("你现在是 FX 战士模式：敢重仓、敢加仓，赚了要吹，亏了嘴硬，"
-                     "不承认自己是韭菜。")
-        level = str(bankrupt.get("level") or "")
-        try:
-            pnl_pct = abs(float(bankrupt.get("pnl_pct") or 0))
-            cash = float(bankrupt.get("cash") or 0)
-        except Exception:
-            pnl_pct, cash = 0.0, 0.0
-        if level in ("ruined", "broke"):
-            text += (" 你已经亏到快破产了（浮亏 %.0f%%，卡里只剩 ¥%.0f）。"
-                     "可以哭唧唧地跟他说“老公我好像有点破产了”，"
-                     "要他转账/发红包救你；他给了你要甜甜地谢他，别装没事。"
-                     % (pnl_pct, cash))
-        elif level == "losing":
-            text += " 最近亏得有点多，嘴上还硬，心里已经开始发慌了。"
-        return text
 
 
     #: 明确要语音的词。宁可多认几个：命中只是「给她一个必须用语音的理由」，
@@ -6312,74 +5037,12 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         r"(亲口|出声|开口).{0,6}(说|讲|唱|念)",
     )
 
-    def _his_state_flags(self, umo) -> dict:
-        """从最近聊天里读他刚说的话：在睡？不在本地？（只给事实，不做判断）"""
-        flags = {"asleep": False, "away": False, "sleep_text": "", "away_text": "", "clock": ""}
-        try:
-            rows = self._recent(umo, 24) or []
-        except Exception:
-            rows = []
-        now = now_ts()
-        sleep_at, sleep_text, away_text = 0.0, "", ""
-        for row in rows:
-            if str(row.get("role") or "") != "user":
-                continue
-            content = str(row.get("content") or "").strip()
-            if not content:
-                continue
-            when = to_float(row.get("created_at"), 0)
-            if _HIS_SLEEP_RE.search(content) and when >= sleep_at:
-                sleep_at, sleep_text = when, content
-            if _HIS_AWAY_RE.search(content):
-                away_text = away_text or content
-        hours = max(1, self.cfg_int("his_sleep_hours", 10))
-        if sleep_at and (now - sleep_at) <= hours * 3600:
-            flags["asleep"] = True
-            flags["sleep_text"] = sleep_text
-            try:
-                flags["clock"] = time.strftime("%H:%M", time.localtime(sleep_at))
-            except Exception:
-                flags["clock"] = ""
-        if away_text:
-            flags["away"] = True
-            flags["away_text"] = away_text
-        return flags
 
     #: 他已经醒着/在场时，这些问法一律不许出现（13.3.0）。
     WAKE_ASK_RE = re.compile(
         r"醒了没|醒没醒|还没起来|起来了吗|起来了没|起床了没|起床了吗|睡醒了吗|"
         r"在吗|在不在|人呢|睡着了吗")
 
-    def _his_presence_line(self, uid, umo="") -> str:
-        """他已经醒着/刚说过话时，把这件事当硬事实给她，堵住「醒了没」。
-
-        返回空串表示「今天没证据他还醒着」，调用方据此决定要不要拦。
-        """
-        uid = str(uid or "")
-        if not uid:
-            return ""
-        try:
-            profile = self.db.get_profile(uid)
-        except Exception:
-            profile = {}
-        last = to_float(profile.get("last_seen"), 0)
-        if not last:
-            return ""
-        age = now_ts() - last
-        if age < 0 or age > 12 * 3600:
-            return ""
-        stamp = (_now() - timedelta(seconds=age)).strftime("%H:%M")
-        if age <= 90 * 60:
-            return (
-                "【他已经醒着】他 %s 刚说过话（%d 分钟前）。"
-                "绝对不要问「醒了没 / 醒没醒 / 起来没 / 还没起来吗 / 在吗 / 在不在 / 人呢」，"
-                "也不要问他是不是在忙；直接把你要说的那件事说出来。"
-                % (stamp, max(1, int(age // 60)))
-            )
-        return (
-            "【他已经醒着】他今天 %s 说过话。"
-            "不要问「醒了没 / 起来没 / 在不在」，直接说事。" % stamp
-        )
 
     def _his_state_lines(self, umo) -> list:
         """他刚说的状态，当事实给她（防「他明明在睡，她却问下班没」）。"""
@@ -6433,43 +5096,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         return star if hasattr(star, "self_face_match") else None
 
 
-    async def _ensure_self_identity_memory(self) -> None:
-        """把「我长什么样」钉成永久记忆（kind=identity，永不进删除队列）。只写一次。"""
-        try:
-            if self.db.kv_get("self_face_identity_v1", False):
-                return
-        except Exception:
-            return
-        star = self._self_face_plugin()
-        getter = getattr(star, "self_face_identity", None) if star is not None else None
-        if not callable(getter):
-            return
-        try:
-            clause = str(getter() or "")
-        except Exception:
-            clause = ""
-        if not clause:
-            return
-        try:
-            uid = self._primary_uid()
-        except Exception:
-            uid = ""
-        if not uid:
-            return
-        text = "【我自己的样子】" + clause.replace("【你的样子·永久事实】", "")
-        try:
-            ok = await self._write_memory_checked(uid, text, kind="identity", tier=2)
-        except Exception as exc:
-            logger.warning("[amo] 自我形象永久记忆写入失败: %s" % exc)
-            return
-        if ok:
-            try:
-                self.db.kv_set("self_face_identity_v1", True)
-            except Exception:
-                pass
-            logger.info("[amo] 自我形象永久记忆已写入（kind=identity）")
-        else:
-            logger.info("[amo] 自我形象永久记忆没写进去（守门人拦下），下轮再试")
 
 
     @filter.on_llm_request()
@@ -7594,56 +6220,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             return False
         return True
 
-    async def _check_proactive_pending(self):
-        try:
-            profiles = self.db.proactive_profiles(limit=100)
-        except Exception:
-            return
-        now = now_ts()
-        for profile in profiles:
-            uid = str(profile.get("uid") or "")
-            if not uid:
-                continue
-            pending = self.db.kv_get(self._pending_key(uid), None)
-            if not isinstance(pending, dict) or not pending.get("sent_at"):
-                continue
-            # 追问要回真正发出这条主动消息的平台（飞书发的就在飞书追）；
-            # 老数据没有 umo 时退回主页会话。
-            umo = str(pending.get("umo") or "") or str(profile.get("private_umo") or "")
-            if not umo:
-                continue
-            age = now - to_float(pending.get("sent_at"), 0)
-            if age > proactive_pending_block_seconds(self.cfg_int):
-                self.db.kv_set(self._pending_key(uid), {})
-                continue
-            followup_minutes = self.cfg_int("proactive_followup_minutes", 30)
-            # 0 / 负数 = 关掉追问，只保留「心情变差」这一档
-            followup_after = 10 ** 9 if followup_minutes <= 0 else max(5, followup_minutes) * 60
-            # 0 / 负数 = 关掉「没回复就心情变差」；默认跟 schema 一致（30 分钟）
-            mood_minutes = max(0, self.cfg_int("proactive_no_reply_minutes", 30))
-            mood_after = mood_minutes * 60 if mood_minutes else 10 ** 9
-            if not pending.get("followup") and age >= followup_after:
-                if not quiet_now(self.cfg_str("quiet_hours", "23:30-07:30")):
-                    kind = str(pending.get("kind") or "greet")
-                    followup = self._followup_text(uid, kind, pending.get("text"))
-                    if await self._send_to_umo(umo, followup):
-                        pending["followup"] = True
-                        pending["followup_at"] = now
-                        self.db.kv_set(self._pending_key(uid), pending)
-                        # 追问本身也是一句她说过的话，不记下来会引出下一轮「你怎么不理我」
-                        self._remember_bot_message(umo, followup)
-                        self._mark_bot_initiated(umo)
-                        logger.debug("[amo] 主动私聊未回复，已追问: %s" % uid)
-            if not pending.get("mood") and age >= mood_after:
-                pending["mood"] = True
-                self.db.kv_set(self._pending_key(uid), pending)
-                ignored = to_int(self.db.kv_get("proactive_ignored_" + uid, 0), 0) + 1
-                self.db.kv_set("proactive_ignored_" + uid, ignored)
-                self.state.feel_bump({"sadness": 4, "anger": 2, "love": 2, "desire_mind": 3},
-                                     weight=self.state.relation_feel_weight(uid))
-                if ignored >= max(1, self.cfg_int("proactive_depressed_count", 3)):
-                    self._set_depressed(uid)
-                logger.debug("[amo] 主动私聊仍无回复，心情变差: %s (%d)" % (uid, ignored))
 
     def _ritual_in_window(self, spec):
         try:
@@ -7912,101 +6488,10 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         except Exception as exc:
             logger.debug("[amo] 记录通道失败: %s" % exc)
 
-    def _proactive_candidates(self, profile, primary):
-        """主动消息的候选平台：选中的优先，其次是其它通道，最后 private_umo。
-
-        最近刚被主动联系过的平台会被跳过，避免兜底时连着骚扰同一处。
-        """
-        items = []
-
-        def push(umo, force=False):
-            umo = str(umo or "")
-            if not umo or umo in items:
-                return
-            if not force and self._recent_bot_initiated(umo, 3600):
-                return
-            items.append(umo)
-
-        push(primary, force=True)
-        if self.cfg_bool("proactive_rotate_enabled", True):
-            try:
-                data = self.db.kv_get("channels:%s" % (profile.get("uid") or ""), {}) or {}
-            except Exception:
-                data = {}
-            if isinstance(data, dict):
-                entries = [v for v in data.values() if isinstance(v, dict) and v.get("umo")]
-                entries.sort(key=lambda v: -float(v.get("ts") or 0))
-                for value in entries:
-                    push(value.get("umo"))
-        push(profile.get("private_umo"))
-        return items
-
-    def _pick_proactive_umo(self, profile):
-        """选这轮主动消息先发哪个平台；关掉开关就用 private_umo。"""
-        fallback = str(profile.get("private_umo") or "")
-        if not self.cfg_bool("proactive_rotate_enabled", True):
-            return fallback
-        uid = str(profile.get("uid") or "")
-        try:
-            data = self.db.kv_get("channels:%s" % uid, {}) or {}
-        except Exception:
-            return fallback
-        if not isinstance(data, dict):
-            return fallback
-        items = []
-        for value in data.values():
-            if isinstance(value, dict) and value.get("umo"):
-                items.append((float(value.get("ts") or 0), str(value.get("umo"))))
-        if not items:
-            return fallback
-        items.sort(key=lambda pair: -pair[0])
-        if len(items) == 1:
-            return items[0][1]
-        window = max(1, self.cfg_int("proactive_recent_minutes", 30)) * 60
-        if now_ts() - items[0][0] <= window:
-            return items[0][1]
-        last = str(self.db.kv_get("last_channel:%s" % uid, "") or "")
-        for _, umo in items:
-            if umo != last:
-                return umo
-        return items[0][1]
 
 
-    def _weather_alert_umos(self):
-        """天气提醒的候选会话，按最近活跃排序。
 
-        只用她**真的收到过消息**的会话（channels:<uid> + private_umo），
-        没配飞书的人候选里就只有 QQ，不会随机到一个不存在的平台。
-        """
-        pairs = []
-        try:
-            for profile in self.db.proactive_profiles(limit=20):
-                uid = str(profile.get("uid") or "")
-                data = self.db.kv_get("channels:%s" % uid, {}) or {}
-                if isinstance(data, dict):
-                    for value in data.values():
-                        if isinstance(value, dict) and value.get("umo"):
-                            pairs.append((float(value.get("ts") or 0), str(value["umo"])))
-                item = str(profile.get("private_umo") or "")
-                if item:
-                    pairs.append((0.0, item))
-        except Exception as exc:
-            logger.debug("[amo] 天气提醒选平台失败: %s" % exc)
-        pairs.sort(key=lambda pair: -pair[0])
-        seen = []
-        for _, umo in pairs:
-            if umo and umo not in seen:
-                seen.append(umo)
-        if not seen:
-            fallback = self._last_umo or self._first_private_umo()
-            if fallback:
-                seen.append(fallback)
-        return seen
 
-    def _pick_weather_alert_umo(self):
-        """兼容旧调用：返回最该优先尝试的那个会话。"""
-        items = self._weather_alert_umos()
-        return items[0] if items else ""
 
     @staticmethod
     def _clean_weather_alert(text):
@@ -8020,83 +6505,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             return ""
         return value
 
-    async def _weather_alert_text(self, umo, tomorrow, fallback):
-        """用她自己的语气说这句提醒；模型失败就退回模板。"""
-        facts = []
-        day_text = (str(tomorrow.get("textDay") or "") + " " + str(tomorrow.get("textNight") or "")).strip()
-        if day_text:
-            facts.append("明天天气：" + day_text)
-        if tomorrow.get("tempMax"):
-            facts.append("明天最高 " + str(tomorrow.get("tempMax")) + "℃")
-        recent_lines = []
-        try:
-            for row in self._recent(umo, 8):
-                content = str(row.get("content") or "").strip()
-                if not content:
-                    continue
-                who = "他" if str(row.get("role") or "") == "user" else "你"
-                recent_lines.append(who + "：" + content[:80])
-        except Exception:
-            recent_lines = []
-        try:
-            state_text = self.state.prompt_text(self.state.snapshot())
-        except Exception:
-            state_text = ""
-        system = (
-            await self.llm.persona(umo) + "\n\n"
-            "规则：你就是角色本人，只输出要发出去的消息。"
-        )
-        prompt = (
-            (state_text + "\n" if state_text else "")
-            + "事实：\n" + "\n".join(facts) + "\n"
-            + ("最近聊天：\n" + "\n".join(recent_lines) + "\n" if recent_lines else "")
-            + "参考说法（不要照抄）：" + fallback + "\n"
-            + "请用你平时跟他说话的语气，主动提一句明天的天气。\n"
-            "要求：只发一句，20-30 字以内；像真人随口说的，不要像天气播报、客服或助手；\n"
-            "不要用“提醒您/请注意/建议您/记得带伞哦/注意保暖”这种模板，不要罗列温度风力；\n"
-            "可以带一点情绪（关心、吐槽、嫌麻烦都行），但别煽情；不要问“要不要带伞”，不要重复你刚说过的话。"
-        )
-        try:
-            text = await self.llm.chat(umo, system, prompt, limit=60)
-        except Exception as exc:
-            logger.debug("[amo] 天气提醒文案生成失败: %s" % exc)
-            text = ""
-        text = self._clean_weather_alert(text)
-        return text or fallback
 
-    async def _weather_query_context(self, text=""):
-        """他问天气时，用缓存里的「现在天气 + 今天 + 明天」拼一段给他看。
-
-        只有缓存过期才会真的请求和风（现在天气 30 分钟一份、预报 3 小时一份），
-        所以连着问十遍通常一次都不多请。
-        """
-        key = self.cfg_str("hefeng_key", "")
-        city = (
-            self.cfg_str("weather_city", "").strip()
-            or str((getattr(self.state, "schedule_profile", {}) or {}).get("city") or "").strip()
-            or "贵阳"
-        )
-        now_data = {}
-        try:
-            now_data = await self.state.refresh_weather()
-        except Exception as exc:
-            logger.debug("[amo] 天气查询取现在天气失败: %s" % exc)
-        if not now_data:
-            now_data = getattr(self.state, "weather", {}) or {}
-        items = []
-        if key:
-            try:
-                items = await self.state._fetch_qweather_daily(key, city, 3)
-            except Exception as exc:
-                logger.debug("[amo] 天气查询取预报失败: %s" % exc)
-        today = items[0] if items else {}
-        tomorrow = items[1] if len(items) > 1 else {}
-        brief = forecast_brief(now_data, today, tomorrow)
-        if not brief:
-            logger.info("[amo] 天气查询：没有可用数据")
-            return "【天气查询】这会儿取不到天气数据，别编温度，直接说看不太准。"
-        logger.info("[amo] 天气查询: %s" % brief)
-        return "【天气查询】" + brief
 
 
     def _proactive_owner_ids(self, profiles=None):
@@ -8282,117 +6691,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             yield event.plain_result("⚠️ 记忆库没写进去，稍后再试。")
 
     # ---------- Web 面板 ----------
-    def _register_web_apis(self):
-        prefixes = uniq([
-            getattr(self, "name", None),
-            PLUGIN_NAME,
-            os.path.basename(self.plugin_dir),
-            "astrbot_plugin_Astrbot_Amo_forever",
-            "astrbot_plugin_amo_forever",
-        ])
-        # 清除上一实例/旧版本残留的 Web API 路由。
-        # AstrBot 重载插件时不会自动清理 registered_web_apis，旧路由会继续
-        # 指向已经 terminate 的旧实例，表现为 "Cannot operate on a closed database"。
-        try:
-            own_prefixes = tuple(
-                "/" + str(prefix).strip("/") + "/"
-                for prefix in prefixes
-                if str(prefix).strip("/")
-            )
-            holders = (type(self.context), self.context)
-            seen_holders = set()
-            for holder in holders:
-                if id(holder) in seen_holders:
-                    continue
-                seen_holders.add(id(holder))
-                registry = getattr(holder, "registered_web_apis", None)
-                if not isinstance(registry, list):
-                    continue
-                registry[:] = [
-                    item
-                    for item in registry
-                    if not (
-                        isinstance(item, tuple)
-                        and item
-                        and (
-                            str(item[0]).startswith(own_prefixes)
-                            or str(item[0]) in ("get_status", "get_profile", "refresh_status")
-                        )
-                    )
-                ]
-        except Exception as exc:
-            logger.warning("[amo] 清理旧 Web API 路由失败（插件重载后如遇 closed database，请完整重启）: %s" % exc)
-        routes = [
-            ("/status", self.api_status, ["GET"]),
-            ("/records", self.api_records, ["GET", "POST"]),
-            ("/get_status", self.api_get_status, ["GET"]),
-            ("/events", self.api_events, ["GET", "POST"]),
-            ("/profiles", self.api_profiles, ["GET", "POST"]),
-            ("/get_profile", self.api_get_profile, ["GET", "POST"]),
-            ("/profiles/sync", self.api_profiles_sync, ["GET", "POST"]),
-            ("/relations", self.api_relations, ["GET", "POST"]),
-            ("/brain", self.api_brain, ["GET", "POST"]),
-            ("/relation/save", self.api_relation_save, ["GET", "POST"]),
-            ("/relation_save", self.api_relation_save, ["GET", "POST"]),
-            ("/relation/delete", self.api_relation_delete, ["GET", "POST"]),
-            ("/relation_delete", self.api_relation_delete, ["GET", "POST"]),
-            ("/profiles_sync", self.api_profiles_sync, ["GET", "POST"]),
-            ("/config", self.api_config, ["GET"]),
-            ("/voice/save", self.api_voice_save, ["GET", "POST"]),
-            ("/weather/brief", self.api_weather_brief, ["GET", "POST"]),
-            ("/city/search", self.api_city_search, ["GET", "POST"]),
-            ("/city/set", self.api_city_set, ["GET", "POST"]),
-            ("/draw/status", self.api_draw_status, ["GET", "POST"]),
-            ("/draw/test", self.api_draw_test, ["GET", "POST"]),
-            ("/draw/decide", self.api_draw_decide, ["GET", "POST"]),
-            ("/usage", self.api_usage, ["GET"]),
-            ("/providers", self.api_providers, ["GET"]),
-            ("/providers_list", self.api_providers, ["GET"]),
-            ("/balance", self.api_balance, ["GET"]),
-            ("/config/save", self.api_config_save, ["GET", "POST"]),
-            ("/config_save", self.api_config_save, ["GET", "POST"]),
-            ("/profile/save", self.api_profile_save, ["GET", "POST"]),
-            ("/profile/links", self.api_profile_links, ["GET", "POST"]),
-            ("/profile_save", self.api_profile_save, ["GET", "POST"]),
-            ("/profile/delete", self.api_profile_delete, ["GET", "POST"]),
-            ("/profile_delete", self.api_profile_delete, ["GET", "POST"]),
-            ("/memories", self.api_memories, ["GET", "POST"]),
-            ("/chat/history", self.api_chat_history, ["GET", "POST"]),
-            ("/chat_history", self.api_chat_history, ["GET", "POST"]),
-            ("/memory/add", self.api_memory_add, ["GET", "POST"]),
-            ("/memory_add", self.api_memory_add, ["GET", "POST"]),
-            ("/memory/delete", self.api_memory_delete, ["GET", "POST"]),
-            ("/memory_delete", self.api_memory_delete, ["GET", "POST"]),
-            ("/schedule", self.api_schedule, ["GET", "POST"]),
-            ("/wardrobe", self.api_wardrobe, ["GET", "POST"]),
-            ("/wardrobe/save", self.api_wardrobe_save, ["GET", "POST"]),
-            ("/wardrobe/delete", self.api_wardrobe_delete, ["GET", "POST"]),
-            ("/wardrobe/wear", self.api_wardrobe_wear, ["GET", "POST"]),
-            ("/schedule/detail", self.api_schedule_detail, ["GET", "POST"]),
-            ("/schedule_detail", self.api_schedule_detail, ["GET", "POST"]),
-            ("/schedule/regen", self.api_schedule_regen, ["GET", "POST"]),
-            ("/kb/regen", self.api_kb_regen, ["GET", "POST"]),
-            ("/scenic_kb/regen", self.api_scenic_kb_regen, ["GET", "POST"]),
-            ("/scenic_kb_regen", self.api_scenic_kb_regen, ["GET", "POST"]),
-            ("/kb_regen", self.api_kb_regen, ["GET", "POST"]),
-            ("/schedule_regen", self.api_schedule_regen, ["GET", "POST"]),
-            ("/weather", self.api_weather, ["GET"]),
-            ("/photo/self", self.api_photo_self, ["GET", "POST"]),
-            ("/photo/job", self.api_photo_job, ["GET", "POST"]),
-            ("/photo/last", self.api_photo_last, ["GET", "POST"]),
-            ("/photo/clear", self.api_photo_clear, ["GET", "POST"]),
-            ("/worldview", self.api_worldview, ["GET"]),
-            ("/worldview/regen", self.api_worldview_regen, ["GET", "POST"]),
-            ("/worldview_regen", self.api_worldview_regen, ["GET", "POST"]),
-            ("/say", self.api_say, ["GET", "POST"]),
-            ("/refresh_status", self.api_refresh_status, ["GET"]),
-        ]
-        for prefix in prefixes:
-            clean = str(prefix).strip("/")
-            if not clean:
-                continue
-            for path, handler, methods in routes:
-                self._safe_register("/" + clean + path, handler, methods, path)
         # 不注册无前缀的旧路由，避免和其他插件或 AstrBot 自带路由冲突。
 
     def _web_guard(self, handler, is_write=False):
@@ -8650,98 +6948,8 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
     #: 他说自己回来了
     HE_HOME_WORDS = ("我回来了", "回来了", "到家了", "我在家", "回东莞", "到东莞了")
 
-    def _track_his_place(self, text):
-        """记住他人在哪：说了城市就记城市，只说「在外地/出差」就记「外地」。
-
-        以前只有 `_city_detect`：他一句「我在外地」认不出城市，于是什么都不记，
-        她那边就当他在家——然后说「你在家」「你慢点开」，全错。
-        """
-        body = str(text or "").strip()
-        if not body:
-            return
-        if not any(word in body for word in
-                   ("我在", "我到", "我回", "人还", "出差", "外地", "在温州", "在杭州")):
-            return
-        if any(word in body for word in self.HE_HOME_WORDS):
-            self.db.kv_set("he_place", {"ts": now_ts(), "city": _CITY_DEFAULT, "away": False})
-            return
-        name = ""
-        try:
-            hit = _city_detect(body) if _city_detect is not None else None
-            name = str((hit or {}).get("name") or "").strip()
-        except Exception:
-            name = ""
-        if name:
-            self.db.kv_set("he_place", {"ts": now_ts(), "city": name,
-                                        "away": name != _CITY_DEFAULT})
-            logger.info("[amo] 记住他在哪：%s（%s）" % (name, "外地" if name != _CITY_DEFAULT else "同城"))
-            return
-        if any(word in body for word in self.HE_AWAY_WORDS):
-            self.db.kv_set("he_place", {"ts": now_ts(), "city": "", "away": True})
-            logger.info("[amo] 记住他在哪：外地（没细说城市）")
 
 
-    async def _start_follow_trip(self, uid, offer):
-        """同意跟去：定出发日/出发时间，当天或次日先坐 2 小时车再玩。"""
-        city = str(offer.get("city") or "").strip()
-        if not city:
-            self.db.kv_set("follow_offer", {})
-            return ""
-        tomorrow = bool(offer.get("tomorrow"))
-        start = (_now().date() + timedelta(days=1)) if tomorrow else _now().date()
-        start_hour = 9 if tomorrow else _now().hour
-        spots = []
-        try:
-            spots = _city_pick_spots(self.scenic_spots(), city, start.isoformat())
-        except Exception:
-            spots = []
-        trip = {
-            "city": city,
-            "id": str(offer.get("id") or ""),
-            "from": str(self.db.kv_get("his_city", "") or ""),
-            "start_day": start.isoformat(),
-            "start_hour": start_hour,
-            "spots": [dict(x) for x in spots][:4],
-            "phase": "journey",
-        }
-        self.db.kv_set("travel", trip)
-        self.db.kv_set("follow_offer", {})
-        self.db.kv_set("follow_declined", {})
-        try:
-            content = "她 %s 坐车去 %s 陪他（路上约 2 小时）" % (start.isoformat(), city)
-            if not await self._write_memory_checked(uid, content, "event", 1):
-                logger.warning("[amo] 跟随记忆没写进去")
-        except Exception as exc:
-            logger.warning("[amo] 跟随记忆写入失败: %s" % exc)
-        try:
-            log = self.db.kv_get("travel_log", []) or []
-            if not isinstance(log, list):
-                log = []
-            log.append({"day": start.isoformat(), "hour": "%02d:00" % start_hour,
-                        "city": city, "journey": True})
-            self.db.kv_set("travel_log", log[-10:])
-        except Exception:
-            pass
-        if not tomorrow:
-            self.db.kv_set("his_city", city)
-            hit = self._city_lookup(city)
-            if hit:
-                try:
-                    await self._switch_weather_city(hit)
-                except Exception as exc:
-                    logger.warning("[amo] 跟随天气切换失败: %s" % exc)
-            try:
-                self.state.apply_follow_start(city, start_hour, spots, keep_past=True)
-            except Exception as exc:
-                logger.warning("[amo] 跟随日程失败: %s" % exc)
-            trip["phase"] = "touring"
-            self.db.kv_set("travel", trip)
-        plan = _wander_follow_agree_text(city, random)
-        when = "明天一早" if tomorrow else "现在"
-        return (
-            "【出发】他同意了：你" + when + "出发去 " + city + " 陪他，路上约 2 小时，到了再找他。"
-            "照这个意思说一句（别报公司/上班）：" + plan
-        )
 
     async def _reject_follow_trip(self, uid, offer):
         """他让她好好上班：她闷闷不乐，日程不变，日记记一笔。"""
@@ -8768,214 +6976,12 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             pass
         return _follow_block(False, city)
 
-    async def _end_follow_trip(self, uid):
-        """结束跟随：回家、恢复城市/天气/日程、写回来记忆。"""
-        trip = self.db.kv_get("travel", {}) or {}
-        city = str(trip.get("city") or "") if isinstance(trip, dict) else ""
-        self.db.kv_set("travel", {})
-        home = _CITY_DEFAULT
-        self.db.kv_set("his_city", home)
-        self.db.kv_set("he_city", home)
-        hit = self._city_lookup(home)
-        if hit:
-            try:
-                await self._switch_weather_city(hit)
-            except Exception:
-                pass
-        try:
-            self.state.apply_travel_overlay(home)
-        except Exception:
-            pass
-        try:
-            content = "她 %s 从 %s 回来了" % (today_str(), city)
-            await self._write_memory_checked(uid, content, "event", 1)
-        except Exception:
-            pass
-        try:
-            log = self.db.kv_get("travel_log", []) or []
-            if isinstance(log, list):
-                log.append({
-                    "day": today_str(), "hour": "%02d:00" % _now().hour,
-                    "city": city, "back": True,
-                })
-                self.db.kv_set("travel_log", log[-10:])
-        except Exception:
-            pass
-
-    async def _switch_weather_city(self, hit):
-        """按城市跟随的结果改 weather_city / 显示名，并立刻刷一次天气。"""
-        city_id = str(hit.get("id") or "").strip()
-        name = str(hit.get("name") or "").strip()
-        if not city_id or not name:
-            return
-        changed = False
-        if str(self.config.get("weather_city") or "") != city_id:
-            self.config["weather_city"] = city_id
-            changed = True
-        if self.cfg_str("weather_city_name", "").strip() != name:
-            self.config["weather_city_name"] = name
-            changed = True
-        if not changed:
-            return
-        try:
-            save = getattr(self.config, "save_config", None)
-            if callable(save):
-                save()
-        except Exception as exc:
-            logger.warning("[amo] 城市跟随：保存天气城市失败: %s" % exc)
-        await self.state.refresh_weather(force=True)
 
 
-    async def _start_solo_trip(self, uid, offer):
-        """确认出发：>=22 点明天走，否则现在就走。"""
-        city = str(offer.get("city") or "").strip()
-        spots = [x for x in (offer.get("spot_rows") or []) if isinstance(x, dict)]
-        if not city:
-            self.db.kv_set("wander_offer", {})
-            return ""
-        tomorrow = _now().hour >= 22
-        start = (_now().date() + timedelta(days=1)) if tomorrow else _now().date()
-        days = max(1, min(3, _wander_trip_days(random)))
-        if days == 1 and not tomorrow and _now().hour >= 17:
-            days = 2  # 傍晚才走，别刚出门就回家
-        return_day = start + timedelta(days=days - 1)
-        return_hour = 21 if days == 1 else 12
-        hit = self._city_lookup(city)
-        trip = {
-            "city": city,
-            "id": str((hit or {}).get("id") or ""),
-            "day": start.isoformat(),
-            "days": days,
-            "return_day": return_day.isoformat(),
-            "return_hour": return_hour,
-            "spots": [str(x.get("name") or "") for x in spots][:4],
-            "phase": "planned",
-        }
-        self.db.kv_set("wander_trip", trip)
-        self.db.kv_set("wander_offer", {})
-        try:
-            content = "她 %s 一个人去 %s 旅游（他同意了，玩 %d 天）" % (start.isoformat(), city, days)
-            if not await self._write_memory_checked(uid, content, "event", 1):
-                logger.warning("[amo] 旅游记忆没写进去")
-        except Exception as exc:
-            logger.warning("[amo] 旅游记忆写入失败: %s" % exc)
-        try:
-            log = self.db.kv_get("travel_log", []) or []
-            if not isinstance(log, list):
-                log = []
-            log.append({
-                "day": start.isoformat(), "hour": "%02d:00" % _now().hour,
-                "city": city, "solo": True,
-            })
-            self.db.kv_set("travel_log", log[-10:])
-        except Exception:
-            pass
-        if not tomorrow:
-            if hit:
-                try:
-                    await self._switch_weather_city(hit)
-                except Exception as exc:
-                    logger.warning("[amo] 旅游天气切换失败: %s" % exc)
-            try:
-                self.state.apply_travel_overlay(city)
-            except Exception as exc:
-                logger.warning("[amo] 旅游日程失败: %s" % exc)
-            trip["phase"] = "applied"
-            self.db.kv_set("wander_trip", trip)
-        agree = _wander_solo_agree_text(city, random)
-        plan = _wander_plan_text(city, spots, tomorrow, random)
-        when = "明天" if tomorrow else "现在"
-        back_text = "第 %d 天中午回来" % days if days > 1 else "当晚回来"
-        return (
-            "【出发】他同意了：你" + when + "去 " + city + " 旅游（一个人），玩 %d 天，%s。"
-            % (days, back_text) + "先照这个说一句：" + agree + " 再说安排：" + plan
-            + " 别说成跟他一起；白天自己去景点，晚上住酒店。"
-        )
 
 
-    async def _end_solo_trip(self, uid, reason=""):
-        """结束 solo 旅游：清状态、记回来、天气换回他在的城市、日程回家。"""
-        trip = self.db.kv_get("wander_trip", {}) or {}
-        if not isinstance(trip, dict) or not trip.get("city"):
-            return
-        city = str(trip["city"])
-        self.db.kv_set("wander_trip", {})
-        try:
-            content = "她 %s 从 %s 旅游回来了" % (today_str(), city)
-            if not await self._write_memory_checked(uid, content, "event", 1):
-                logger.warning("[amo] 回来记忆没写进去")
-        except Exception as exc:
-            logger.warning("[amo] 回来记忆写入失败: %s" % exc)
-        try:
-            log = self.db.kv_get("travel_log", []) or []
-            if not isinstance(log, list):
-                log = []
-            log.append({
-                "day": today_str(), "hour": "%02d:00" % _now().hour,
-                "city": city, "solo": True, "back": True,
-            })
-            self.db.kv_set("travel_log", log[-10:])
-        except Exception:
-            pass
-        his = str(self.db.kv_get("his_city", "") or "").strip() or _CITY_DEFAULT
-        hit = self._city_lookup(his)
-        if hit:
-            try:
-                await self._switch_weather_city(hit)
-            except Exception as exc:
-                logger.warning("[amo] 回来天气切换失败: %s" % exc)
-        try:
-            self.state.apply_travel_overlay(his)
-        except Exception as exc:
-            logger.warning("[amo] 回来日程失败: %s" % exc)
 
-    def _sync_weather_city_config(self):
-        """配置里填了中文城市名时，自动换算并回填 LocationID（幂等）。"""
-        raw = self.cfg_str("weather_city", "").strip()
-        if not raw or raw.isdigit() or "," in raw:
-            return False
-        hit = self._city_lookup(raw)
-        if not hit:
-            # 同一个错城市名每小时只提醒一次，避免后台 30 秒一轮刷日志
-            cache = getattr(self, "_city_warn_cache", None)
-            if not isinstance(cache, dict):
-                cache = {}
-                self._city_warn_cache = cache
-            now = time.time()
-            if now - to_float(cache.get(raw), 0) > 3600:
-                cache[raw] = now
-                logger.warning(
-                    "[amo] 城市名「%s」不在离线城市表里，天气会退回模拟数据；"
-                    "可以写「省+市」或直接填 LocationID" % raw
-                )
-            return False
-        if hit.get("ambiguous"):
-            cache = getattr(self, "_city_warn_cache", None)
-            if not isinstance(cache, dict):
-                cache = {}
-                self._city_warn_cache = cache
-            now = time.time()
-            key = "amb:" + raw
-            if now - to_float(cache.get(key), 0) > 3600:
-                cache[key] = now
-                logger.warning(
-                    "[amo] 天气城市%s" % (hit.get("note") or "有多个同名城市，已默认选一个")
-                )
-        changed = False
-        if str(hit["id"]) != raw:
-            self.config["weather_city"] = str(hit["id"])
-            changed = True
-        if not self.cfg_str("weather_city_name", "").strip():
-            self.config["weather_city_name"] = hit["name"]
-            changed = True
-        if changed:
-            try:
-                if hasattr(self.config, "save_config"):
-                    self.config.save_config()
-                logger.info("[amo] 城市「%s」→ LocationID %s（已回填）" % (raw, hit["id"]))
-            except Exception as exc:
-                logger.error("[amo] 回填城市配置失败: %s" % exc)
-        return changed
+
 
 
 
@@ -9249,39 +7255,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
 
 
 
-    def _purge_profile_kv(self, uid):
-        """删掉这个 uid 专属的 kv（渠道/节流/主动消息/纪念日…），返回删除条数。"""
-        prefixes = (
-            "channels:", "last_channel:", "lover_uid_", "auto_learn_",
-            "angel_profile_sync_", "companion_profile_sync_", "memcomp_profile_sync_",
-            "proactive_ignored_", "proactive_depressed_until_",
-            "proactive_followup_last_", "proactive_forced_hour_", "proactive_pending_",
-            "ext_mem_count_", "ext_mem_count_at_",
-        )
-        try:
-            rows = self.db.conn.execute("SELECT key FROM kv").fetchall()
-        except Exception:
-            return 0
-        keys = []
-        for row in rows:
-            try:
-                key = str(row["key"] if hasattr(row, "keys") else row[0])
-            except Exception:
-                continue
-            if any(key == prefix + uid for prefix in prefixes):
-                keys.append(key)
-            elif key.startswith("ritual_") and ("_" + uid + "_") in key:
-                keys.append(key)
-        if not keys:
-            return 0
-        try:
-            for key in keys:
-                self.db.conn.execute("DELETE FROM kv WHERE key=?", (key,))
-            self.db.conn.commit()
-        except Exception as exc:
-            logger.debug("[amo] 清理 kv 失败: %s" % exc)
-            return 0
-        return len(keys)
 
 
 
@@ -9352,63 +7325,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 return value
         return None
 
-    def _sync_finance(self) -> None:
-        """把金融插件的最新快照拉进状态。不写日志，失败也不影响主链路。"""
-        plugin = self._finance()
-        if plugin is None:
-            return
-        try:
-            try:
-                snap = plugin.snapshot(refresh=False)
-            except TypeError:
-                snap = plugin.snapshot()
-            if isinstance(snap, dict):
-                self.state.finance = {
-                    "balance": snap.get("balance", 0),
-                    "savings": snap.get("savings", 0),
-                    "total": round(float(snap.get("balance") or 0)
-                                   + float(snap.get("savings") or 0), 2),
-                    "fixed_total": snap.get("fixed_total", 0),
-                    "anxiety": snap.get("anxiety", 0),
-                    "owed": snap.get("owed_to_user", 0),
-                    "month_spent": snap.get("month_spent", 0),
-                }
-                inv = snap.get("invest") or {}
-                # 这里必须把 _invest_line() / invest_summary() 真正会用到的字段全同步过来。
-                # 2026-11-17 的病象：她「好像不知道自己在炒股」——_invest_line 要读
-                # leverage / savings / buying_power / margin_debt / futures，
-                # 但这里一个都没给，于是她看到的杠杆永远是 1 倍、储蓄和保证金全是 0，
-                # 拿着残缺的账本聊股票，当然像个不懂的。
-                self.state.invest = {
-                    "stance": inv.get("stance") or "",
-                    "leek": inv.get("leek") or {},
-                    "cash": inv.get("cash", 0),
-                    "savings": inv.get("savings", 0),
-                    "value": inv.get("total_value", 0),
-                    "pnl": inv.get("total_pnl", 0),
-                    "pnl_pct": inv.get("total_pnl_pct", 0),
-                    "day_pnl": inv.get("day_pnl", 0),
-                    "count": inv.get("count", 0),
-                    "leverage": inv.get("leverage", 1),
-                    "buying_power": inv.get("buying_power", 0),
-                    "margin_debt": inv.get("margin_debt", 0),
-                    "equity": inv.get("equity", 0),
-                    "futures": inv.get("futures") or {},
-                    "positions": [
-                        {"name": p.get("name") or p.get("symbol"),
-                         "symbol": p.get("symbol") or "",
-                         "qty": p.get("qty"),
-                         "last": p.get("last", 0),
-                         "market_value": p.get("market_value", 0),
-                         "pnl": p.get("pnl", 0),
-                         "pnl_pct": p.get("pnl_pct")}
-                        for p in (inv.get("positions") or [])[:6]
-                    ],
-                    "bankrupt": inv.get("bankrupt") or {},
-                    "aggressive": bool(inv.get("aggressive")),
-                }
-        except Exception as exc:
-            logger.debug("[amo] 财务快照同步失败: %s" % exc)
 
     #: 单笔扣款上限：模型或挂载插件算错时，宁可拒绝，也不能把余额一次清空。
     CHARGE_MAX = 100000.0
@@ -9461,80 +7377,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         except (TypeError, ValueError):
             return False
 
-    def _charge_cache_get(self, request_id, amount=None):
-        """查幂等号。
 
-        - 成功单：内存 + 磁盘（``charge_ok``），重启后同一笔不会再扣；
-        - 失败单：只留 60 秒，补钱之后能重试——永久缓存失败等于把这笔锁死。
-        - 金额对不上：说明调用方拿错了号，返回 ``idempotency_conflict``。
-        """
-        if not request_id:
-            return None
-        cache = getattr(self, "_charge_cache", None) or {}
-        hit = cache.get(request_id)
-        if isinstance(hit, dict):
-            if self._amount_conflicts(hit, amount):
-                return self._charge_conflict("内存")
-            return dict(hit)
-        try:
-            stored = self.db.kv_get("charge_ok", {}) or {}
-        except Exception:
-            stored = {}
-        entry = stored.get(request_id) if isinstance(stored, dict) else None
-        if isinstance(entry, dict) and entry.get("ok"):
-            if self._amount_conflicts(entry, amount):
-                return self._charge_conflict("落库")
-            return dict(entry)
-        fail = (getattr(self, "_charge_fail", None) or {}).get(request_id)
-        if isinstance(fail, tuple) and len(fail) == 2:
-            ts, result = fail
-            if time.time() - to_float(ts, 0) <= self.CHARGE_FAIL_TTL:
-                return dict(result)
-            try:
-                self._charge_fail.pop(request_id, None)
-            except Exception:
-                pass
-        return None
-
-    def _charge_cache_put(self, request_id, result, amount=None):
-        if not request_id:
-            return
-        if not result.get("ok"):
-            fail = getattr(self, "_charge_fail", None)
-            if fail is None:
-                fail = {}
-                self._charge_fail = fail
-            fail[request_id] = (time.time(), dict(result))
-            if len(fail) > 200:
-                for key in list(fail)[:50]:
-                    fail.pop(key, None)
-            return
-        payload = dict(result)
-        try:
-            if amount is not None:
-                payload["_amount"] = round(float(amount), 2)
-        except (TypeError, ValueError):
-            pass
-        cache = getattr(self, "_charge_cache", None)
-        if cache is None:
-            cache = {}
-            self._charge_cache = cache
-        cache[request_id] = dict(payload)
-        if len(cache) > 200:
-            for key in list(cache)[:50]:
-                cache.pop(key, None)
-        try:
-            stored = self.db.kv_get("charge_ok", {}) or {}
-            if not isinstance(stored, dict):
-                stored = {}
-            stored[request_id] = dict(payload, ts=time.time())
-            if len(stored) > self.CHARGE_OK_KEEP:
-                oldest = sorted(stored, key=lambda k: to_float((stored.get(k) or {}).get("ts"), 0))
-                for key in oldest[: max(1, len(stored) - self.CHARGE_OK_KEEP)]:
-                    stored.pop(key, None)
-            self.db.kv_set("charge_ok", stored)
-        except Exception as exc:
-            logger.debug("[amo] 幂等号落库失败: %s" % exc)
 
     # ---------- 事件总线：插件只能提案，审批与回执在终端 ----------
 
@@ -9609,61 +7452,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         return {"enabled": self.cfg_bool("event_bus_enable", True),
                 "stats": bus.stats(), "recent": bus.recent(10)}
 
-    async def _approved_charge(self, amount, *, reason="", payee="", source="",
-                               scene="private", detail="", uid="") -> dict:
-        """花钱前先提案：没拿到 allow 就不扣；扣完无论成败都发回执。
-
-        幂等号直接用 event_id：同一次调用的重试只扣一次。
-        """
-        value = round(float(amount or 0), 2)
-        event_id = "%s-%s" % (source or "spend", uuid.uuid4().hex[:12])
-        chain = Chain("terminal.charge", event_id=event_id, logger=logger)
-        chain.step("propose", amount=value, source=source or "terminal",
-                   scene=scene, payee=payee or "")
-        kind = {"medical": "medical_treat", "market": "market_buy",
-                "image": "image_draw", "speech": "speech_synth"}.get(source, "market_buy")
-        decision = self.submit_event({
-            "event_id": event_id,
-            "event_type": kind,
-            "source": source or "terminal",
-            "scene": "group" if str(scene or "").lower() == "group" else "private",
-            "payload": {"cost": value, "reason": reason or "",
-                        "detail": {"payee": payee, "note": detail}},
-            "need_approve": True,
-        })
-        if not decision.get("approved"):
-            chain.fail("approve", str(decision.get("reason") or "终端没批"),
-                       decision=str(decision.get("decision") or "deny"))
-            return {"ok": False, "code": str(decision.get("decision") or "deny"),
-                    "reason": str(decision.get("reason") or "终端没批"),
-                    "balance": self.balance(), "event_id": event_id}
-        chain.step("approve", decision=str(decision.get("decision") or "allow"),
-                   score=decision.get("score"))
-        result = await self.charge(value, reason=reason, payee=payee,
-                                   request_id=event_id, source=source,
-                                   detail=detail, uid=uid)
-        chain.step("charge", ok=bool(result.get("ok")),
-                   detail=str(result.get("reason") or result.get("code") or ""),
-                   balance=result.get("balance"))
-        try:
-            self.event_receipt({
-                "event_id": event_id,
-                "status": "success" if result.get("ok") else "fail",
-                "code": str(result.get("code") or ""),
-                "reason": str(result.get("reason") or ""),
-                "amount": value,
-                "balance": result.get("balance"),
-            })
-        except Exception as exc:
-            logger.debug("[amo] 回执失败: %s" % exc)
-            chain.fail("receipt", str(exc))
-        else:
-            chain.step("receipt", detail="已归档")
-        if result.get("ok"):
-            chain.done(amount=value, balance=result.get("balance"), source=source or "terminal")
-        else:
-            chain.fail("result", str(result.get("reason") or "扣款失败"), amount=value)
-        return dict(result, event_id=event_id)
 
     async def charge(self, amount, reason: str = "", payee: str = "",
                      request_id: str = "", source: str = "", detail: str = "",
@@ -9719,36 +7507,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                              "source=%s" % (source or "-"), value)
         return result
 
-    async def _record_expense(self, amount, reason, detail, source, result, uid=""):
-        """把这一笔告诉记忆——**成功失败都记**。
-
-        只记成功的话，聊天里她会以为钱没花，或者不知道自己为什么没钱。
-        """
-        try:
-            target = str(uid or "").strip() or self._primary_uid()
-        except Exception:
-            target = ""
-        if not target:
-            return
-        rate = ("%s（%s）" % (reason or "一笔支出", detail)) if detail else (reason or "一笔支出")
-        if result.get("ok"):
-            text = "%s：支出 ¥%.2f，金融已扣款" % (rate, float(amount))
-        else:
-            text = "%s：¥%.2f 没扣成（%s）" % (
-                rate, float(amount), result.get("reason") or "余额不足")
-        try:
-            balance = result.get("balance")
-            if balance is not None:
-                text += "，余额 ¥%.2f" % float(balance)
-        except Exception:
-            pass
-        if source:
-            text = "[" + str(source) + "] " + text
-        try:
-            await self._write_memory_checked(target, text, kind="expense", tier=0,
-                                             scope="private", group_id="")
-        except Exception as exc:
-            logger.debug("[amo] 支出事件没写进记忆: %s" % exc)
 
     async def income(self, amount, reason: str = "") -> dict:
         plugin = self._finance()
@@ -9771,14 +7529,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         except Exception:
             return 0.0
 
-    def recent_money(self, limit: int = 5) -> list:
-        plugin = self._finance()
-        if plugin is None:
-            return []
-        try:
-            return list(plugin.recent(limit))
-        except Exception:
-            return []
 
     # ---------- 就医：生病了，去不去治 ----------
 
@@ -9822,84 +7572,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
 
 
 
-    async def _note_invest_seed(self) -> None:
-        """第一次建仓后，把这件事记成记忆——她要真的"知道"自己买了股票。"""
-        try:
-            if self.db.kv_get("invest_seed_noted", False):
-                return
-        except Exception:
-            return
-        inv = getattr(self.state, "invest", None) or {}
-        positions = inv.get("positions") or []
-        if not positions:
-            return
-        first = positions[0]
-        try:
-            self.db.kv_set("invest_seed_noted", True)
-        except Exception:
-            pass
-        await self._market_memory(
-            "我用自己的钱买了 %s %d 股，先放着看看；跌了会心疼，涨了想奖励自己"
-            % (first.get("name") or "一只股票", int(first.get("qty") or 0)),
-            kind="asset",
-        )
-        logger.info("[amo] 已记住建仓：%s %s 股" % (first.get("name"), first.get("qty")))
 
-    async def _sync_market_mood(self) -> None:
-        """股市盈亏影响心情。
-
-        赚了：开心、兴奋，奖励自己一顿好的（真的记一笔支出）。
-        亏了：郁闷、焦虑，吃得简单——语气会跟着无精打采（心情会注入人格提示）。
-        一天只按方向记一次，不然每条 tick 都在加焦虑。
-        """
-        plugin = self._finance()
-        reader = getattr(plugin, "mood_signal", None) if plugin is not None else None
-        if not callable(reader):
-            return
-        try:
-            try:
-                signal = reader(refresh=False)
-            except TypeError:
-                signal = reader()
-        except Exception as exc:
-            logger.debug("[amo] 读投资盈亏失败: %s" % exc)
-            return
-        if not isinstance(signal, dict):
-            return
-        pct = to_float(signal.get("day_pnl_pct"), 0)
-        pnl = to_float(signal.get("day_pnl"), 0)
-        # 韭菜档位（±3%）先单独处理：上头/死扛各加一次，和 ±2% 的心情不冲突
-        stance = str((getattr(self.state, "invest", None) or {}).get("stance") or "")
-        if stance:
-            key = "%s|leek|%s" % (today_str(), stance)
-            if getattr(self, "_leek_key", "") != key:
-                self._leek_key = key
-                if stance == "overconfident":
-                    self.state.feel_bump({"surprise": 6, "joy": 4})
-                    await self._market_memory("今天股票大涨，我飘了，觉得自己就是巴菲特", kind="event")
-                else:
-                    self.state.feel_bump({"fear": 6, "sadness": 3})
-                    await self._market_memory("今天股票大跌，我死扛着不卖，心里其实很难受", kind="event")
-        if abs(pct) < 2.0:
-            return
-        mood = "up" if pct > 0 else "down"
-        key = "%s|%s" % (today_str(), mood)
-        if getattr(self, "_market_mood_key", "") == key:
-            return
-        self._market_mood_key = key
-        if mood == "up":
-            self.state.feel_bump({"joy": 6, "surprise": 3})
-            await self._market_memory(
-                "今天股市赚了 %.2f%%（¥%.0f），心情不错，想吃点好的" % (pct, pnl),
-                kind="event",
-            )
-            await self._market_reward(pnl)
-        else:
-            self.state.feel_bump({"sadness": 6, "fear": 5, "joy": -3})
-            await self._market_memory(
-                "今天股市亏了 %.2f%%（¥%.0f），有点没精神，吃得简单点" % (-pct, -pnl),
-                kind="event",
-            )
 
     async def _market_memory(self, text: str, kind: str = "event") -> None:
         try:
@@ -9990,33 +7663,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
 
     # ---------- 世界页照片：她拍一张（提示词与缓存都在生图插件） ----------
 
-    def _complete_outfit(self, value):
-        """把「只写了半套」的穿搭按套名补成整套。
-
-        2026-11-16：14:01 那张提示词里只有「穿着汉服·雪霁｜对襟褙子」，裙、袜、鞋
-        都没写，模型自己补成抹胸；17:23 那张又只写三件。日程本身是完整的四件套，
-        所以这里是「某一格被写残了」的兜底：补不上就原样返回，绝不编衣服。
-        """
-        text = str(value or "").strip()
-        if not text:
-            return ""
-        pieces = [item.strip() for item in re.split(r"[，,]", text) if item.strip()]
-        heads = {item.split("｜", 1)[0].strip() for item in pieces if "｜" in item}
-        if len(heads) != 1 or len(pieces) >= 3:
-            return text
-        engine = getattr(self, "outfits", None)
-        compose = getattr(engine, "compose_set", None) if engine is not None else None
-        if not callable(compose):
-            return text
-        try:
-            full = str(compose(next(iter(heads))) or "").strip()
-        except Exception as exc:
-            logger.debug("[amo] 补齐整套穿搭失败: %s" % exc)
-            return text
-        if not full:
-            return text
-        logger.info("[amo] 穿搭只有半套，按套名补整：%s -> %s" % (text[:40], full[:60]))
-        return full
 
     def _selfie_prompt(self, look=""):
         """按她此刻的穿搭/地点/在做的事拼自拍提示词；look 用来钉住答应那一刻的穿搭。"""

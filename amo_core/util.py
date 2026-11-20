@@ -38,6 +38,7 @@ __all__ = [
     "schedule_category_feel",
     "other_platform_bot_lines",
     "usage_cost",
+    "uniq",
 ]
 
 def clamp(value, low=0.0, high=100.0):
@@ -116,3 +117,12 @@ def usage_cost(usage, prices=None):
         cost += float(bucket.get("input_miss") or 0) * table["miss_" + prefix] / 1e6
         cost += float(bucket.get("output") or 0) * table["out_" + prefix] / 1e6
     return round(cost, 6)
+
+def uniq(items):
+    out = []
+    seen = set()
+    for item in items:
+        if item and item not in seen:
+            seen.add(item)
+            out.append(item)
+    return out
