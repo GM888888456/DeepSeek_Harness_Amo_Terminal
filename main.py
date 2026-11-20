@@ -5588,15 +5588,10 @@ class ReplyGate:
             relevance += 28
         relevance = clamp(relevance)
 
-        rel = snap.get("feel_rel") or {}
+        # 心情不再进「要不要说话」的分数（2026-11-20 用户口径：让她自己判断，
+        # 心情只影响态度和语气）。以前这里七项加权，精力一低 willingness 直接掉一半，
+        # 被点名的群消息也经常不回。语气照旧走 state.tone_text()。
         willingness = 50.0
-        willingness += (rel.get("joy", 50.0) - 50) * 0.30
-        willingness += (rel.get("surprise", 50.0) - 50) * 0.22
-        willingness += (rel.get("calm", 50.0) - 50) * 0.10
-        willingness -= (rel.get("fatigue", 50.0) - 50) * 0.35
-        willingness -= (rel.get("sadness", 50.0) - 50) * 0.28
-        willingness -= (rel.get("anger", 50.0) - 50) * 0.22
-        willingness += (rel.get("love", 50.0) - 50) * 0.15
         relation = profile.get("relation", "普通")
         willingness += {"相恋": 22, "熟识": 10, "抵触": -30, "仇恨": -55}.get(relation, 0)
         phase = snap["period"]["phase"]
@@ -5705,13 +5700,8 @@ class ReplyGate:
         else:
             activity_delta = 12
 
-        rel = snap.get("feel_rel") or {}
-        positive = (rel.get("joy", 50.0) + rel.get("surprise", 50.0)
-                    + rel.get("calm", 50.0) + rel.get("love", 50.0)) / 4.0
-        negative = (rel.get("sadness", 50.0) + rel.get("fatigue", 50.0)
-                    + rel.get("anger", 50.0) + rel.get("fear", 50.0)) / 4.0
-        mood_score = clamp(50 + (positive - negative) * 0.8)
-        mood_delta = (50 - mood_score) * 0.25
+        # 心情不再推高/压低门槛（同上）：这里只留活跃度、关系、身体、时段、天气。
+        mood_delta = 0.0
 
         relation = profile.get("relation", "普通")
         relation_delta = {"相恋": -10, "熟识": -5, "抵触": 16, "仇恨": 36}.get(relation, 0)

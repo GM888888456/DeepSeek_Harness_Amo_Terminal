@@ -1410,7 +1410,10 @@ class HeartflowEngine:
             "相恋": 1.0, "熟识": 0.6, "普通": 0.25, "抵触": -0.4, "仇恨": -0.6,
         }.get(relation, 0.0)
 
-        # ④ 她此刻想不想说话（七情六欲说了算）
+        # ④ 心情：只影响语气，**不参与「要不要说话」的判定**（2026-11-20 用户口径：
+        #    「让她自己判断要不要说话，心情只影响态度和语气」）。
+        #    以前这一项能吃到 -1.0，模型判 0.62 的话被规则压到 0.44，阈值以下就闭嘴；
+        #    精力掉到 20 那阵她整天不说话，就是这么来的。语气在 state.tone_text() 里。
         detail["feel"] = 0.0
         try:
             plugin = getattr(self, "plugin", None)
@@ -1420,9 +1423,10 @@ class HeartflowEngine:
                 tired = ((rel.get("fatigue", 50.0) - 50.0) * 0.8
                          + (rel.get("anger", 50.0) - 50.0) * 0.8
                          + (rel.get("sadness", 50.0) - 50.0) * 0.6)
-                detail["feel"] = max(-1.0, min(1.0, (want - tired) / 60.0))
+                mood = max(-1.0, min(1.0, (want - tired) / 60.0))
+                logger.debug("[心流] 心情 %.2f（只影响语气，不计分）" % mood)
         except Exception:
-            detail["feel"] = 0.0
+            pass
 
         # ⑤ 时机：刚说过话、群里刷得正凶
         timing = 0.0
@@ -1546,11 +1550,11 @@ class HeartflowEngine:
                 blended = (1.0 - self.rule_blend) * overall + self.rule_blend * rule_score
                 if self.enable_detailed_log:
                     logger.info(
-                        "[心流] ⚖️ 裁决 模型%.2f 规则%.2f（点名%+.1f 具体%+.1f 关系%+.1f 心情%+.1f 时机%+.1f）"
+                        "[心流] ⚖️ 裁决 模型%.2f 规则%.2f（点名%+.1f 具体%+.1f 关系%+.1f 时机%+.1f）"
                         " → 混合%.2f / 阈值%.2f"
                         % (overall, rule_score, rule_detail.get("addressed", 0.0),
                            rule_detail.get("concrete", 0.0), rule_detail.get("relation", 0.0),
-                           rule_detail.get("feel", 0.0), rule_detail.get("timing", 0.0),
+                           rule_detail.get("timing", 0.0),
                            blended, dynamic_threshold)
                     )
                 overall = blended
