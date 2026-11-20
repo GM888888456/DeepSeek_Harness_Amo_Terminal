@@ -1342,6 +1342,14 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
     async def on_message(self, event: AstrMessageEvent):
         try:
             await self._ensure_ready()
+            # 先认人：这条是谁说的、跟你什么关系。心流裁决 / 群聊语气都要用。
+            # 2026-11-20：群里他喊「老婆」被判成「对象:unknown」直接沉默，
+            # 就是因为在裁决之前没人告诉心流「发这条的是你恋人」。
+            try:
+                _profile = self.db.get_profile(self._canonical_uid(event)) or {}
+                event.amo_sender_is_lover = str(_profile.get("relation") or "") == "相恋"
+            except Exception:
+                event.amo_sender_is_lover = False
             try:
                 raw_text = (event.message_str or "").strip()
                 if raw_text and await self._maybe_go_sleep(event, raw_text):

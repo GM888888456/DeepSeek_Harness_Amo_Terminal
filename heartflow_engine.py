@@ -737,6 +737,22 @@ class HeartflowEngine:
         if self.bot_name or self.bot_aliases:
             logger.info("[心流] 身份：名字=%s | 别名=%s" % (self.bot_name or "未设置", "、".join(self.bot_aliases) or "无"))
 
+    #: 恋人之间才用的爱称：只有发件人确实是恋人时才算「在叫你」（群里别人喊老婆不算）
+    LOVER_CALL_WORDS = ("老婆", "媳妇", "宝宝", "宝贝", "亲爱的", "老公", "先生")
+
+    def _lover_calls_bot(self, event) -> str:
+        """发件人是你的恋人，又用了爱称 → 这条就是对你说的。"""
+        try:
+            if not getattr(event, "amo_sender_is_lover", False):
+                return ""
+        except Exception:
+            return ""
+        text = str(getattr(event, "message_str", "") or "")
+        for word in self.LOVER_CALL_WORDS:
+            if word and word in text:
+                return word
+        return ""
+
     def _addresses_bot(self, text: str) -> str:
         normalized = re.sub(r"[\s，。！？!?、；;：:,.~～…\-]+", "", str(text or "")).lower()
         if not normalized:
@@ -1386,7 +1402,7 @@ class HeartflowEngine:
         """
         addressed = ""
         try:
-            addressed = self._addresses_bot(str(getattr(event, "message_str", "") or "")) or ""
+            addressed = self._addresses_bot(str(getattr(event, "message_str", "") or "")) or self._lover_calls_bot(event)
         except Exception:
             addressed = ""
         force = bool(getattr(event, "amo_force_reply", False))
@@ -1499,7 +1515,7 @@ class HeartflowEngine:
                 continuity=float(self.score_max), reasoning="睡眠/上班期间被连续打扰，强制回复",
                 should_reply=True, confidence=1.0, overall_score=1.0,
             )
-        addressed = self._addresses_bot(event.message_str or "")
+        addressed = self._addresses_bot(event.message_str or "") or self._lover_calls_bot(event)
         if addressed:
             logger.info("[心流] 🎯 消息直接呼叫机器人（%s），跳过评分" % addressed)
             return JudgeResult(
@@ -1656,7 +1672,7 @@ class HeartflowEngine:
                 continuity=float(self.score_max), reasoning="睡眠/上班期间被连续打扰，强制回复",
                 should_reply=True, confidence=1.0, overall_score=1.0,
             )
-        addressed = self._addresses_bot(event.message_str or "")
+        addressed = self._addresses_bot(event.message_str or "") or self._lover_calls_bot(event)
         if addressed:
             logger.info("[心流] 🌊 消息直接呼叫机器人（%s），沉浸模式也回复" % addressed)
             return JudgeResult(
