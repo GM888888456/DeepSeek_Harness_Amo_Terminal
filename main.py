@@ -2402,7 +2402,9 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                     result.chain = []
                     return
             if not text.strip():
-                logger.warning("[amo] 清洗后是空的，整条不发")
+                # 只发语音（用户要求用语音说）时，正文本来就被剥空了，
+                # 这是正常情况，不该每轮刷 WARN。
+                logger.info("[amo] 这条只有语音/标签，没有要发的文字")
                 result.chain = []
                 return
             try:
