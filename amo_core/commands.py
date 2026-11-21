@@ -315,7 +315,20 @@ class CommandMixin:
             return
         text = (event.message_str or "").strip()
         if not text:
-            return
+            # 纯图片：不能当没看见。给个占位让流程继续，图片由 AstrBot 交给视觉模型转述
+            try:
+                for _comp in (getattr(getattr(event, "message_obj", None), "message", None) or []):
+                    if _comp.__class__.__name__ == "Image":
+                        text = "[图片]"
+                        try:
+                            event.message_str = text
+                        except Exception:
+                            pass
+                        break
+            except Exception:
+                pass
+            if not text:
+                return
         if self._looks_like_command(text):
             return
 

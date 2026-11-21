@@ -955,6 +955,38 @@ class MiscMixin:
                 logger.info("[amo] 仇恨超过7天，降为抵触: %s" % row["uid"])
         except Exception as exc:
             logger.debug("[amo] 仇恨关系衰减失败: %s" % exc)
+        # 2026-11-21：越界打的「抵触」是**临时**的。人家可能只是开玩笑，
+        # 冷够了就降回陌生人，只降由 boundary 自动打过标记的那些，
+        # 管理员手动设的抵触不动。
+        try:
+            marks = list(self.db.kv_get("boundary_marks", []) or [])
+            if not marks:
+                return
+            cold_days = max(1, int(self.cfg_int("boundary_cold_days", 3)))
+            cutoff = now_ts() - cold_days * 86400
+            kept = []
+            changed = False
+            for mark in marks:
+                if not isinstance(mark, dict):
+                    changed = True
+                    continue
+                uid = str(mark.get("uid") or "")
+                stamp = float(mark.get("ts") or 0)
+                if not uid:
+                    changed = True
+                    continue
+                if stamp <= cutoff:
+                    prof = self.db.get_profile(uid) or {}
+                    if str(prof.get("relation") or "") == "抵触":
+                        self.db.update_profile(uid, relation="陌生人")
+                        logger.info("[amo] 越界冷了 %d 天，降为陌生人: %s" % (cold_days, uid))
+                    changed = True
+                    continue
+                kept.append(mark)
+            if changed:
+                self.db.kv_set("boundary_marks", kept)
+        except Exception as exc:
+            logger.debug("[amo] 抵触到期降级失败: %s" % exc)
 
     def _diary_prompt(self, day, chat_lines, hourly_lines) -> str:
         """拼日记提示词：只给事实骨架，长度和口吻由她自己定。"""

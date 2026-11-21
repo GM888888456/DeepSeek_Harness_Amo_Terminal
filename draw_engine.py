@@ -666,6 +666,16 @@ class DrawEngine:
             outfit = schedule_outfit(self.plugin)
             if outfit:
                 parts.append("穿着" + outfit)
+            # 他发了图说「照这个姿势」：把图里的姿势/机位钉进提示词
+            pose_ref = ""
+            try:
+                getter = getattr(self.plugin, "_photo_pose_reference", None)
+                if callable(getter):
+                    pose_ref = str(getter(text) or "")
+            except Exception as _amo_exc:
+                _note_swallowed("draw_engine.pose_reference", _amo_exc)
+            if pose_ref:
+                parts.append("自拍姿势：" + pose_ref)
             if subject and subject != "自拍":
                 parts.append(subject)
             parts.extend(["自然光", "手机前置摄像头", "生活感",
@@ -986,6 +996,25 @@ def schedule_outfit(plugin):
         return ""
     outfit = str(activity.get("outfit") or "").strip()
     if outfit:
+        # 私密套只在家出图：日程写着私密、人却在外面上班/逛街时，换成今天那套正常衣服
+        try:
+            from .outfit_engine import is_private_wear, private_ok
+        except Exception:
+            try:
+                from outfit_engine import is_private_wear, private_ok  # type: ignore
+            except Exception:
+                is_private_wear = private_ok = None
+        if is_private_wear is not None and is_private_wear(outfit) and not private_ok(activity):
+            try:
+                engine = getattr(plugin, "outfits", None)
+                day = _today_str()
+                items = (getattr(plugin.state, "schedule", {}) or {}).get(day) or []
+                normal = engine._compose(engine.day_scene(items), day, engine.gender())
+                if normal:
+                    return str(normal)
+            except Exception as exc:
+                _note_swallowed("draw_engine.schedule_outfit", exc)
+            return ""
         return outfit
     engine = getattr(plugin, "outfits", None)
     getter = getattr(engine, "for_activity", None) if engine is not None else None

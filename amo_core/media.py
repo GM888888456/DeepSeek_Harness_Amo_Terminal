@@ -106,15 +106,33 @@ class MediaMixin:
                 return True
         # 守护缺席/失败：整条原文直接发，宁可长一点也不能把话吞了。
         # 打字状态由守护负责；直发这条兜底路径不再调用已经下线的 _typing。
-        chain = []
-        if quote_id is not None and self._quote_allowed(umo, scene == "group"):
-            try:
-                chain.append(Comp.Reply(id=quote_id))
-            except Exception:
-                pass
-        chain.append(Comp.Plain(text))
         try:
-            await self.context.send_message(umo, MessageChain(chain))
+            import re as _re
+            try:
+                from .send_bookkeeping import typing_pause as _typing_pause
+            except Exception:
+                try:
+                    from send_bookkeeping import typing_pause as _typing_pause
+                except Exception:
+                    _typing_pause = None
+            _parts = [p.strip() for p in _re.split(r"\n+|(?<=[。！？!?…~])\s*", text) if p.strip()]
+            _parts = _parts[:4] or [text]
+            for _i, _seg in enumerate(_parts):
+                if _i:
+                    # 主动消息没有 event，打不了「正在输入」，只按字数停一下
+                    await asyncio.sleep(random.uniform(0.5, 1.2))
+                if _typing_pause is not None:
+                    await _typing_pause(self, None, _seg)
+                elif _i:
+                    await asyncio.sleep(max(0.6, min(8.0, len(_seg) * 0.28)))
+                _chain = []
+                if _i == 0 and quote_id is not None and self._quote_allowed(umo, scene == "group"):
+                    try:
+                        _chain.append(Comp.Reply(id=quote_id))
+                    except Exception:
+                        pass
+                _chain.append(Comp.Plain(_seg))
+                await self.context.send_message(umo, MessageChain(_chain))
         except Exception as exc:
             logger.warning("[amo] 主动发送失败: %s" % exc)
             return False

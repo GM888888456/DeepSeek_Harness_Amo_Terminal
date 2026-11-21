@@ -178,12 +178,35 @@ class RelationsMixin:
                 if a in neighbors or b in neighbors:
                     second.append(edge)
             picked = (direct + second)[:12]
+        def _label(edge):
+            relation = str(edge.get("relation") or "朋友")
+            note = str(edge.get("note") or "")
+            if "推断" in note or "推测" in note:
+                return relation + "（你自己推出来的，别当成铁关系）"
+            return relation
+
         lines = []
+        direct, second = [], []
         for edge in picked[:12]:
             a, b = str(edge.get("a_uid")), str(edge.get("b_uid"))
-            na = names.get(a, a)
-            nb = names.get(b, b)
-            lines.append("%s和%s是%s" % (na, nb, edge.get("relation", "朋友")))
+            (direct if uid in (a, b) else second).append(edge)
+        # 图小的时候也至少给他几条二跳，别让「通过谁认识谁」永远读不到
+        if not second and edges:
+            known = {str(e.get("a_uid")) for e in direct} | {str(e.get("b_uid")) for e in direct}
+            for edge in edges:
+                if str(edge.get("a_uid")) in known or str(edge.get("b_uid")) in known:
+                    second.append(edge)
+                if len(second) >= 4:
+                    break
+        for edge in direct + second[:6]:
+            a, b = str(edge.get("a_uid")), str(edge.get("b_uid"))
+            na, nb = names.get(a, a), names.get(b, b)
+            if uid in (a, b):
+                lines.append("%s和%s是%s" % (na, nb, _label(edge)))
+            else:
+                lines.append("（隔一层的）%s和%s是%s" % (na, nb, _label(edge)))
+        if lines:
+            lines.append("这些是背景，心里有数就行，不用主动拿出来说。")
         return "\n".join(lines)
 
     async def _learn_relations(self, event, text, uid):

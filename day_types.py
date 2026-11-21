@@ -95,16 +95,56 @@ def normalize_day_types(raw) -> list[dict]:
     return out or list(DAY_TYPES)
 
 
-def pick_day_type(day_types: list[dict], is_weekend: bool, seed: str) -> dict:
-    """按权重抽一个今天的类型；同一个种子结果稳定。"""
+#: 这些职业不上班：周中也不排上班日，日程按休息/宅家/外出走
+NON_WORK_OCCUPATIONS = ("家庭主妇", "全职太太", "主妇", "家庭煮夫", "退休", "无业",
+                        "待业", "全职女儿", "全职妈妈")
+
+#: 这些职业周末也可能上班/轮班（职业来自世界观，世界观由人格识别出来）
+WEEKEND_WORK_WORDS = ("护士", "医生", "医师", "医护", "牙医", "药师", "店员", "服务员",
+                      "厨师", "咖啡师", "收银", "销售", "客服", "司机", "保安", "警察",
+                      "消防", "值班", "轮班", "倒班", "零售", "餐饮", "酒店", "前台",
+                      "快递", "外卖", "主播", "空乘")
+
+
+def _world_text(world) -> str:
+    world = world or {}
+    return (str(world.get("occupation") or "") + " " + str(world.get("workplace") or "")).lower()
+
+
+def has_job(world) -> bool:
+    """有没有要出门的营生；没有就按不上班排日程（不是所有 Amo 都要上班）。"""
+    text = _world_text(world).strip()
+    if not text:
+        return True
+    return not any(word in text for word in NON_WORK_OCCUPATIONS)
+
+
+def works_on_weekend(world) -> bool:
+    return any(word in _world_text(world) for word in WEEKEND_WORK_WORDS)
+
+
+def pick_day_type(day_types: list[dict], is_weekend: bool, seed: str, world=None) -> dict:
+    """按职业 + 星期抽一个今天的类型；同一个种子结果稳定。
+
+    2026-11-21 她说「并不是所有的 Amo 都需要上班，日程根据职业来定」：
+    - 学生/教师/办公室：周中上班，周末休息（周末被公司叫走另走事实纠偏）；
+    - 医护/服务业/轮班：周末也能抽到上班日；
+    - 家庭主妇/退休/无业：周中也不排上班日。
+    """
+    weekend = bool(is_weekend)
+    working = has_job(world)
+    weekend_worker = weekend and works_on_weekend(world)
     pool = []
     for item in day_types:
         if not item.get("enabled", True):
             continue
         scope = item.get("scope", "any")
-        if scope == "weekday" and is_weekend:
-            continue
-        if scope == "weekend" and not is_weekend:
+        if scope == "weekday":
+            if weekend and not weekend_worker:
+                continue
+            if not working:
+                continue
+        if scope == "weekend" and not weekend and working:
             continue
         if float(item.get("weight") or 0) <= 0:
             continue

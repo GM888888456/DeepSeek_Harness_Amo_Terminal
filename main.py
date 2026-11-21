@@ -970,9 +970,29 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         tail = ""
         if found_kind in ("outfits", "jewelry") and getattr(self, "wardrobe", None) is not None:
             try:
-                await self.wardrobe.add(name, scenes=["casual", "out"], note="市场买",
-                                        slot=str(row.get("slot") or ""))
-                tail = "，已经放进衣柜"
+                pieces = row.get("pieces") or []
+                if pieces:
+                    # 整套（2026-11-21）：按「套名｜件名」展开写库，
+                    # compose_set 靠套名前缀归组，这样买回来就是能穿的一整套。
+                    set_name = str(name).replace("（整套）", "").strip()
+                    scenes = market_set_scenes(row.get("style") or name)
+                    added = 0
+                    for piece in pieces:
+                        if isinstance(piece, (list, tuple)):
+                            piece_name = str(piece[0] if piece else "").strip()
+                            piece_slot = str(piece[1] if len(piece) > 1 else "").strip()
+                        else:
+                            continue
+                        if not piece_name:
+                            continue
+                        await self.wardrobe.add("%s｜%s" % (set_name, piece_name),
+                                                scenes=scenes, note="市场买", slot=piece_slot)
+                        added += 1
+                    tail = "，整套 %d 件已经放进衣柜" % added if added else ""
+                else:
+                    await self.wardrobe.add(name, scenes=["casual", "out"], note="市场买",
+                                            slot=str(row.get("slot") or ""))
+                    tail = "，已经放进衣柜"
             except Exception as exc:
                 logger.debug("[amo] 买完放衣柜失败: %s" % exc)
         return "买了%s，%.2f¥（余额 %.2f¥）%s。" % (
@@ -1164,7 +1184,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
 
 
 
-    WARDROBE_SEED = "hanfu-white-v4"
+    WARDROBE_SEED = "nightwear-v8-pleat"
 
 
 
@@ -1406,6 +1426,10 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
     async def on_message(self, event: AstrMessageEvent):
         try:
             await self._ensure_ready()
+            # 2026-11-21：raw_text 必须在「认人」之前就取好。
+            # 以前这里先用后赋值，抛 NameError 被 except 吞掉，结果
+            # amo_sender_is_lover 恒为 False —— 她压根不知道谁是恋人。
+            raw_text = (event.message_str or "").strip()
             # 先认人：这条是谁说的、跟你什么关系。心流裁决 / 群聊语气都要用。
             # 2026-11-20：群里他喊「老婆」被判成「对象:unknown」直接沉默，
             # 就是因为在裁决之前没人告诉心流「发这条的是你恋人」。
@@ -1418,6 +1442,37 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             except Exception as exc:
                 event.amo_sender_is_lover = False
                 logger.debug("[amo] 认人失败: %s" % exc)
+            # 2026-11-21 她的要求：亲密称呼只给恋人；别人要她喊，直接怼回去并记下来
+            try:
+                if not getattr(event, "amo_sender_is_lover", False):
+                    try:
+                        from .amo_core.boundary import asks_intimate
+                    except Exception:
+                        from amo_core.boundary import asks_intimate  # type: ignore
+                    if asks_intimate(raw_text):
+                        event.amo_boundary = True
+                        try:
+                            marks = self.db.kv_get("boundary_marks", []) or []
+                            marks = ([{"uid": self._canonical_uid(event),
+                                       "text": raw_text[:60], "ts": int(time.time())}]
+                                     + list(marks))[:20]
+                            self.db.kv_set("boundary_marks", marks)
+                        except Exception:
+                            pass
+                        logger.warning("[amo] 越界要求亲密称呼：%s" % raw_text[:40])
+                        # 关系直接打成「抵触」：心流/回复闸都会因此冷下来
+                        try:
+                            _bad = self._canonical_uid(event)
+                            _prof = self.db.get_profile(_bad) or {}
+                            _rel = str(_prof.get("relation") or "普通")
+                            if _rel not in ("抵触", "仇恨", "相恋", "家人"):
+                                self.db.update_profile(_bad, relation="抵触")
+                                logger.warning("[amo] %s 越界，关系已改为「抵触」"
+                                               % (_prof.get("name") or _bad))
+                        except Exception as exc:
+                            logger.debug("[amo] 打抵触失败: %s" % exc)
+            except Exception as exc:
+                logger.debug("[amo] 边界判定失败: %s" % exc)
             try:
                 raw_text = (event.message_str or "").strip()
                 if raw_text and await self._maybe_go_sleep(event, raw_text):
@@ -1442,6 +1497,8 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                     if await self._maybe_user_move(event, raw_text):
                         return
                     await self.state._apply_user_schedule_change(event.unified_msg_origin, raw_text)
+                    # 「今天要上班 / 公司叫我」：休息日骨架自己改成上班日
+                    await self.state._maybe_fix_workday(event.unified_msg_origin, raw_text)
             except Exception:
                 pass
             try:
@@ -1897,6 +1954,111 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
 
 
 
+    def _strip_context_images(self, req):
+        """把历史里残留的 base64 换成 [图片]，只影响本轮请求。"""
+        try:
+            ctx = getattr(req, "contexts", None)
+            if not isinstance(ctx, list):
+                return
+            for m in ctx:
+                parts = m.get("content") if isinstance(m, dict) else None
+                if not isinstance(parts, list):
+                    continue
+                new = [p for p in parts
+                       if not (isinstance(p, dict) and p.get("type") == "image_url")]
+                m["content"] = new if new else [{"type": "text", "text": "[图片]"}]
+        except Exception:
+            pass
+
+    #: 他说「照这个姿势 / 学这个 / 这样拍」：把上一条图的转述当成姿势参考
+    POSE_REF_WORDS = ("这个姿势", "照这个", "学这个", "同款", "这样拍", "这个动作",
+                      "这张的", "跟着拍", "模仿", "照着拍")
+
+    def _photo_pose_reference(self, text: str) -> str:
+        """他发图 + 说要照这个姿势：把图里的姿势/机位交给出图，人物还是她自己。"""
+        try:
+            caption = str(getattr(self, "_last_image_caption", "") or "").strip()
+            at = float(getattr(self, "_last_image_caption_at", 0) or 0)
+        except Exception:
+            return ""
+        if not caption:
+            return ""
+        import time as _time
+        if _time.time() - at > 300:
+            return ""
+        if not any(word in str(text or "") for word in self.POSE_REF_WORDS):
+            return ""
+        return ("照刚发的图摆姿势（只学姿势、手的位置、机位和构图；"
+                "人物还是你自己，衣服以今天的穿搭为准，不要照搬图里的衣服和场景）："
+                + caption[:120])
+
+    async def _caption_images(self, event, req):
+        """当轮图片先转述成一句话，再把图片摘掉：模型看文字，历史不背 base64。"""
+        try:
+            urls = list(getattr(req, "image_urls", None) or [])
+            self._strip_context_images(req)
+            if not urls:
+                return
+            provider = None
+            try:
+                # 拉取当前对话模型，别写死供应商 id
+                provider = await self.context.get_using_provider_async(event.unified_msg_origin)
+            except Exception:
+                provider = None
+            if provider is None:
+                return
+            prompt = ("用中文客观描述这张图：谁在做什么、场景、衣着、神态、画面里的文字。"
+                      "不要添加图里没有的内容，不要评价，120 字以内。")
+            resp = await provider.text_chat(prompt=prompt, image_urls=urls,
+                                            request_max_retries=1)
+            text = (getattr(resp, "completion_text", "") or "").strip()
+            if not text:
+                return
+            if TextPart is not None:
+                try:
+                    req.extra_user_content_parts.append(
+                        TextPart(text="<image_caption>%s</image_caption>" % text))
+                except Exception:
+                    req.extra_user_content_parts.append(
+                        {"type": "text", "text": "<image_caption>%s</image_caption>" % text,
+                         "_no_save": True})
+            else:
+                req.extra_user_content_parts.append(
+                    {"type": "text", "text": "<image_caption>%s</image_caption>" % text,
+                     "_no_save": True})
+            try:
+                import time as _time
+                self._last_image_caption = text
+                self._last_image_caption_at = _time.time()
+            except Exception:
+                pass
+            logger.info("[amo] 图片已转述 %d 张：%s" % (len(urls), text[:60]))
+        except Exception as exc:
+            logger.debug("[amo] 图片转述失败: %s" % exc)
+
+    def _trim_contexts(self, req, keep_rounds=None):
+        """Amo 拿回上下文主权：只留最近几轮 + 摘要，其余靠记忆检索。
+        设 amo_context_keep_rounds=0 关闭；4 表示保留最近 4 轮（8 条）。
+        """
+        try:
+            keep = keep_rounds if keep_rounds is not None else self.cfg_int("amo_context_keep_rounds", 30)
+            keep = int(keep)
+            if keep <= 0:
+                return
+            ctx = getattr(req, "contexts", None)
+            if not isinstance(ctx, list) or len(ctx) <= keep * 2 + 1:
+                return
+            head = [m for m in ctx if isinstance(m, dict) and m.get("role") == "system"]
+            tail = ctx[-(keep * 2):]
+            tail_ids = {id(m) for m in tail}
+            head = [m for m in head if id(m) not in tail_ids]
+            before = len(ctx)
+            req.contexts = head + tail
+            logger.info("[amo] 上下文收权：%d -> %d 条（最近 %d 轮 + %d 条摘要）"
+                        % (before, len(req.contexts), keep, len(head)))
+        except Exception as exc:
+            logger.debug("[amo] 上下文收权失败: %s" % exc)
+
     @filter.on_llm_request()
     async def on_llm_request(self, event: AstrMessageEvent, req):
         try:
@@ -1905,11 +2067,30 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 return
             if self._looks_like_command(event.message_str or ""):
                 return
+            await self._caption_images(event, req)
+            self._trim_contexts(req)
             context_text = await self._dynamic_context(event)
             # 只走官方推荐的 extra_user_content_parts（临时 part）注入。
             # 绝不能改 req.system_prompt：那里放每轮都变的内容会打散系统提示词前缀，
             # 破坏模型侧缓存（成本涨 7-20 倍），上架审核也会因此被拒。
             body = "<amo_state>\n" + context_text + "\n</amo_state>"
+            # 2026-11-21：亲密称呼的边界（非恋人一律不许叫）
+            try:
+                try:
+                    from .amo_core.boundary import boundary_notice, cold_rule
+                except Exception:
+                    from amo_core.boundary import boundary_notice, cold_rule  # type: ignore
+                if getattr(event, "amo_boundary", False):
+                    sender = ""
+                    try:
+                        sender = str(event.get_sender_name() or "")
+                    except Exception:
+                        sender = ""
+                    body += boundary_notice(sender)
+                elif not getattr(event, "amo_sender_is_lover", False):
+                    body += cold_rule()
+            except Exception as exc:
+                logger.debug("[amo] 边界提示注入失败: %s" % exc)
             try:
                 wish = self.db.kv_get("device_wish", {}) or {}
                 if isinstance(wish, dict) and wish.get("model"):
@@ -2010,6 +2191,14 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                                 str(looked.get("prompt") or "")[:50]))
             except Exception as exc:
                 logger.debug("[amo] 照镜子上下文注入失败: %s" % exc)
+            # 压缩后原文示例变少，她会学着不带标点：这里把说话习惯钉死
+
+            # 认完脸再摘图：_incoming_self_lines 要用原图判断「这是不是我」
+            try:
+                req.image_urls = []
+                self._strip_context_images(req)
+            except Exception:
+                pass
             parts = getattr(req, "extra_user_content_parts", None)
             if parts is None:
                 return
@@ -2249,6 +2438,42 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 "像平常一样说一句就行，别重复金额。"
                 % self._money_text(paid))
 
+    @filter.llm_tool(name="amo_recall_history")
+    async def amo_recall_history(self, event, when: str = "", keyword: str = "") -> str:
+        """翻以前的聊天记录。想不起某天跟他说过什么、他答应过什么、某件事的前因时用。
+
+        Args:
+            when(string): 时间说法，例如「昨天」「前天下午」「11月20日」；留空就取最近几条。
+            keyword(string): 关键词，只想找跟某件事有关的就填，留空表示不筛。
+        """
+        try:
+            import time as _time
+
+            mem = self._data_mem()
+            if mem is None:
+                return "记忆库没连上，翻不了。"
+            res = await mem.recall_messages(
+                self._data_bot_id(), str(when or ""),
+                umo=event.unified_msg_origin, limit=60,
+            )
+            rows = (res or {}).get("messages") or []
+            kw = str(keyword or "").strip()
+            if kw:
+                rows = [r for r in rows if kw in str(r.get("content") or "")]
+            if not rows:
+                return "那段我没找到印象。"
+            lines = []
+            for r in rows[-30:]:
+                who = "他" if str(r.get("role")) == "user" else "我"
+                ts = int(r.get("created_at") or 0)
+                hm = _time.strftime("%m-%d %H:%M", _time.localtime(ts)) if ts else ""
+                lines.append("%s %s：%s" % (hm, who, str(r.get("content") or "")[:200]))
+            label = str((res or {}).get("label") or "")
+            return ("（%s）\n" % label if label else "") + "\n".join(lines)
+        except Exception as exc:
+            logger.debug("[amo] amo_recall_history 失败: %s" % exc)
+            return "翻记录的时候出错了。"
+
     @filter.llm_tool(name="schedule_view")
     async def schedule_view(self, event, day: str = "today") -> str:
         """回想自己某一天打算做什么、做过什么。想不起今天或明天的安排时用。
@@ -2341,6 +2566,54 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         except Exception as exc:
             logger.debug("[amo] schedule_edit 失败: %s" % exc)
             return "没改成…"
+
+    async def _split_multiline_reply(self, event, text):
+        """分段发送：**一句一句地**发，每句都按它自己的字数等一遍。
+
+        2026-11-21（她说晓沫已经开始被人怀疑是 bot）：
+        第 1 段发出去 → 按第 2 段自己的字数算打字时间 + 一段基础停顿 → 发第 2 段
+        → 再算第 3 段…… 不再把剩下的句子连着甩出去，也不再把每段都卡同一个
+        8 秒上限（固定间隔最像机器）。
+        """
+        try:
+            raw = str(text or "").strip()
+            if not raw:
+                return raw
+            parts = segment_text(raw, keep_punc=True, min_len=8, max_len=42,
+                                 max_segments=5, mode="punct")
+            if not parts:
+                return raw
+            mc = globals().get("MessageChain")
+            umo = event.unified_msg_origin
+            if len(parts) >= 2 and mc is None:
+                return raw
+            try:
+                from .send_bookkeeping import typing_seconds
+            except Exception:
+                try:
+                    from send_bookkeeping import typing_seconds
+                except Exception:
+                    typing_seconds = None
+            budget = 28.0          # 一轮回复别拖过 28 秒，否则事件先超时
+            spent = 0.0
+            for idx, seg in enumerate(parts):
+                # 第 2 段起先来一段基础停顿（像看完上一条再动手），第一段只思考一小下
+                base = random.uniform(0.8, 2.2) if idx else random.uniform(0.3, 0.9)
+                typing_time = typing_seconds(self, seg) if typing_seconds else 0.0
+                wait = base + max(0.0, float(typing_time or 0.0))
+                if spent + wait > budget:
+                    # 剩下的段按剩余预算摊平，宁可短一点也不能把话憋着不发
+                    wait = max(0.4, (budget - spent) / max(1, len(parts) - idx))
+                await asyncio.sleep(wait)
+                spent += wait
+                if idx < len(parts) - 1:
+                    await self.context.send_message(umo, mc([Comp.Plain(seg)]))
+            logger.info("[amo] 分段发送 %d 条：%s"
+                        % (len(parts), "｜".join(p[:16] for p in parts)))
+            return parts[-1]
+        except Exception as exc:
+            logger.warning("[amo] 分段失败，整条发: %s" % exc)
+            return str(text or "")
 
     @filter.on_decorating_result()
     async def on_decorating_result(self, event: AstrMessageEvent):
@@ -2568,7 +2841,21 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                         result.chain = [Comp.Plain(text)]
                 except Exception as _guard_exc:
                     logger.debug("[amo] 守护后处理失败，用原文: %s" % _guard_exc)
+            if not getattr(event, "amo_sender_is_lover", False):
+                try:
+                    try:
+                        from .amo_core.boundary import scrub_intimate
+                    except Exception:
+                        from amo_core.boundary import scrub_intimate  # type: ignore
+                    text, _hits = scrub_intimate(text)
+                    if _hits:
+                        logger.info("[amo] 拦下越界称呼：%s" % "、".join(_hits))
+                        if getattr(event, "amo_boundary", False) and not text.strip("你，。！？ 	\n"):
+                            text = "想得美。这种事只跟我对象说得着。"
+                except Exception as exc:
+                    logger.debug("[amo] 称呼清洗失败: %s" % exc)
             text = self._trim_reply(text)
+            text = await self._split_multiline_reply(event, text)
             result.chain = [Comp.Plain(text)]
 
             # 守护接管「说出去」：它润色分段并逐条发；发成了这里只补记账。
@@ -3188,3 +3475,15 @@ try:  # 失败不影响终端本身
 except Exception as _e:  # pragma: no cover
     AmoMemoryPlugin = None  # type: ignore
     print(f"[DeepSeek Amo] 记忆合入失败：{_e}")
+
+
+def market_set_scenes(style) -> list:
+    """市场整套 → 衣柜场景标签（寝衣只在家/睡觉穿，汉服能穿出门）。"""
+    text = str(style or "")
+    if "寝衣" in text or "睡衣" in text:
+        return ["sleep", "home"]
+    if "JK" in text or "百褶" in text:
+        return ["casual", "out"]
+    if "日常" in text:
+        return ["casual", "out", "work"]
+    return ["casual", "out", "formal"]

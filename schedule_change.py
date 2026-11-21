@@ -287,3 +287,60 @@ def apply_change(items: list[dict], change: dict, now: datetime.datetime,
             changed = True
         out.append(row)
     return out if changed else items
+
+
+# ---------------------------------------------------------------
+# 她说「今天要上班 / 公司叫我」：休息日骨架要自己改成上班日
+# （2026-11-21：周六排成休息日，上午公司电话打来，日程却还写逛商场）
+# ---------------------------------------------------------------
+WORK_FACT_WORDS = ("上班", "去公司", "回公司", "在公司", "公司叫", "公司让", "公司有事",
+                   "公司电话", "加班", "单位", "工位", "领导叫", "被叫回公司")
+WORK_NEGATIVE_WORDS = ("不用上班", "不上班", "不去公司", "不用去公司", "不用去",
+                       "请假", "休息", "放假", "没去公司")
+
+#: (起, 止, 活动, 地点, zone, category)：现在→下班之间的格按这个改
+WORK_SLOTS = (
+    (6 * 60, 12 * 60, "在单位上班，处理手头的事", "公司·工位", "work", "work"),
+    (12 * 60, 13 * 60, "在公司附近吃午饭", "公司附近", "work", "meal"),
+    (13 * 60, 18 * 60, "在单位上班", "公司·工位", "work", "work"),
+    (17 * 60, 18 * 60, "下班，坐车回家", "路上", "commute", "commute"),
+)
+
+
+def workday_fact(text: str) -> bool:
+    """这句话是不是在说「我今天要上班 / 在公司 / 被公司叫」。"""
+    raw = str(text or "")
+    if not raw or any(word in raw for word in WORK_NEGATIVE_WORDS):
+        return False
+    return any(word in raw for word in WORK_FACT_WORDS)
+
+
+def apply_workday(items, now_min: int, workplace: str = ""):
+    """把今天从现在到下班之间的格改成上班/午饭/下班，返回 (新列表, 改了几格)。
+
+    已经过去的格不动；19:00 以后（到家）不动；睡觉格不动。
+    ``workplace`` 是世界观里的单位名（人格识别的），没有就用「公司·工位」。
+    """
+    place_text = str(workplace or "").strip() or "公司·工位"
+    out = []
+    changed = 0
+    for item in items or []:
+        if not isinstance(item, dict):
+            out.append(item)
+            continue
+        row = dict(item)
+        start = _hhmm_to_min(row.get("start"))
+        if start >= now_min and start < 19 * 60 and row.get("category") != "sleep":
+            for begin, end, activity, place, zone, category in WORK_SLOTS:
+                if begin <= start < end:
+                    row["activity"] = activity
+                    row["place"] = place_text if category in ("work", "commute") else place
+                    row["zone"] = zone
+                    row["category"] = category
+                    row["detail"] = ""
+                    row["spot"] = ""
+                    row["transit"] = "地铁" if category in ("work", "commute") else ""
+                    changed += 1
+                    break
+        out.append(row)
+    return out, changed

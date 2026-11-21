@@ -1226,7 +1226,9 @@ class HumanState:
 
             d = _dt.date.fromisoformat(str(day))
             is_weekend = d.weekday() >= 5
-            picked = pick_day_type(self._day_types(), is_weekend, str(day))
+            # 职业来自世界观（人格识别出来的）：护士周末也可能上班，
+            # 家庭主妇周中也不排上班日。
+            picked = pick_day_type(self._day_types(), is_weekend, str(day), self.worldview)
             trip = self._active_trip(str(day))
             if trip and str(trip.get("city") or "") != _CITY_DEFAULT:
                 # 人在外面旅游，日子类型就不能是「宅家日」，否则骨架一整天空在家
@@ -1269,6 +1271,122 @@ class HumanState:
         except Exception as exc:
             logger.debug("[amo] 按话改日程失败: %s" % exc)
 
+    def _work_place_name(self) -> str:
+        """世界观里的单位短名：智脑科技（贵阳）有限公司 → 智脑科技·公司。"""
+        try:
+            raw = str((self.worldview or {}).get("workplace") or "")
+        except Exception:
+            raw = ""
+        raw = raw.replace("\u3000", " ").strip()
+        if not raw:
+            return ""
+        name = re.split(r"[（(]", raw)[0].strip()[:12]
+        return (name + "·公司") if name else ""
+
+    async def _maybe_fix_workday(self, umo, text: str) -> bool:
+        """她说今天要上班/公司叫她：休息日骨架改成上班日，日程和穿搭一起重排。
+
+        2026-11-21：周六被排成休息日，上午「公司电话就打来了」，
+        日程却还写着逛商场——出图、穿搭、日记全跟着错。日程不能等人手改。
+        """
+        try:
+            from ..schedule_change import apply_workday, workday_fact
+        except Exception:
+            try:
+                from schedule_change import apply_workday, workday_fact  # type: ignore
+            except Exception:
+                return False
+        try:
+            if not workday_fact(text):
+                return False
+            today = today_str()
+            current = self.db.kv_get("day_type_" + today, {}) or {}
+            if str((current or {}).get("id") or "") in ("workday", "overtime"):
+                return False
+            now = _clock_now()
+            now_min = now.hour * 60 + now.minute
+            if now_min >= 19 * 60:
+                return False
+            items = self.schedule.get(today) or self.db.get_schedule(today) or []
+            if not items:
+                return False
+            fixed, changed = apply_workday(items, now_min, self._work_place_name())
+            if not changed:
+                return False
+            workday = next(
+                (item for item in self._day_types() if str(item.get("id") or "") == "workday"),
+                None,
+            )
+            if workday:
+                self.db.kv_set("day_type_" + today, workday)
+            self.schedule[today] = fixed
+            try:
+                self.db.kv_set("schedule", self._sanitize_schedule(self.schedule))
+                self.db.save_schedule(today, fixed)
+            except Exception:
+                pass
+            try:
+                self.p._rewrite_today_schedule(today)
+            except Exception as exc:
+                logger.debug("[amo] 上班日重排穿搭失败: %s" % exc)
+            logger.info("[amo] 你说今天要上班，日程已改成上班日（%d 格：现在→下班）" % changed)
+            return True
+        except Exception as exc:
+            logger.debug("[amo] 上班事实纠偏失败: %s" % exc)
+            return False
+
+    def _auto_fix_workday_self(self, today: str, items) -> bool:
+        """骨架里写着公司/上班、日子类型却是休息日：引擎自己纠偏成上班日。
+
+        不靠她开口：2026-11-21 周六被排成休息日，上午日程自己写了
+        「公司电话就打来了」，后面却还是逛商场——现在看到就改。
+        """
+        try:
+            from ..schedule_change import apply_workday
+        except Exception:
+            try:
+                from schedule_change import apply_workday  # type: ignore
+            except Exception:
+                return False
+        try:
+            current = self.db.kv_get("day_type_" + today, {}) or {}
+            if str((current or {}).get("id") or "") in ("workday", "overtime"):
+                return False
+            text = " ".join(
+                "%s %s" % (item.get("activity") or "", item.get("place") or "")
+                for item in (items or []) if isinstance(item, dict)
+            )
+            if not any(word in text for word in ("公司", "上班", "单位", "加班")):
+                return False
+            now = _clock_now()
+            now_min = now.hour * 60 + now.minute
+            if now_min >= 19 * 60:
+                return False
+            fixed, changed = apply_workday(items, now_min, self._work_place_name())
+            if not changed:
+                return False
+            workday = next(
+                (item for item in self._day_types() if str(item.get("id") or "") == "workday"),
+                None,
+            )
+            if workday:
+                self.db.kv_set("day_type_" + today, workday)
+            self.schedule[today] = fixed
+            try:
+                self.db.kv_set("schedule", self._sanitize_schedule(self.schedule))
+                self.db.save_schedule(today, fixed)
+            except Exception:
+                pass
+            try:
+                self.p._rewrite_today_schedule(today)
+            except Exception as exc:
+                logger.debug("[amo] 上班日自纠重排穿搭失败: %s" % exc)
+            logger.info("[amo] 日程里出现公司/上班，休息日已自动改成上班日（%d 格）" % changed)
+            return True
+        except Exception as exc:
+            logger.debug("[amo] 上班事实自纠失败: %s" % exc)
+            return False
+
     async def ensure_schedule(self, umo, force=False):
         """每天只生成一次主干；点击二级卡片时再动态生成这一小时的日记。"""
         today = today_str()
@@ -1281,6 +1399,13 @@ class HumanState:
             and context.get("version") == "backbone-v5"
         )
         day_type = self._today_day_type(today)
+        if existing and not force:
+            try:
+                if self._auto_fix_workday_self(today, existing):
+                    existing = (self.schedule.get(today)
+                                or self.db.get_schedule(today) or existing)
+            except Exception as exc:
+                logger.debug("[amo] 上班事实自纠失败: %s" % exc)
         if existing and version_ok and not force:
             hourly = self._hourly_schedule(existing)
             # 老日程没有 outfit、或穿搭规则升级过：补一次并落盘，不用等第二天重新生成

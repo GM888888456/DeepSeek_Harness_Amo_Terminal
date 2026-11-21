@@ -251,6 +251,14 @@ class OutfitMixin:
         """衣柜按内置汉服/JK 套装重建；只在版本标记不对时做一次，旧衣服全清。"""
         if self.wardrobe is None:
             return
+        # 版本标记没变、库里也有衣服：不重建。
+        # 以前每次启动都重建 120 件并重排今天，她手改的日程/穿搭会被冲掉。
+        try:
+            if (str(self.db.kv_get("wardrobe_seed", "")) == self.WARDROBE_SEED
+                    and self.wardrobe.count() > 0):
+                return
+        except Exception:
+            pass
         items = (list(hanfu_jk_items())
                  if hanfu_jk_items is not None else [])
         if not items:
@@ -270,6 +278,9 @@ class OutfitMixin:
             # 旧版「市场目录」播种的现代衣服不再带回来
             if str(row.get("note") or "") != "市场买":
                 continue
+            # 2026-11-21：丝袜全部下架，买过的也不再带回来（出图必被拒）
+            if "丝袜" in name:
+                continue
             items.append(row)
             names.add(name)
         try:
@@ -284,16 +295,13 @@ class OutfitMixin:
             logger.info("[amo] 衣柜快照已刷新：%d 件" % self.wardrobe.count())
         except Exception as exc:
             logger.warning("[amo] 衣柜快照刷新失败: %s" % exc)
-        # 撤私密功能后：旧 override 里如果有私密/肚兜/内裤，清掉并重排今天
+        # 衣柜重建后按新衣服重排今天。
+        # 2026-11-21：不再清「私密」override——那是撤私密功能时的旧逻辑，
+        # 11-20 私密 10 套已经回来了；她在家里选的私密套不能被重建顺手抹掉。
         try:
-            day = today_str()
-            override = self.db.kv_get("outfit_override:" + day, {}) or {}
-            name = str((override or {}).get("name") or "")
-            if name and any(word in name for word in ("私密", "肚兜", "内裤")):
-                self.db.kv_set("outfit_override:" + day, {})
-            self._rewrite_today_schedule(day)
+            self._rewrite_today_schedule(today_str())
         except Exception as exc:
-            logger.debug("[amo] 清理旧换装/重排日程失败: %s" % exc)
+            logger.debug("[amo] 重建衣柜后重排今日日程失败: %s" % exc)
         self.db.kv_set("wardrobe_seed", self.WARDROBE_SEED)
         logger.info("[amo] 衣柜已重建（内置汉服/JK）：%d 件" % len(items))
 

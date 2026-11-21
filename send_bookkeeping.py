@@ -7,30 +7,64 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import random
 import time
 
 from astrbot.api import logger
 
 
 async def set_typing(event, typing: bool) -> None:
-    """向平台发送「正在输入」状态；仅 aiocqhttp (QQ) 支持，其余静默忽略。"""
+    """已停用：TIM / 新版 QQ 不再显示「对方正在输入」，她会显得像机器人。
+
+    2026-11-21 她的原话：「不要正在输入这个啊？Tim 和很多版本都没有这个了」。
+    这里保留空实现，免得别处的调用报错；群里/私聊都只靠停顿模拟打字。
+    """
+    return None
+
+
+def typing_seconds(plugin, text, min_seconds=0.6, max_seconds=12.0) -> float:
+    """按这一段自己的字数算「打完这段话要多久」，只算不睡。
+
+    · 基础 700ms + 每字 400ms + 标点补一点（都来自配置 typing_*）；
+    · 随机 ±25%，别让每次间隔都一样——固定节奏最容易露馅；
+    · 上下限 min_seconds ~ max_seconds（默认 0.6~12 秒，不再统一卡 8 秒）。
+    """
     try:
-        if event.get_platform_name() != "aiocqhttp":
-            return
-        from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
-        if not isinstance(event, AiocqhttpMessageEvent):
-            return
-        user_id = event.message_obj.sender.user_id
-        if not user_id:
-            return
-        await event.bot.api.call_action(
-            "set_input_status",
-            user_id=user_id,
-            event_type=1 if typing else 0,
-        )
+        base = int(float(plugin.cfg_int("typing_base_ms", 700)))
+        per_char = int(float(plugin.cfg_int("typing_per_char_ms", 400)))
+        cap_ms = int(float(plugin.cfg_int("typing_max_ms", 20000)))
+    except Exception:
+        base, per_char, cap_ms = 700, 400, 20000
+    clean = "".join(str(text or "").split())
+    if not clean:
+        return 0.0
+    pauses = sum(clean.count(ch) for ch in ("。", "！", "？", "!", "?", "…"))
+    commas = sum(clean.count(ch) for ch in ("，", ",", "、"))
+    value = min(base + len(clean) * per_char + pauses * 70 + commas * 35, cap_ms)
+    value *= random.uniform(0.75, 1.25)
+    return max(min_seconds, min(max_seconds, value / 1000.0))
+
+
+async def typing_pause(plugin, event, text, min_seconds=0.6, max_seconds=12.0,
+                       first_delay=0.0) -> float:
+    """模拟「正在打字」的停顿（不点亮「正在输入」），返回实际停了几秒。
+
+    2026-11-21：守护插件不在部署里，`guard_bridge` 的 typing 任务从没有执行者，
+    群聊回复又是一整段 —— 所以这里补终端自带的实现。只停，不发任何状态。
+    """
+    try:
+        enable = getattr(plugin, "cfg_bool", None)
+        if callable(enable) and not enable("typing_simulate", True):
+            return 0.0
     except Exception:
         pass
+    seconds = typing_seconds(plugin, text, min_seconds, max_seconds)
+    if seconds <= 0:
+        return 0.0
+    await asyncio.sleep(max(0.0, float(first_delay or 0.0)) + seconds)
+    return seconds
 
 
 async def save_to_conversation_history(context, event, content: str) -> None:

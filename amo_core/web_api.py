@@ -874,8 +874,10 @@ class WebApiMixin:
         except Exception:
             ok, place = True, ""
         if not ok:
-            return {"code": 1, "msg": "她现在在%s，这类衣服不能在外面换" % place}
+            return {"code": 1, "msg": "她现在在%s，私密衣物只在家换" % place}
         data = self.outfits.change_outfit(day, name, from_hour=str(payload.get("from") or ""))
+        if not data:
+            return {"code": 1, "msg": "现在不能换这套（私密衣物只在家，而且这一格不能是出门/去公司）"}
         items = self.state.schedule.get(day) or self.db.get_schedule(day) or []
         items = self.outfits.assign(self.state._hourly_schedule(items), day)
         self.state.schedule[day] = items
@@ -884,7 +886,8 @@ class WebApiMixin:
             self.db.save_schedule(day, items)
         except Exception:
             pass
-        return {"code": 0, "msg": "换好了：" + data.get("name", name), "data": data}
+        label = str(data.get("set") or data.get("name") or name)
+        return {"code": 0, "msg": "换好了：" + label + "（整套一起穿）", "data": data}
 
     async def api_scenic_kb_regen(self):
         await self._ensure_ready()

@@ -66,9 +66,12 @@ HOME_CHANGE_WORDS = ("洗澡", "冲个澡", "换家居服", "换上家居服", "
 
 # 贴身穿的 / 睡觉穿的：在外面不能换，换了也不能说
 PRIVATE_WEAR_WORDS = (
-    "肚兜", "旗袍睡", "睡衣", "睡裙", "睡袍", "寝衣", "家居服", "内衣", "文胸", "胸罩", "内裤", "吊带",
-    "丝袜", "比基尼", "泳装", "泳衣", "泳裤", "浴巾", "浴袍",
+    "私密", "肚兜", "旗袍睡", "睡衣", "睡裙", "睡袍", "寝衣", "家居服", "内衣", "文胸", "胸罩", "内裤", "吊带",
+    "丝袜", "白丝", "比基尼", "泳装", "泳衣", "泳裤", "浴巾", "浴袍",
 )
+
+#: 出现在**地点**里就算不在家：私密衣服和私密照一律不许
+AWAY_WORDS = ("公司", "办公室", "单位", "工位", "学校", "店里")
 HOME_PLACES = ("家", "小窝", "公寓", "住处", "宿舍", "房间", "卧室")
 
 
@@ -84,6 +87,20 @@ def at_home(activity):
     if zone in ("home", "bedroom"):
         return True
     return any(word in place for word in HOME_PLACES)
+
+
+def private_ok(activity):
+    """私密衣服/私密照的硬闸：**在家就能穿**，只按地点判。
+
+    2026-11-21 她在家那格写着「公司电话就打来了」，那是叙述不是地点；
+    当时按文字判成在公司，结果在家也换不了私密。现在只看 place/zone：
+    地点在家 → 能穿；地点是公司/路上/商场 → 不能穿（出门那几格也不写私密）。
+    """
+    activity = activity or {}
+    place = str(activity.get("place") or "")
+    if any(word in place for word in AWAY_WORDS):
+        return False
+    return at_home(activity)
 
 
 class OutfitEngine:
@@ -245,14 +262,33 @@ class OutfitEngine:
                 "ts": float(value.get("ts") or 0)}
 
     def change_outfit(self, day, name, from_hour="", note=""):
-        """他让她换一套：写进今天，从这一小时开始生效，直到睡觉。"""
+        """他让她换一套：写进今天，从这一小时开始生效，直到睡觉。
+
+        面板上点的是「套名｜件名」里的一件；这里先按套名补成整套，
+        再判私密：私密套只在家能换，外面（含「公司电话」那种家）一律拒绝。
+        """
         name = str(name or "").strip()[:200]
         if not name:
             return {}
+        set_name = name.split("｜", 1)[0].strip() if "｜" in name else name.strip()
+        whole = ""
+        try:
+            whole = str(self.compose_set(set_name) or "").strip()
+        except Exception:
+            whole = ""
+        if whole:
+            name = whole
+        if is_private_wear(name):
+            try:
+                activity = self.plugin.state.current_activity() or {}
+            except Exception:
+                activity = {}
+            if not private_ok(activity):
+                return {}
         hour = str(from_hour or time.strftime("%H:00"))[:5]
         if not re.match(r"^\d{2}:\d{2}$", hour):
             hour = time.strftime("%H:00")
-        payload = {"name": name, "from": hour, "ts": time.time(),
+        payload = {"name": name, "set": set_name, "from": hour, "ts": time.time(),
                    "note": str(note or "")[:80]}
         try:
             self.plugin.db.kv_set(self._override_key(day), payload)
@@ -271,7 +307,7 @@ class OutfitEngine:
             activity = self.plugin.state.current_activity() or {}
         except Exception:
             activity = {}
-        if at_home(activity):
+        if private_ok(activity):
             return True, ""
         place = str(activity.get("place") or "").strip() or "外面"
         return False, place
@@ -283,11 +319,16 @@ class OutfitEngine:
             pass
 
     def _apply_override(self, items, day):
-        """把手动换的那套写回日程：从那一小时到睡觉前都穿它。"""
+        """把手动换的那套写回日程：从那一小时到睡觉前。
+
+        2026-11-21：私密套（肚兜/内裤/白丝…）只写进「在家」的格。
+        以前从换衣那一小时起一路盖到睡前，她在家换的私密，出门去商场还穿着。
+        """
         data = self.override(day)
         if not data:
             return items
         start = self._minutes(data["from"])
+        private = is_private_wear(data["name"])
         for item in items:
             if not isinstance(item, dict):
                 continue
@@ -295,8 +336,12 @@ class OutfitEngine:
                 if self._minutes(item.get("start")) >= start:
                     break
                 continue
-            if self._minutes(item.get("start")) >= start:
-                item["outfit"] = data["name"]
+            if self._minutes(item.get("start")) < start:
+                continue
+            if private and not private_ok(item):
+                # 在外面：保留 assign 写好的那套，回家再穿私密
+                continue
+            item["outfit"] = data["name"]
         return items
 
     @staticmethod
@@ -562,7 +607,8 @@ class OutfitEngine:
         data = self.override(day) if day else {}
         if data and self._minutes(activity.get("start")) >= self._minutes(data["from"]):
             if self.scene_of(activity) != "sleep":
-                return data["name"]
+                if not is_private_wear(data["name"]) or private_ok(activity):
+                    return data["name"]
         own = str(activity.get("outfit") or "").strip()
         if own:
             return self._whole_set(own)
