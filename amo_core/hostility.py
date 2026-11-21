@@ -229,7 +229,7 @@ def report_line(pet="", where="", attacker="", kind="", rng=None, avoid=""):
     """
     r = rng or random
     pet_text = (str(pet or "").strip() + "，") if str(pet or "").strip() else ""
-    where_text = ("「" + str(where).strip() + "」里") if str(where or "").strip() else "群里"
+    where_text = (str(where).strip() + "里") if str(where or "").strip() else "群里"
     who_text = str(attacker or "").strip() or "有个人"
     kind = str(kind or "")
     lines = _REPORT_LINES

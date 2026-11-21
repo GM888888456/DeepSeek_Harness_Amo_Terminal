@@ -32,7 +32,9 @@ except Exception:  # pragma: no cover
 
 from .shared import *
 
-LEGACY_DEFAULT_ADMIN = "3261748099"
+#: 旧版本曾把某个 QQ 号写死成默认管理员；这里留空 = 不再做那次清理。
+#: 真要清理，把号码填进配置 admin_uids 手动删掉即可，代码里不留任何账号。
+LEGACY_DEFAULT_ADMIN = ""
 
 
 class MiscMixin:

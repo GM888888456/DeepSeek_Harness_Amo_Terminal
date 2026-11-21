@@ -203,13 +203,28 @@ WORK_NAME_BAD_WORDS = ("平时", "一般", "通常", "经常", "每天", "每天
                        "早上", "晚上", "夜里", "下午", "上午", "中午", "平常")
 
 #: 日程/日记里不许出现他（8.8.0 的规则，12.7.0 照搬同事引擎后补回）：只有聊天里能提到他。
-HIS_WORDS = ("阿墨", "老公", "主人")
-HIS_TEXT_RE = re.compile(r"阿墨|老公|主人|(?<![其吉])他(?!们|人|处|时|乡|俩)")
+#: 具体怎么称呼（阿墨？哥哥？）由 amo_core/his_names 在运行时按「关系=相恋」的人灌进来，
+#: 这里只留通用称呼 —— 换号、换恋人都不用手改代码。
+try:
+    from .amo_core import his_names as _his_names
+except Exception:
+    try:
+        from amo_core import his_names as _his_names
+    except Exception:
+        _his_names = None
+
+HIS_WORDS = ("老公", "主人")
 _SENTENCE_END_RE = re.compile(r"(?<=[。！？!?；;\n])")
 
 
+def _his_re():
+    if _his_names is not None:
+        return _his_names.text_re()
+    return re.compile(r"老公|主人|(?<![其吉])他(?!们|人|处|时|乡|俩)")
+
+
 def has_him(text) -> bool:
-    return bool(HIS_TEXT_RE.search(str(text or "")))
+    return bool(_his_re().search(str(text or "")))
 
 
 def solo_text(text, fallback="") -> str:
@@ -217,8 +232,9 @@ def solo_text(text, fallback="") -> str:
     body = str(text or "")
     if not body:
         return fallback
+    _re = _his_re()
     kept = [part for part in _SENTENCE_END_RE.split(body)
-            if part and not HIS_TEXT_RE.search(part)]
+            if part and not _re.search(part)]
     out = re.sub(r"\s+", " ", "".join(kept)).strip()
     return out if len(out) >= 12 else fallback
 
@@ -1974,7 +1990,7 @@ class ScheduleEngine:
         if not prev or not cur:
             return False
         at_home = (
-            ("阿墨" in prev or "他" in prev)
+            bool(_his_re().search(prev))
             and any(word in prev for word in ("进门", "在家", "回来", "到家", "身边", "陪你", "坐在"))
         )
         alone = any(word in cur for word in ("还没回来", "不在家", "没回来", "一个人", "等他回来"))
@@ -2173,7 +2189,7 @@ class ScheduleEngine:
             "15. 允许复合情绪（发工资开心但感冒难受），别把情绪写扁平；\n"
             "16. 不许把账本金额抄进日记：基本/奖金/扣款/实发/余额的具体数字一律不写，"
             "只写“发工资了”“余额多了一点”这种感受；\n"
-            "17. 这一小时日程里只有你一个人：不要出现阿墨/老公/他，也不要写他来陪你、"
+            "17. 这一小时日程里只有你一个人：不要出现你的恋人/老公/他，也不要写他来陪你、"
             "他打电话来、他抱着你——想他可以，但不能写成他在现场；\n"
             "18. 只输出 JSON：{\"diary\":\"...\"}。"
         ) % (

@@ -115,7 +115,7 @@ class ScheduleDiaryMixin:
         if not prev or not cur:
             return False
         at_home = (
-            ("阿墨" in prev or "他" in prev)
+            ("他" in prev)
             and any(word in prev for word in ("进门", "在家", "回来", "到家", "身边", "陪你", "坐在"))
         )
         alone = any(word in cur for word in ("还没回来", "不在家", "没回来", "一个人", "等他回来"))

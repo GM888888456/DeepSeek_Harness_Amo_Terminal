@@ -34,7 +34,37 @@ from .shared import *
 
 
 
+def _panel_default_uid_of(plugin):
+    """面板调试用的默认 uid：恋人 → 管理员 → 最近有画像的人；都没有就空串。
+
+    以前这里写死了一个 QQ 号，换号或者别人用就不对了。
+    """
+    try:
+        for _name, uid in (plugin._lover_aliases() or {}).items():
+            if uid:
+                return str(uid)
+    except Exception:
+        pass
+    try:
+        admins = sorted(plugin.admin_uids or [])
+        if admins:
+            return str(admins[0])
+    except Exception:
+        pass
+    try:
+        for row in plugin.db.list_profiles("", 20):
+            if row.get("uid"):
+                return str(row["uid"])
+    except Exception:
+        pass
+    return ""
+
+
 class WebApiMixin:
+
+    def _panel_default_uid(self):
+        return _panel_default_uid_of(self)
+
 
     async def api_weather_brief(self):
         """面板用：当前天气一行摘要 + 配置里的城市（只读缓存）。"""
@@ -942,7 +972,7 @@ class WebApiMixin:
         data = data if isinstance(data, dict) else {}
         text = str(data.get("text") or "")
         reply = str(data.get("reply") or "")
-        uid = str(data.get("uid") or "302578963")
+        uid = str(data.get("uid") or self._panel_default_uid())
         engine = getattr(self, "draw", None)
         if engine is None:
             return {"code": 1, "msg": "画图引擎未加载"}
@@ -1005,7 +1035,7 @@ class WebApiMixin:
                 return True
 
             def get_sender_id(self):
-                return "302578963"
+                return str(data.get("uid") or self._panel_default_uid())
 
             def is_admin(self):
                 return False

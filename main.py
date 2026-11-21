@@ -1095,6 +1095,12 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
 
     async def initialize(self):
         await self._ensure_ready()
+        # 启动就把「他」的称呼灌好：日程/日记生成可能比第一条消息还早，
+        # 不灌的话「阿墨」这种具体人名拦不住（通用称呼「老公/主人/他」不用灌）。
+        try:
+            self._taunt_names()
+        except Exception as exc:
+            logger.debug("[amo] 启动灌恋人称呼失败: %s" % exc)
 
     async def terminate(self):
         self._running = False
@@ -1545,6 +1551,16 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
 
         self_names = _expand(self_names)
         lover_names = _expand(lover_names)
+        # 把恋人怎么被称呼灌进「他」的判定表（日程/日记里不许出现他）；
+        # 换号、换恋人、人格改名都跟着 profiles 走，代码里不写死人名。
+        try:
+            try:
+                from .amo_core import his_names as _his_names
+            except Exception:
+                from amo_core import his_names as _his_names  # type: ignore
+            _his_names.set_names(lover_names)
+        except Exception as exc:
+            logger.debug("[amo] 灌恋人称呼失败: %s" % exc)
         self._taunt_names_cache = (now, self_names, lover_names)
         return self_names, lover_names
 
@@ -1715,7 +1731,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                         logger.info("[amo] 有人攻击她/她的恋人（%s·%s 级%s）：%s"
                                     % (_taunt.get("kind"), _taunt.get("level"),
                                        "·强制回" if getattr(event, "amo_force_reply", False) else "",
-                                       raw_text[:40]))
+                                       re.sub(r"\d{5,}", "***", raw_text[:40])))
                         _can_report = bool(_named) or bool(event.is_private_chat())
                         if int(_taunt.get("level") or 0) >= 3 and _can_report:
                             try:

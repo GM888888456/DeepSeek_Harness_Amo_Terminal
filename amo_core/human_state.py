@@ -31,6 +31,7 @@ from .deps import *  # noqa: F401,F403  用到：ActivityCategory, Chain, DAY_PA
 from .consts import *  # noqa: F401,F403  用到：DIARY_WARM_VERSION, FRAGMENT_TAIL_RE, OUTFIT_VERSION, SCHEDULE_VERSION, SICK_STATUSES
 from .text import *  # noqa: F401,F403  用到：json_extract_list
 from .timeutil import *  # noqa: F401,F403  用到：_clock_now, _now, day_meta, in_minute_range, minutes_now, now_ts, parse_hhmm, today_str, weekday_cn
+from . import his_names  # 「他」的称呼表（不写死人名）
 from .util import *  # noqa: F401,F403  用到：clamp, md5_int, schedule_category_feel, to_float, to_int
 __all__ = [
     "HumanState",
@@ -1016,16 +1017,15 @@ class HumanState:
         except Exception:
             return "家"
 
-    #: 日程里不许凭空出现的人称
-    HIS_WORDS = ("他", "阿墨", "老公", "主人")
-    HIS_TEXT_RE = re.compile(r"阿墨|老公|主人|(?<![其吉])他(?!们|人|处|时|乡|俩)")
+    #: 日程里不许凭空出现的人称（「他」怎么称呼由 amo_core/his_names 在运行时给，
+    #  以前这里写死了「阿墨」，换号/换恋人/改人格就拦不住了）
     _HIS_SENT_SPLIT = re.compile(r"(?<=[。！？!?；;\n])")
     BODY_FRAGMENTS = ("肩上", "怀里", "身边", "腿上", "手臂", "胳膊",
                       "掌心", "额头", "嘴边", "枕边", "耳边", "身上")
 
     @classmethod
     def _has_him(cls, text):
-        return bool(cls.HIS_TEXT_RE.search(str(text or "")))
+        return his_names.mentions(text)
 
     @classmethod
     def _strip_his_from_text(cls, text, fallback=""):
@@ -1033,8 +1033,9 @@ class HumanState:
         body = str(text or "")
         if not body:
             return fallback
+        _re = his_names.text_re()
         kept = [part for part in cls._HIS_SENT_SPLIT.split(body)
-                if part and not cls.HIS_TEXT_RE.search(part)]
+                if part and not _re.search(part)]
         out = re.sub(r"\s+", " ", "".join(kept)).strip()
         return out if len(out) >= 12 else fallback
 
@@ -1110,7 +1111,7 @@ class HumanState:
                 cleaned = activity
                 for old, new in self.HIS_REWRITES:
                     cleaned = cleaned.replace(old, new)
-                cleaned = self.HIS_TEXT_RE.sub("", cleaned).strip("，,、~ 　")
+                cleaned = his_names.text_re().sub("", cleaned).strip("，,、~ 　")
                 # 删掉「他」之后只剩状语的残句也不能留：
                 # 「吹头发，顺便跟他闲聊两句」会被洗成「吹头发，顺便跟闲聊两句」。
                 broken = (len(cleaned) < 3 or self._has_him(cleaned)
