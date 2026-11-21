@@ -731,6 +731,32 @@ class TickerMixin:
         出图中转站超时、语音合成慢、日程生成的模型卡住 —— 这些都不该再拖死
         ``_tick()``：以前它们是直接 await 在心跳里的。
         """
+        # 日程最先做：以前它排在还款/股市/就医/天气后面，前面任何一个网络调用
+        # 卡住（天气接口不返回最典型），今天就没有日程，她开始自由发挥。
+        umo = self._last_umo or self._first_private_umo()
+        if umo:
+            try:
+                await self._hydrate_recent(umo, 30)
+            except Exception:
+                pass
+        if (
+            not self.state.schedule.get(today_str())
+            or self.db.kv_get("schedule_version", "") != SCHEDULE_VERSION
+            or not self.state.schedule_context(today_str())
+        ):
+            # 以前这里异常会冒到心跳外面被吞掉：日程一整天不生成、日志里一个字都没有
+            try:
+                await self.state.ensure_schedule(umo)
+            except Exception as exc:
+                logger.warning("[amo] 日程续生成失败（umo=%r）: %s" % (umo, exc))
+            else:
+                logger.info("[amo] 日程续生成走完：%d 格（umo=%r）"
+                            % (len(self.state.schedule.get(today_str()) or []), umo))
+        try:
+            self.state.apply_schedule_events()
+        except Exception:
+            pass
+
         try:
             await self._maybe_notify_repay()
         except Exception as exc:
@@ -755,28 +781,23 @@ class TickerMixin:
             await self._maybe_treat()
         except Exception as exc:
             logger.debug("[amo] 就医判断失败: %s" % exc)
-        await self.state.refresh_weather()
+        # 这一行以前没有 try：天气接口一抖，整个 _tick_slow 就断在这里，
+        # 后面的日程生成永远轮不到——于是「今天没有日程」，她开始自由发挥。
+        try:
+            import asyncio as _aio
+            await _aio.wait_for(self.state.refresh_weather(), timeout=25)
+        except Exception as exc:
+            logger.warning("[amo] 天气刷新失败/超时（不影响后面的日程）: %s" % exc)
         try:
             await self._maybe_weather_alert()
         except Exception as exc:
             logger.debug("[amo] 天气提醒失败: %s" % exc)
-
-        umo = self._last_umo or self._first_private_umo()
-        if umo:
-            try:
-                await self._hydrate_recent(umo, 30)
-            except Exception:
-                pass
-        if (
-            not self.state.schedule.get(today_str())
-            or self.db.kv_get("schedule_version", "") != SCHEDULE_VERSION
-            or not self.state.schedule_context(today_str())
-        ):
-            await self.state.ensure_schedule(umo)
+        # 社交圈：没群消息也能发现「有人加你好友 / 有人拉你进群」。
         try:
-            self.state.apply_schedule_events()
-        except Exception:
-            pass
+            await self._circle_refresh()
+        except Exception as exc:
+            logger.debug("[amo] 社交圈刷新失败: %s" % exc)
+
 
         now = now_ts()
         if now - self._last_relation_decay > 3600:

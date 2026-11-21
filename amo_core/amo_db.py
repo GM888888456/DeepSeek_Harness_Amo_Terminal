@@ -651,6 +651,20 @@ class AmoDB:
             ).fetchall()
         return [dict(row) for row in reversed(rows)]
 
+    def recent_umos(self, limit=50):
+        """最近出现过消息的会话（新的在前）。
+
+        心跳在重启后没有 ``_last_umo``，要靠它把今天的日程续生成出来；
+        以前只从 profiles 拿 private_umo，而那张表根本没有这列。
+        """
+        with self.lock:
+            rows = self.conn.execute(
+                "SELECT umo, MAX(id) AS mid FROM messages "
+                "WHERE umo IS NOT NULL AND umo != '' GROUP BY umo ORDER BY mid DESC LIMIT ?",
+                (int(limit),),
+            ).fetchall()
+        return [str(row["umo"]) for row in rows if row["umo"]]
+
     def messages_since_umo(self, umo, since_ts, limit=200):
         """按时间取某个会话的消息（新的在后）；判定「今天早上聊过没」用。"""
         with self.lock:

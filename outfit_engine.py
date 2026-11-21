@@ -15,6 +15,12 @@
 
 from __future__ import annotations
 
+try:
+    from astrbot.api import logger
+except Exception:  # pragma: no cover
+    import logging
+    logger = logging.getLogger(__name__)
+
 import random
 
 import re
@@ -249,15 +255,54 @@ class OutfitEngine:
     def _override_key(day):
         return "outfit_override:" + str(day)
 
+    def _known_wear(self, name) -> bool:
+        """这句穿搭在衣柜里还有吗。
+
+        2026-11-21 事故：她删了「私密」10 套，但 kv 里 `outfit_override:<day>`
+        还留着那一整套，`assign()` 最后又把 override 盖回日程，于是重建多少次
+        都是「白色肚兜＋内裤」。衣柜读不到（还没加载完 / 数据插件慢）时一律当「还在」，
+        宁可保留也不能误清她自己选的。
+        """
+        text = str(name or "").strip()
+        if not text:
+            return False
+        try:
+            rows = list(self.wardrobe().items() or [])
+        except Exception:
+            return True
+        names = {str(row.get("name") or "").strip() for row in rows
+                 if str(row.get("name") or "").strip()}
+        if not names:
+            return True
+        pieces = [piece.strip() for piece in re.split(r"[，,]", text) if piece.strip()]
+        if any(piece in names for piece in pieces):
+            return True
+        # 件名写法可能改过：只要「套名」还认得出来就算在
+        heads = {piece.split("｜", 1)[0].strip() for piece in pieces if piece}
+        known = {item.split("｜", 1)[0].strip() for item in names if "｜" in item}
+        return bool(heads & known)
+
     def override(self, day):
-        """他今天让她换的那套：{"name": "...", "from": "18:00"}。"""
+        """他今天让她换的那套：{"name": "...", "from": "18:00"}。
+
+        读的时候先证伪：这套衣服已经不在衣柜里（换了衣柜 / 删了套）就当场清掉，
+        不再让它盖回日程。
+        """
         try:
             value = self.plugin.db.kv_get(self._override_key(day), {}) or {}
         except Exception:
             value = {}
         if not isinstance(value, dict) or not str(value.get("name") or "").strip():
             return {}
-        return {"name": str(value.get("name")).strip(),
+        name = str(value.get("name")).strip()
+        if not self._known_wear(name):
+            logger.warning("[amo] 手动换装那套已经不在衣柜里，丢弃 override：%s" % name[:50])
+            try:
+                self.plugin.db.kv_set(self._override_key(day), {})
+            except Exception:
+                pass
+            return {}
+        return {"name": name,
                 "from": str(value.get("from") or "00:00")[:5],
                 "ts": float(value.get("ts") or 0)}
 

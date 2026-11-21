@@ -1267,7 +1267,11 @@ class ScheduleEngine:
         # 痛经是痛经，不是发烧：以前 pain>=8 也走「吃药、量体温、捂汗」，每个月都被写成病号。
         if int(period.get("pain") or 0) >= 8:
             return self._period_rest_segments(ctx)
-        if event_kind == "overtime" and not (ctx.get("meta") or {}).get("rest"):
+        # 只有「加班日」才走加班骨架。休息日抽到一个加班事件，不能让整天变成
+        # 上班（2026-11-21：周六排了休息日，却因为一个 overtime 事件写满公司）。
+        _day_id = str(((ctx.get("day_type") or {}) if isinstance(ctx.get("day_type"), dict) else {}).get("id") or "")
+        if (event_kind == "overtime" and _day_id == "overtime"
+                and not (ctx.get("meta") or {}).get("rest")):
             return self._overtime_segments(ctx)
         if event_kind == "friend_dinner":
             return self._friend_dinner_segments(ctx)

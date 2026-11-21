@@ -301,6 +301,175 @@ class CommandMixin:
 
         return "未知指令。发送 /amo help 查看帮助。"
 
+    async def _sync_face_library_once(self, event):
+        """把库里还没进 QQ 收藏表情的旧图补收一遍（每个进程只做一次）。"""
+        if getattr(self, "_face_synced", False):
+            return
+        self._face_synced = True
+        if not self.cfg_bool("emoji_enable", True):
+            return
+        try:
+            import asyncio as _aio_s
+            import os as _os_s
+            try:
+                from . import emoji_lib
+            except Exception:
+                from amo_core import emoji_lib  # type: ignore
+            try:
+                from . import qq_face
+            except Exception:
+                from amo_core import qq_face  # type: ignore
+            root = emoji_lib.root_dir(self.db.path)
+            index = emoji_lib.load_index(root)
+            todo = [k for k, v in index.items()
+                    if isinstance(v, dict) and v.get("fav") is None]
+            if not todo:
+                return
+            logger.info("[amo] 补收 QQ 收藏表情 %d 张" % len(todo))
+            for key in todo[:60]:
+                entry = emoji_lib.get_entry(root, key)
+                path = _os_s.path.join(root, entry.get("file") or "")
+                if not _os_s.path.isfile(path):
+                    emoji_lib.set_fav(root, key, False)
+                    continue
+                ok = await qq_face.add_favorite(event, path)
+                emoji_lib.set_fav(root, key, ok)
+                logger.info("[amo] %s 收进 QQ 收藏表情：%s"
+                            % ("已" if ok else "没", path.split("/")[-1]))
+                await _aio_s.sleep(0.8)
+        except Exception as exc:
+            logger.debug("[amo] 补收收藏表情失败: %s" % exc)
+
+    async def _collect_emoji(self, event):
+        """把聊天里的表情包收进库（小图才收，大图当照片，不算表情）。
+
+        2026-11-21 口径：表情要能收藏、能打标签、别一直发也别一直不发；
+        标签先留空，挑图时没标签的只给三成机会，标了才按情绪发。
+        """
+        if not self.cfg_bool("emoji_enable", True):
+            return
+        comps = getattr(getattr(event, "message_obj", None), "message", None) or []
+        images = [c for c in comps if c.__class__.__name__ == "Image"]
+        if images:
+            logger.debug("[amo] 表情收藏检查：%d 个组件，其中图片 %d 张" % (len(comps), len(images)))
+        if not images:
+            return
+        _msg_text = str(getattr(event, "message_str", "") or "").strip()
+        if len(_msg_text) > 12:
+            # 带说明文字的多半是照片（自拍/随手拍），不是表情
+            return
+        import os as _os
+        try:
+            from . import emoji_lib
+        except Exception:
+            from amo_core import emoji_lib  # type: ignore
+        root = emoji_lib.root_dir(self.db.path)
+        saved_n = 0
+        for comp in images[:3]:
+            try:
+                path = await comp.convert_to_file_path()
+            except Exception as _e:
+                logger.debug("[amo] 表情跳过：取文件失败 %s" % _e)
+                continue
+            if not path or not _os.path.isfile(path):
+                logger.debug("[amo] 表情跳过：本地文件不存在 %r" % path)
+                continue
+            try:
+                _size = _os.path.getsize(path)
+                if _size > 1500 * 1024:
+                    logger.debug("[amo] 表情跳过：文件过大 %d 字节" % _size)
+                    continue
+            except Exception as _e:
+                logger.debug("[amo] 表情跳过：读大小失败 %s" % _e)
+                continue
+            # QQ 表情包普遍是 1000~1500 的方图（2026-11-21 实测 1200x1193），
+            # 不能按「小图」筛；用长宽比挡掉横拍/竖拍的照片，方图就收。
+            try:
+                from PIL import Image as _PILImage
+                with _PILImage.open(path) as im:
+                    w, h = im.size
+                if max(w, h) > 1600 or min(w, h) < 80:
+                    logger.debug("[amo] 表情跳过：尺寸 %dx%d" % (w, h))
+                    continue
+                _ratio = w / float(h) if h else 0
+                if _ratio < 0.6 or _ratio > 1.7:
+                    logger.debug("[amo] 表情跳过：比例 %.2f（%dx%d）" % (_ratio, w, h))
+                    continue
+            except Exception as _e:
+                logger.debug("[amo] 表情跳过：读尺寸失败（当普通图处理）%s" % _e)
+            key, saved = emoji_lib.add_file(root, path)
+            if key:
+                saved_n += 1
+                # 同一张还要收进 QQ「收藏表情」：留在本地发出去是大图，
+                # 进了收藏才是一个小表情（2026-11-21 她的要求）
+                try:
+                    import asyncio as _aio_fav
+                    _aio_fav.create_task(self._fav_emoji(event, root, key, saved))
+                except Exception:
+                    pass
+                # 标签交给视觉模型，后台跑，不拖这条消息
+                try:
+                    import asyncio as _aio
+                    _provider = await self.context.get_using_provider_async(
+                        event.unified_msg_origin)
+                    if _provider is not None:
+                        _aio.create_task(self._tag_emoji(root, saved, _provider))
+                except Exception:
+                    pass
+        if not saved_n and images:
+            logger.debug("[amo] 表情收藏 0 张（可能尺寸过大或取不到本地文件），根目录=%s" % root)
+        if saved_n:
+            st = emoji_lib.stats(root)
+            logger.info("[amo] 收藏表情 %d 张（库存 %d，已标注 %d 类）"
+                        % (saved_n, st.get("total", 0), len(st.get("tags") or {})))
+
+    async def _tag_emoji(self, root, path, provider):
+        """给一张表情打情绪标签（只认标签词，猜不出就留空，不硬塞）。"""
+        try:
+            import base64
+            try:
+                from . import emoji_lib
+            except Exception:
+                from amo_core import emoji_lib  # type: ignore
+            with open(path, "rb") as fh:
+                b64 = base64.b64encode(fh.read()).decode()
+            prompt = ("这是聊天用的表情包。从这些词里选 1~2 个最贴的："
+                      + "、".join(emoji_lib.ALL_TAGS)
+                      + "。只输出词，用逗号分隔，不要解释，猜不出就输出「无」。")
+            resp = await provider.text_chat(
+                prompt=prompt, image_urls=["base64://" + b64], request_max_retries=0)
+            text = (getattr(resp, "completion_text", "") or "").strip()
+            tags = [t for t in emoji_lib.ALL_TAGS if t in text]
+            if tags:
+                emoji_lib.set_tags(root, path, tags)
+                logger.info("[amo] 表情已标注：%s -> %s"
+                            % (path.split("/")[-1], ",".join(tags)))
+        except Exception as exc:
+            logger.debug("[amo] 表情打标签失败: %s" % exc)
+
+    async def _fav_emoji(self, event, root, key, path):
+        """把收藏到的表情同步进 QQ 的「收藏表情」面板（失败只记日志，不重试）。"""
+        try:
+            try:
+                from . import emoji_lib
+            except Exception:
+                from amo_core import emoji_lib  # type: ignore
+            try:
+                from . import qq_face
+            except Exception:
+                from amo_core import qq_face  # type: ignore
+            if emoji_lib.get_entry(root, key).get("fav") is not None:
+                return
+            ok = await qq_face.add_favorite(event, path)
+            emoji_lib.set_fav(root, key, ok)
+            if ok:
+                logger.info("[amo] 表情已收进 QQ 收藏表情：%s" % path.split("/")[-1])
+            else:
+                logger.debug("[amo] 收进 QQ 收藏表情失败（add_custom_face 不支持或已满）：%s"
+                             % path.split("/")[-1])
+        except Exception as exc:
+            logger.debug("[amo] 收藏表情同步异常: %s" % exc)
+
     async def _handle_message(self, event):
         if not self._ready or self.state is None:
             return

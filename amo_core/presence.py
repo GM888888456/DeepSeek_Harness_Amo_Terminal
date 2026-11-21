@@ -33,7 +33,16 @@ except Exception:  # pragma: no cover
 from .shared import *
 
 _HIS_SLEEP_RE = re.compile(r"要睡|去睡|睡觉|睡了|想睡|困了|困死|眯一会|眯一会儿|躺一会|躺一会儿|晚安|闭眼")
-_HIS_AWAY_RE = re.compile(r"在外地|出差|不在家|回不去|放假|休假|年假|请假|不上班|不用上班|明天.{0,6}早起")
+# 「今天不是照常上班的日子」：出差/放假是一类，「在宿舍没上班 / 今天休息 / 在家」
+# 是另一类。2026-11-21 实例：他中午说过「在宿舍没上班」，晚上她照样问「下班没、到家没」，
+# 因为这里只认「不上班」，不认「没上班」，也不认「宿舍」。
+_HIS_AWAY_RE = re.compile(
+    r"在外地|出差|不在家|回不去|放假|休假|年假|请假|"
+    r"不上班|没上班|没有上班|不用上班|今天休息|休息一天|在家休息|"
+    r"在宿舍|在寝室|宿舍待着|不出门|明天.{0,6}早起"
+)
+# 他说这类话只在当天有效（第二天照常可能上班，不能一直不问）
+_AWAY_TTL_SECONDS = 18 * 3600
 
 
 class PresenceMixin:
@@ -298,37 +307,25 @@ class PresenceMixin:
         )
 
     def _his_state_flags(self, umo) -> dict:
-        """从最近聊天里读他刚说的话：在睡？不在本地？（只给事实，不做判断）"""
-        flags = {"asleep": False, "away": False, "sleep_text": "", "away_text": "", "clock": ""}
+        """从最近聊天里读他的状态（在睡 / 不在岗 / 在忙）。
+
+        词表和判定都在 `amo_core/signals.py`：以前睡和不在本地各有一份正则散在
+        这里，加一种说法要翻三个文件，「在宿舍没上班」就是这么漏的。
+        """
         try:
             rows = self._recent(umo, 24) or []
         except Exception:
             rows = []
-        now = now_ts()
-        sleep_at, sleep_text, away_text = 0.0, "", ""
-        for row in rows:
-            if str(row.get("role") or "") != "user":
-                continue
-            content = str(row.get("content") or "").strip()
-            if not content:
-                continue
-            when = to_float(row.get("created_at"), 0)
-            if _HIS_SLEEP_RE.search(content) and when >= sleep_at:
-                sleep_at, sleep_text = when, content
-            if _HIS_AWAY_RE.search(content):
-                away_text = away_text or content
-        hours = max(1, self.cfg_int("his_sleep_hours", 10))
-        if sleep_at and (now - sleep_at) <= hours * 3600:
-            flags["asleep"] = True
-            flags["sleep_text"] = sleep_text
-            try:
-                flags["clock"] = time.strftime("%H:%M", time.localtime(sleep_at))
-            except Exception:
-                flags["clock"] = ""
-        if away_text:
-            flags["away"] = True
-            flags["away_text"] = away_text
-        return flags
+        try:
+            from .signals import scan
+        except Exception:
+            from amo_core.signals import scan  # type: ignore
+        try:
+            return scan(rows, now=now_ts(),
+                        sleep_hours=self.cfg_int("his_sleep_hours", 10))
+        except Exception:
+            return {"asleep": False, "away": False, "sleep_text": "",
+                    "away_text": "", "clock": ""}
 
     async def _check_proactive_pending(self):
         try:

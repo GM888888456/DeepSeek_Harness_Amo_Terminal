@@ -1356,7 +1356,20 @@ class HumanState:
                 "%s %s" % (item.get("activity") or "", item.get("place") or "")
                 for item in (items or []) if isinstance(item, dict)
             )
-            if not any(word in text for word in ("公司", "上班", "单位", "加班")):
+            # 「加班」不算证据：休息日晚上偶尔加个班，不代表整天是工作日。
+            # 2026-11-21 实例：休息日被一个 overtime 事件整成上班日，
+            # 她开口就说「下班了」，而日程本来是出去玩。
+            if not any(word in text for word in ("公司", "上班", "单位")):
+                return False
+            work_cells = 0
+            for item in (items or []):
+                if not isinstance(item, dict):
+                    continue
+                cell = "%s %s" % (item.get("activity") or "", item.get("place") or "")
+                if any(word in cell for word in ("公司", "上班", "单位")):
+                    work_cells += 1
+            # 一两格出现「公司电话打来了」这种闲聊文案，不该改掉一整天
+            if work_cells < 3:
                 return False
             now = _clock_now()
             now_min = now.hour * 60 + now.minute

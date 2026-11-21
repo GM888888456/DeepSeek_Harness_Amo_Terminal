@@ -403,7 +403,6 @@
     },
     "hint": "综合评分达到此阈值才会主动回复（开启动态阈值后作为基准值）。调高更矜持，调低更爱插话。"
   },
-
   "hf_reply_weights": {
     "description": "【心流】发言裁决权重（JSON，可空）",
     "type": "string",
@@ -419,7 +418,8 @@
       "max": 1,
       "step": 0.05
     }
-  },  "hf_enable_dynamic_threshold": {
+  },
+  "hf_enable_dynamic_threshold": {
     "description": "【心流】启用动态阈值",
     "type": "bool",
     "default": true,
@@ -1298,24 +1298,6 @@
     "default": 0.25,
     "hint": "0~1。醒了会带一个原因（口渴/做梦/热醒/想他…），写进日程和日记，过一会儿再睡回去。"
   },
-  "guard_text_enable": {
-    "type": "bool",
-    "description": "回复过守护后处理",
-    "default": false,
-    "hint": "打开后，且未开「守护接管发送」时，回复在发送前交给守护做润色/去重/表情裁剪；守护没装、超时或报错时用原文。"
-  },
-  "guard_text_timeout_ms": {
-    "type": "int",
-    "description": "守护超时（毫秒）",
-    "default": 2000,
-    "hint": "超过这个时间直接发原文，不阻塞对话。"
-  },
-  "guard_deliver_enable": {
-    "type": "bool",
-    "description": "守护接管发送",
-    "default": false,
-    "hint": "打开后：终端只决定说什么，润色、分段、逐条发送都交给 Astrbot_Amo_Guard；守护异常时整条原文直发兜底。"
-  },
   "instinct_mode": {
     "type": "bool",
     "description": "本能模式（身体只给标签）",
@@ -1457,5 +1439,41 @@
     "description": "游泳日程概率",
     "hint": "夏天天气好时，这一天被安排去游泳/玩水的概率（0~1）。",
     "default": 0.12
+  },
+  "action_library_enable": {
+    "type": "bool",
+    "description": "接话动作库",
+    "default": true,
+    "hint": "每轮注入一张「接话动作」表（吃瓜/追问/半信半疑/接软的/起哄/跟着骂/撒娇）+ 2 条随机示范，压住「劝他、讲道理、点评他说话方式」。"
+  },
+  "emoji_enable": {
+    "type": "bool",
+    "description": "表情包",
+    "default": true,
+    "hint": "聊天里收到的小图自动收进表情库并打情绪标签；回复时按此刻情绪、10% 概率发一张（8 分钟冷却，久不发会保底）。"
+  },
+  "taunt_enable": {
+    "type": "bool",
+    "description": "被骂/被开黄腔/有人贬低阿墨时，允许她反击（不带脏字）",
+    "default": true,
+    "hint": "开着的时候，判定到 2 级以上会强制回一条，提示词里给她「可以凶」的授权：指出对方逻辑漏洞、把话还回去、表示嫌弃，不带脏字也不碰身体和性。关掉就还是现在这种顺着说的样子。"
+  },
+  "auto_accept_friend": {
+    "type": "bool",
+    "description": "收到好友申请自动通过",
+    "default": true,
+    "hint": "通过后会把对方加进社交圈名单（./circle 能看到）。不喜欢谁直接在 QQ 里删好友。"
+  },
+  "auto_accept_group_invite": {
+    "type": "bool",
+    "description": "有人邀请她进群自动接受（默认关）",
+    "default": false,
+    "hint": "默认关：任何群拉她都进，容易被塞进乱七八糟的群。要开的话自己看清是哪个群。"
+  },
+  "taunt_report_lover": {
+    "type": "bool",
+    "description": "被人越线骚扰时，私下跟恋人告一状",
+    "default": true,
+    "hint": "只在她被判为 3 级（黄腔/性骚扰）时发，带原话和群名，同一个恋人半小时最多一次；他自己在场时不会告。"
   }
 }

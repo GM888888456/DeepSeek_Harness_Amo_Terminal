@@ -598,6 +598,7 @@ class InfraMixin:
                 logger.debug("[amo] 与数据插件同步失败: %s" % exc)
             self._ready = True
             self._loop_task = self._spawn(self._background_loop())
+            logger.info("[amo] 心跳已启动（后台循环 task=%r）" % bool(self._loop_task))
             self._spawn(self._warm_up())
 
     def _body_tag_block(self, satiety: float, hydration: float, hungry_at: float) -> str:

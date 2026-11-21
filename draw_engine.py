@@ -779,6 +779,7 @@ class DrawEngine:
             image = await self._generate(event, prompt, selfie)
             if not image:
                 self._stats["failed"] += 1
+                await self._tell_draw_failed(event, reason)
                 return
             try:
                 image = await localize_image(self.plugin, image)
@@ -830,6 +831,33 @@ class DrawEngine:
             logger.warning("[amo] 生图插件没出图（Astrbot_Amo_Image）")
             return None
         return {"data_url": "data:image/png;base64," + base64.b64encode(data).decode()}
+
+    #: 出图失败时说的话（2026-11-21 她定的口径）：不假装画了，就说现在没时间。
+    #: 主动分享走 amo_core/media.py 那条路，失败只记日志，不走这里。
+    DRAW_FAIL_LINES = (
+        "这会儿没时间拍，下次再给你",
+        "暂时没空，晚点再说",
+        "现在不太方便，改天拍给你",
+    )
+
+    async def _tell_draw_failed(self, event, reason=""):
+        """图生图没过 / 出图失败时补一句话；manual 是主人在测，回真实错误。"""
+        try:
+            if str(reason or "") == "manual":
+                text = "画图失败：%s" % (self._last_error or "未知原因")
+            else:
+                pool = self.DRAW_FAIL_LINES
+                text = pool[int(time.time()) % len(pool)]
+            try:
+                from astrbot.api.message_components import Plain as _Plain
+            except Exception:
+                from astrbot.core.message.components import Plain as _Plain
+            chain_cls = MessageChain
+            if chain_cls is None:
+                return
+            await event.send(chain_cls([_Plain(text=text)]))
+        except Exception as _amo_exc:
+            _note_swallowed("draw_engine.DrawEngine._tell_draw_failed", _amo_exc)
 
     # ---------- 发送 ----------
 

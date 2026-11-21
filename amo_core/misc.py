@@ -885,18 +885,14 @@ class MiscMixin:
     def _his_state_lines(self, umo) -> list:
         """他刚说的状态，当事实给她（防「他明明在睡，她却问下班没」）。"""
         flags = self._his_state_flags(umo)
-        lines = []
-        if flags["asleep"]:
-            lines.append(
-                "【他说要睡】%s 他说「%s」——他这会儿在睡或准备睡；别再问他下班、到家、吃没吃，"
-                "也别催照片和正事，等他自己醒。" % (flags["clock"] or "刚才", truncate(flags["sleep_text"], 30))
-            )
-        if flags["away"]:
-            lines.append(
-                "【他不在本地】他说「%s」——今天不是照常上班的日子，别问下班没、到家没。"
-                % truncate(flags["away_text"], 30)
-            )
-        return lines
+        try:
+            from .signals import render_lines
+        except Exception:
+            from amo_core.signals import render_lines  # type: ignore
+        try:
+            return render_lines(flags)
+        except Exception:
+            return []
 
     def _voice_urge_from_state(self) -> float:
         """心流数值给的「想用声音」冲动（0~1）；私聊也走这条判定。"""
@@ -1056,7 +1052,18 @@ class MiscMixin:
         try:
             for profile in self.db.list_profiles(limit=50):
                 if profile.get("private_umo"):
-                    return profile["private_umo"]
+                    return str(profile["private_umo"])
+        except Exception:
+            pass
+        # profiles 表没有 private_umo 列（2026-11-21 实测），回落到消息表。
+        # 顺带清掉重复嵌套的脏 umo：「aiocqhttp:FriendMessage:aiocqhttp:FriendMessage:1」
+        try:
+            for umo in self.db.recent_umos(limit=50):
+                if "FriendMessage" in umo:
+                    parts = str(umo).split(":")
+                    if len(parts) > 3:
+                        return ":".join([parts[0], parts[-2], parts[-1]])
+                    return str(umo)
         except Exception:
             pass
         return ""

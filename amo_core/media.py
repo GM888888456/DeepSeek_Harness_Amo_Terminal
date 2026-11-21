@@ -88,24 +88,7 @@ class MediaMixin:
         if not text or not umo:
             return False
         scene = "group" if (group or "GroupMessage" in str(umo)) else "private"
-        # 主动消息也交给守护润色/分段/发送，终端不再自己拆条。
-        if _guard_deliver_reply is not None and self.cfg_bool("guard_deliver_enable", False):
-            try:
-                delivered = await _guard_deliver_reply(
-                    self, text, scene, umo,
-                    quote_id=quote_id, group=(scene == "group"),
-                    timeout_ms=self.cfg_int("guard_text_timeout_ms", 2000),
-                )
-            except Exception as exc:
-                logger.debug("[amo] 主动消息交给守护失败: %s" % exc)
-                delivered = None
-            if delivered and delivered.get("sent"):
-                self._remember_bot_message(umo, text)
-                self._last_reply_at[umo] = now_ts()
-                logger.info("[amo] 主动（守护） -> %s: %s" % (umo, text[:300]))
-                return True
-        # 守护缺席/失败：整条原文直接发，宁可长一点也不能把话吞了。
-        # 打字状态由守护负责；直发这条兜底路径不再调用已经下线的 _typing。
+        # 整条原文直接发，宁可长一点也不能把话吞了（守护插件已下线）。
         try:
             import re as _re
             try:
