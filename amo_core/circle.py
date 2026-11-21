@@ -357,10 +357,8 @@ class CircleMixin:
                 tail = "等 %d 个群" % len(others)
             lines.append(("【别的群】你还在：" if is_group else "【你在的群】")
                          + "、".join(names) + tail + "。")
-        if not is_group:
-            fcount = len([f for f in data["friends"] if isinstance(f, dict) and f.get("id")])
-            if fcount:
-                lines.append("【好友】你的 QQ 好友 %d 个。" % fcount)
+        # 好友名册不往提示词里放：人物和关系归「思维图」（画像 + relation_network），
+        # 社交圈只管群，以及「谁刚加了你 / 谁刚把你拉进群」这种变化，别两边各说一套。
         # 最近的变化：被拉进新群 / 有人加她好友 / 有人申请还没通过
         bits = []
         for item in reversed(data["new"]):

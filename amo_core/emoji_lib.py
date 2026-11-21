@@ -122,6 +122,78 @@ def add_file(root: str, path: str, tags=()) -> tuple[str, str]:
         return "", ""
 
 
+def looks_like_photo(path: str) -> bool:
+    """这张图是不是照片（而不是表情包）。
+
+    2026-11-21 的事故：她把他发来的自拍当表情收了，还发到群里。
+    判据（宁严勿松，表情少几张没关系，别人的照片流出去是大事）：
+      · GIF / WebP：表情（照片很少用这两个，WebP 动图基本都是表情）；
+      · PNG 带透明：表情；
+      · JPEG：小（<100KB）且接近正方（0.88~1.15）才算表情，其余一律当照片。
+    取不到尺寸/打不开 → 当照片（不收）。
+    """
+    try:
+        from PIL import Image
+    except Exception:
+        return True
+    path = str(path or "")
+    if not os.path.isfile(path):
+        return True
+    try:
+        with Image.open(path) as im:
+            fmt = (im.format or "").upper()
+            size = im.size
+            mode = im.mode
+            try:
+                px = im.convert("RGBA").getpixel((0, 0))
+                alpha = int(px[3]) if isinstance(px, tuple) and len(px) == 4 else 255
+            except Exception:
+                alpha = 255
+    except Exception:
+        return True
+    if fmt in ("GIF", "WEBP"):
+        return False
+    if fmt == "PNG" and (mode in ("RGBA", "LA", "P") or alpha < 255):
+        return False
+    try:
+        w, h = int(size[0]), int(size[1])
+        kb = os.path.getsize(path) / 1024.0
+    except Exception:
+        return True
+    if fmt == "JPEG":
+        ratio = (w / float(h)) if h else 0
+        return not (kb < 100 and 0.88 <= ratio <= 1.15)
+    return True
+
+
+def purge_photos(root: str, move_dir: str = "") -> dict:
+    """把库里的照片挪出去（不硬删，挪进 quarantine 目录），返回统计。"""
+    index = load_index(root)
+    files = _files_dir(root)
+    move_dir = move_dir or os.path.join(root, "_quarantine_" + time.strftime("%Y%m%d-%H%M%S"))
+    moved, kept, err = [], 0, 0
+    for key, entry in list(index.items()):
+        rel = str((entry or {}).get("file") or "")
+        path = os.path.join(root, rel) if rel else ""
+        if not path or not os.path.isfile(path):
+            index.pop(key, None)
+            err += 1
+            continue
+        if looks_like_photo(path):
+            try:
+                os.makedirs(move_dir, exist_ok=True)
+                os.replace(path, os.path.join(move_dir, os.path.basename(path)))
+                moved.append(rel)
+            except Exception:
+                err += 1
+                continue
+            index.pop(key, None)
+        else:
+            kept += 1
+    save_index(root, index)
+    return {"moved": len(moved), "kept": kept, "missing": err, "dir": move_dir if moved else ""}
+
+
 def tag_of(feel: Optional[dict]) -> str:
     """此刻最突出的情绪 → 标签；都不明显返回空串。"""
     best, best_val = "", -1.0

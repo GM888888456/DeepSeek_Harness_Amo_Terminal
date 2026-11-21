@@ -348,6 +348,15 @@ class CommandMixin:
         """
         if not self.cfg_bool("emoji_enable", True):
             return
+        # 2026-11-21 事故：他私聊发来的自拍被当成表情收进库，后来还发到群里。
+        # 两条硬闸：私聊一手都不收；恋人发的东西永远不进表情库。
+        try:
+            if event.is_private_chat():
+                return
+        except Exception:
+            pass
+        if bool(getattr(event, "amo_sender_is_lover", False)):
+            return
         comps = getattr(getattr(event, "message_obj", None), "message", None) or []
         images = [c for c in comps if c.__class__.__name__ == "Image"]
         if images:
@@ -382,21 +391,15 @@ class CommandMixin:
             except Exception as _e:
                 logger.debug("[amo] 表情跳过：读大小失败 %s" % _e)
                 continue
-            # QQ 表情包普遍是 1000~1500 的方图（2026-11-21 实测 1200x1193），
-            # 不能按「小图」筛；用长宽比挡掉横拍/竖拍的照片，方图就收。
+            # 只收「真表情」：GIF / 带透明的 PNG / 小方图 JPEG。
+            # 照片（尤其手机拍的）一律不收 —— 表情少几张无所谓，别人的照片不能进库。
             try:
-                from PIL import Image as _PILImage
-                with _PILImage.open(path) as im:
-                    w, h = im.size
-                if max(w, h) > 1600 or min(w, h) < 80:
-                    logger.debug("[amo] 表情跳过：尺寸 %dx%d" % (w, h))
-                    continue
-                _ratio = w / float(h) if h else 0
-                if _ratio < 0.6 or _ratio > 1.7:
-                    logger.debug("[amo] 表情跳过：比例 %.2f（%dx%d）" % (_ratio, w, h))
+                if emoji_lib.looks_like_photo(path):
+                    logger.debug("[amo] 表情跳过：看着是照片，不收")
                     continue
             except Exception as _e:
-                logger.debug("[amo] 表情跳过：读尺寸失败（当普通图处理）%s" % _e)
+                logger.debug("[amo] 表情跳过：判定照片失败 %s" % _e)
+                continue
             key, saved = emoji_lib.add_file(root, path)
             if key:
                 saved_n += 1
