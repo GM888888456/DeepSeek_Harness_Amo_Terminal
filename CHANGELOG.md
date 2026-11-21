@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.1.2
+
+**消掉每次调用都刷的一条 WARN。**
+
+- `OpenAI 'request_max_retries'=0 is below minimum 1. Fallback to 1.`：AstrBot 4.29.4 的
+  `coerce_int_config` 把低于 1 的值兜成 1 并 WARN；我们几处 `provider.text_chat` 不传这个参数，
+  就按 0 走，于是每调一次刷一条（表情打标签、心流裁决、图片转述、llm_service 都会触发）。
+- 现在这几处显式传 `request_max_retries=2`：警告没了，失败还能真重试一次。
+  不影响回复内容，也不影响主链路（`agent_runner.model.request_max_retries` 是 5）。
+
 ## 1.1.1
 
 **表情库不再收照片（事故修复）。**

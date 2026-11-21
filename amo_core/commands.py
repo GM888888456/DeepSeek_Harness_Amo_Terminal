@@ -440,7 +440,9 @@ class CommandMixin:
                       + "、".join(emoji_lib.ALL_TAGS)
                       + "。只输出词，用逗号分隔，不要解释，猜不出就输出「无」。")
             resp = await provider.text_chat(
-                prompt=prompt, image_urls=["base64://" + b64], request_max_retries=0)
+                # AstrBot 4.29.4：不传就是 0，会被兜成 1 还打 WARN；这里显式给 2
+                request_max_retries=2,
+                prompt=prompt, image_urls=["base64://" + b64])
             text = (getattr(resp, "completion_text", "") or "").strip()
             tags = [t for t in emoji_lib.ALL_TAGS if t in text]
             if tags:

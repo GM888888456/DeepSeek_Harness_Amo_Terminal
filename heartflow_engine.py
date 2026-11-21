@@ -1652,6 +1652,8 @@ class HeartflowEngine:
         for attempt in range(self.judge_max_retries + 1):
             try:
                 resp = await provider.text_chat(
+                    # AstrBot 4.29.4：不传就是 0，会被兜成 1 还打 WARN；这里显式给 2
+                    request_max_retries=2,
                     prompt=judge_prompt,
                     contexts=contexts,
                     system_prompt=system_inst,
@@ -1809,6 +1811,8 @@ class HeartflowEngine:
         for attempt in range(self.judge_max_retries + 1):
             try:
                 resp = await provider.text_chat(
+                    # AstrBot 4.29.4：不传就是 0，会被兜成 1 还打 WARN；这里显式给 2
+                    request_max_retries=2,
                     prompt=judge_prompt,
                     contexts=contexts,
                     system_prompt=system_inst,

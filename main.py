@@ -2261,7 +2261,8 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             prompt = ("用中文客观描述这张图：谁在做什么、场景、衣着、神态、画面里的文字。"
                       "不要添加图里没有的内容，不要评价，120 字以内。")
             resp = await provider.text_chat(prompt=prompt, image_urls=urls,
-                                            request_max_retries=1)
+                                            # AstrBot 4.29.4：不传就是 0，会被兜成 1 还打 WARN；这里显式给 2
+                                            request_max_retries=2)
             text = (getattr(resp, "completion_text", "") or "").strip()
             if not text:
                 return

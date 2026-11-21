@@ -94,6 +94,8 @@ class LLMService:
             return ""
         try:
             response = await provider.text_chat(
+                # AstrBot 4.29.4：不传就是 0，会被兜成 1 还打 WARN；这里显式给 2
+                request_max_retries=2,
                 prompt=prompt,
                 system_prompt=system,
                 contexts=contexts or [],
