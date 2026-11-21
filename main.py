@@ -1486,6 +1486,31 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             logger.debug("[amo] 记爱称失败: %s" % exc)
 
     # ---------- 消息入口 ----------
+    def _taunt_mentions_her(self, event, text):
+        """这条有没有真的叫她：@ 她，或者叫了她的名字/别名。
+
+        刻意**不认**「老公 / 宝 / 亲爱的」这类恋人称呼：群里别人也在喊老公，
+        认了就会把人家小两口的情话当成在叫她（2026-11-21 假告状就是这么来的）。
+        """
+        try:
+            for comp in getattr(getattr(event, "message_obj", None), "message", None) or []:
+                if comp.__class__.__name__ == "At" and str(getattr(comp, "qq", "")) == str(event.get_self_id()):
+                    return True
+        except Exception:
+            pass
+        body = str(text or "")
+        if not body:
+            return False
+        try:
+            self_names, _ = self._taunt_names()
+        except Exception:
+            self_names = []
+        for name in self_names:
+            value = str(name or "").strip()
+            if len(value) >= 2 and value in body:
+                return True
+        return False
+
     def _taunt_names(self):
         """人格名/别名 + 相恋那几个人。**不写死任何账号或名字**，缓存十分钟。"""
         now = now_ts()
@@ -1571,10 +1596,10 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         # 称呼用她平时叫他的那几种（kv lover_pet_names / 画像 alias），不写死「老公」
         pet = ""
         try:
-            pets = self.db.kv_get("lover_pet_names", {}) or {}
-            pool = [str(x) for x in (pets.get(lover_uid) or [])]
-            pool += [x for x in re.split(r"[；;、,，/\s]+",
-                                        str((self.db.get_profile(lover_uid) or {}).get("alias") or ""))]
+            # 只用「她怎么叫他」（画像 alias：老公 / 阿墨 / 宝…）。
+            # kv lover_pet_names 是**他叫她**的爱称（小憨憨那类），拿反了就会喊他「小憨憨」。
+            alias = str((self.db.get_profile(lover_uid) or {}).get("alias") or "")
+            pool = [x.strip() for x in re.split(r"[；;、,，/\s]+", alias) if x.strip()]
             pool = [x for x in pool if 1 <= len(x) <= 6]
             if pool:
                 pet = random.choice(pool)
@@ -1653,12 +1678,26 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                     except Exception:
                         from amo_core.hostility import assess as _taunt_assess  # type: ignore
                     _self_names, _lover_names = self._taunt_names()
+                    # 这条到底是不是冲她来的：私聊算；群里得是叫她/@她/心流判给她的，
+                    # 心流明确说「在跟别人说」就一律不算 —— 别把别人的打情骂俏当成骂她。
+                    _directed = True
+                    _named = False
+                    try:
+                        _named = self._taunt_mentions_her(event, raw_text)
+                        event.amo_taunt_named = _named
+                        if not event.is_private_chat():
+                            _directed = bool(_named) or bool(self._is_talking_to_me(event))
+                            if str(getattr(event, "heartflow_target", "") or "") == "other":
+                                _directed = False
+                    except Exception:
+                        _directed = True
                     _taunt = _taunt_assess(
                         raw_text,
                         is_lover=bool(getattr(event, "amo_sender_is_lover", False)),
                         is_group=not event.is_private_chat(),
                         self_names=_self_names,
                         lover_names=_lover_names,
+                        directed=_directed,
                     )
                     if _taunt.get("level"):
                         _tu = self._canonical_uid(event)
@@ -1677,7 +1716,8 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                                     % (_taunt.get("kind"), _taunt.get("level"),
                                        "·强制回" if getattr(event, "amo_force_reply", False) else "",
                                        raw_text[:40]))
-                        if int(_taunt.get("level") or 0) >= 3:
+                        _can_report = bool(_named) or bool(event.is_private_chat())
+                        if int(_taunt.get("level") or 0) >= 3 and _can_report:
                             try:
                                 await self._taunt_report_to_lover(event, raw_text, _taunt)
                             except Exception as _rep_exc:

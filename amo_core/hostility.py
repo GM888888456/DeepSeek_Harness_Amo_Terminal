@@ -143,7 +143,8 @@ def _doubt_lover(lover_names=()):
     return pat
 
 
-def assess(text, is_lover=False, is_group=True, self_names=(), lover_names=()):
+def assess(text, is_lover=False, is_group=True, self_names=(), lover_names=(),
+           directed=True):
     """判这一条是不是攻击。返回 {level, kind}，level 0 表示不惹。
 
     self_names / lover_names 由调用方给（人格名+别名 / 相恋那几个人的名字），
@@ -153,13 +154,17 @@ def assess(text, is_lover=False, is_group=True, self_names=(), lover_names=()):
     out = {"level": 0, "kind": ""}
     if not msg or len(msg) > 400:
         return out
+    # 2026-11-21 假告状：群里两对情侣互相说「约吗」，她也当成冲自己来的。
+    # 只要不是冲她 / 冲她恋人说的（没人叫她名字、没 @ 她、心流判的对象是别人），一律不算攻击。
+    if not directed:
+        return out
     to_you = bool(_to_you(self_names).search(msg))
 
     # 恋人被贬低：必须点名说他（不认光秃秃的「他」，免得误判第三方）
     doubt = bool(_doubt_lover(lover_names).search(msg))
 
     level, kind = 0, ""
-    if _SEXUAL.search(msg) and (to_you or not msg.startswith("我")):
+    if _SEXUAL.search(msg) and to_you:
         level, kind = 3, "黄腔"
     elif _INSULT.search(msg) and to_you:
         level, kind = 2, "辱骂"
