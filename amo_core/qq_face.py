@@ -17,12 +17,29 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import os
 
+from astrbot.api import logger
+
 # QQ 里 picSubType=1 就是「表情」，0 是普通图片
 PIC_SUBTYPE_EMOJI = 1
+# napcat 容器里能看到的表情目录（宿主 /opt/napcat_config/emoji 由 cron 同步）
+NAPCAT_EMOJI_DIR = "/app/napcat/config/emoji"
+
+
+def napcat_emoji_path(rel: str) -> str:
+    """库里的相对路径（files/xxx.gif）→ napcat 容器里的绝对路径。
+
+    宿主 cron 把 files/ 里的文件平铺同步到 /opt/napcat_config/emoji，
+    所以 napcat 侧是 /app/napcat/config/emoji/<文件名>，没有 files/ 这层。
+    """
+    name = os.path.basename(str(rel or "").replace("\\", "/"))
+    if not name:
+        return ""
+    return NAPCAT_EMOJI_DIR + "/" + name
 SUMMARY = "[动画表情]"
 
 
@@ -45,21 +62,46 @@ def _b64(data: bytes) -> str:
     return "base64://" + base64.b64encode(data).decode()
 
 
-async def add_favorite(event, path: str) -> bool:
-    """把一张表情收进 QQ「收藏表情」。成功 True，失败 False（不抛）。"""
+async def add_favorite(event, path: str, remote_path: str = "") -> bool:
+    """把一张表情收进 QQ「收藏表情」。成功 True，失败 False（不抛）。
+
+    NapCat 的 `add_custom_face` 把 `file` 原样塞给原生 `addFavEmoji`
+    （`emojiPath: e.file`），原生只认**它自己容器里能读到的文件路径**；
+    base64:// 读不出来，这就是之前 77 张全 fav=False 的原因。按顺序试：
+    1) remote_path —— napcat 侧路径（/app/napcat/config/emoji/xxx）
+    2) base64:// —— 万一新版原生支持
+    失败要留痕，别再静默吞掉。
+    """
     try:
-        data = _read(path)
+        data = await asyncio.to_thread(_read, path)
+    except Exception as exc:
+        logger.warning("[amo] 收藏表情读文件失败 %s: %s" % (path, exc))
+        return False
+    md5 = hashlib.md5(data).hexdigest()
+    candidates = []
+    if remote_path:
+        candidates.append(remote_path)
+    candidates.append(_b64(data))
+    last = ""
+    for cand in candidates:
         params = {
-            "file": _b64(data),
+            "file": cand,
             "file_name": os.path.basename(path),
             "file_size": str(len(data)),
-            "md5": hashlib.md5(data).hexdigest(),
+            "md5": md5,
             "is_origin": True,
+            "is_mark_face": False,
         }
-        await _bot(event).call_action("add_custom_face", **params)
-        return True
-    except Exception:
-        return False
+        try:
+            await _bot(event).call_action("add_custom_face", **params)
+            return True
+        except Exception as exc:
+            last = str(exc)[:200]
+            logger.info("[amo] add_custom_face 失败 file=%s → %s"
+                        % (cand[:48], last))
+    logger.warning("[amo] 表情进 QQ 收藏失败 %s：%s"
+                   % (os.path.basename(path), last))
+    return False
 
 
 async def send_as_face(event, path: str) -> bool:
@@ -101,4 +143,5 @@ async def send_as_face(event, path: str) -> bool:
         return False
 
 
-__all__ = ["add_favorite", "send_as_face", "PIC_SUBTYPE_EMOJI", "SUMMARY"]
+__all__ = ["add_favorite", "send_as_face", "PIC_SUBTYPE_EMOJI",
+           "SUMMARY", "NAPCAT_EMOJI_DIR", "napcat_emoji_path"]

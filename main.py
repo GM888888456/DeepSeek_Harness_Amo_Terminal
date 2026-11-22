@@ -1745,7 +1745,8 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             try:
                 _emoji_uid = self._canonical_uid(event)
                 if str(_emoji_uid or "") != str(event.get_self_id() or ""):
-                    await self._collect_emoji(event)
+                    import asyncio as _aio_ec
+                    _aio_ec.create_task(self._collect_emoji(event))
                     try:
                         import asyncio as _aio_fs
                         _aio_fs.create_task(self._sync_face_library_once(event))

@@ -322,7 +322,7 @@ class CommandMixin:
             root = emoji_lib.root_dir(self.db.path)
             index = emoji_lib.load_index(root)
             todo = [k for k, v in index.items()
-                    if isinstance(v, dict) and v.get("fav") is None]
+                    if isinstance(v, dict) and not v.get("fav")]
             if not todo:
                 return
             logger.info("[amo] 补收 QQ 收藏表情 %d 张" % len(todo))
@@ -332,7 +332,9 @@ class CommandMixin:
                 if not _os_s.path.isfile(path):
                     emoji_lib.set_fav(root, key, False)
                     continue
-                ok = await qq_face.add_favorite(event, path)
+                ok = await qq_face.add_favorite(
+                    event, path,
+                    remote_path=qq_face.napcat_emoji_path(entry.get("file")))
                 emoji_lib.set_fav(root, key, ok)
                 logger.info("[amo] %s 收进 QQ 收藏表情：%s"
                             % ("已" if ok else "没", path.split("/")[-1]))
@@ -394,13 +396,15 @@ class CommandMixin:
             # 只收「真表情」：GIF / 带透明的 PNG / 小方图 JPEG。
             # 照片（尤其手机拍的）一律不收 —— 表情少几张无所谓，别人的照片不能进库。
             try:
-                if emoji_lib.looks_like_photo(path):
+                import asyncio as _aio_t
+                if await _aio_t.to_thread(emoji_lib.looks_like_photo, path):
                     logger.debug("[amo] 表情跳过：看着是照片，不收")
                     continue
             except Exception as _e:
                 logger.debug("[amo] 表情跳过：判定照片失败 %s" % _e)
                 continue
-            key, saved = emoji_lib.add_file(root, path)
+            import asyncio as _aio_w
+            key, saved = await _aio_w.to_thread(emoji_lib.add_file, root, path)
             if key:
                 saved_n += 1
                 # 同一张还要收进 QQ「收藏表情」：留在本地发出去是大图，
@@ -452,8 +456,13 @@ class CommandMixin:
         except Exception as exc:
             logger.debug("[amo] 表情打标签失败: %s" % exc)
 
-    async def _fav_emoji(self, event, root, key, path):
-        """把收藏到的表情同步进 QQ 的「收藏表情」面板（失败只记日志，不重试）。"""
+    async def _fav_emoji(self, event, root, key, path, attempt=0):
+        """把收藏到的表情同步进 QQ 的「收藏表情」面板。
+
+        NapCat 原生只认自己容器里的路径，所以传 /app/napcat/config/emoji/xxx
+        （宿主 /opt/napcat_config/emoji 由宿主 cron 同步）。失败不静默：
+        打 WARN，并在后台隔 90s / 180s / 270s 再试一次。
+        """
         try:
             try:
                 from . import emoji_lib
@@ -463,17 +472,32 @@ class CommandMixin:
                 from . import qq_face
             except Exception:
                 from amo_core import qq_face  # type: ignore
-            if emoji_lib.get_entry(root, key).get("fav") is not None:
+            entry = emoji_lib.get_entry(root, key)
+            if entry.get("fav"):
                 return
-            ok = await qq_face.add_favorite(event, path)
-            emoji_lib.set_fav(root, key, ok)
+            remote = qq_face.napcat_emoji_path(entry.get("file"))
+            ok = await qq_face.add_favorite(event, path, remote_path=remote)
             if ok:
+                emoji_lib.set_fav(root, key, True)
                 logger.info("[amo] 表情已收进 QQ 收藏表情：%s" % path.split("/")[-1])
-            else:
-                logger.debug("[amo] 收进 QQ 收藏表情失败（add_custom_face 不支持或已满）：%s"
-                             % path.split("/")[-1])
+                return
+            logger.warning("[amo] 表情没收进 QQ 收藏（第 %d 次）：%s"
+                           % (attempt + 1, path.split("/")[-1]))
+            if attempt < 3:
+                import asyncio as _aio_r
+                _aio_r.create_task(
+                    self._fav_emoji_later(event, root, key, path, attempt + 1))
         except Exception as exc:
-            logger.debug("[amo] 收藏表情同步异常: %s" % exc)
+            logger.warning("[amo] 收藏表情同步异常: %s" % exc)
+
+    async def _fav_emoji_later(self, event, root, key, path, attempt):
+        """收藏失败后隔一会儿再试（等 cron 把文件同步进 napcat）。"""
+        try:
+            import asyncio as _aio_w
+            await _aio_w.sleep(90.0 * attempt)
+            await self._fav_emoji(event, root, key, path, attempt=attempt)
+        except Exception:
+            pass
 
     async def _handle_message(self, event):
         if not self._ready or self.state is None:
