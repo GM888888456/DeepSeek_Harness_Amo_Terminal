@@ -1289,7 +1289,14 @@ class HumanState:
 
         2026-11-21：周六被排成休息日，上午「公司电话就打来了」，
         日程却还写着逛商场——出图、穿搭、日记全跟着错。日程不能等人手改。
+
+        2026-11-22 用户口径「谁也无法影响」：整条关掉。
+        以前任何一句「我在上班／领导让我回去上班」（群里外人说的也算）
+        都能把休息日整天改成上班日（2026-11-22 09:57 缃叶、10:09 桀桀桀
+        连续命中，周日被改成上班日）。日子类型从此只由日历 + 世界观职业决定。
         """
+        logger.debug("[amo] 上班纠偏已关闭，忽略消息里的上班字样：%s" % str(text)[:30])
+        return False
         try:
             from ..schedule_change import apply_workday, workday_fact
         except Exception:
@@ -1341,7 +1348,13 @@ class HumanState:
 
         不靠她开口：2026-11-21 周六被排成休息日，上午日程自己写了
         「公司电话就打来了」，后面却还是逛商场——现在看到就改。
+
+        2026-11-22 同上，一起关掉：这条会自我强化（今天 10:19 / 10:57
+        连续两轮把已经改歪的日程再确认成上班日），而且它只看骨架文案里
+        有没有「公司」两个字，一样是外人一句话就能借力的口子。
         """
+        logger.debug("[amo] 上班自纠已关闭（%s）" % str(today)[:10])
+        return False
         try:
             from ..schedule_change import apply_workday
         except Exception:

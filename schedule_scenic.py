@@ -12,7 +12,9 @@ def scenic_segments(ctx, seg, place_of, city_of, long_holiday=False):
     projects = [str(item) for item in (spot.get("projects") or []) if str(item)]
     project_a = projects[0] if projects else "景区主景点"
     project_b = projects[1] if len(projects) > 1 else "拍照散步"
-    long_trip = bool(long_holiday) and city_of(ctx) not in str(spot.get("city") or "")
+    # 双休去省内别的城市（贵阳 → 凯里/安顺）也是出城一天：只要景点不在本市
+    # 就走出城骨架，不再只认长假（以前周末选到外市也不会加车程）。
+    long_trip = city_of(ctx) not in str(spot.get("city") or "")
     if long_trip:
         return [
             seg("00:00", "08:00", "睡觉", home, "home", "sleep"),

@@ -1084,10 +1084,28 @@ class ScheduleEngine:
                 "duration": "3-4小时", "indoor": False,
             }
         _local = [item for item in spots if _city and _city in str(item.get("city") or "")]
-        if _city and not _local and not ScheduleEngine._is_long_holiday(self, meta):
+        # 「省内」这一档以前根本没实现：周末只挑同城，长假才出城。
+        # 2026-11-22 用户口径：双休在省内（贵阳 → 凯里/安顺/遵义…），长假才出省。
+        _home_prov = ""
+        for item in _local or spots:
+            prov = str(item.get("province") or "").strip()
+            if prov:
+                _home_prov = _prov_stem(prov)
+                break
+        _same_prov = [
+            item for item in spots
+            if _home_prov
+            and _prov_stem(item.get("province")) == _home_prov
+            and _city not in str(item.get("city") or "")
+        ]
+        _out_prov = [
+            item for item in spots
+            if str(item.get("province") or "").strip()
+            and (not _home_prov or _prov_stem(item.get("province")) != _home_prov)
+        ]
+        _long = ScheduleEngine._is_long_holiday(self, meta)
+        if _city and not _local and not _same_prov and not _long:
             return None
-        if _local:
-            spots = _local
         if not spots:
             return {
                 "name": "人民公园", "city": _city, "province": "",
@@ -1098,13 +1116,18 @@ class ScheduleEngine:
         # 下雨时 pool=[] 又回退成全部景点（含户外），文案还说「找个室内的地方」。
         # 现在按 spots 自己的 indoor 标记选，和城市无关。
         if not good_weather:
-            indoor = [item for item in spots if item.get("indoor")]
-            pool = indoor or list(spots)
-        elif ScheduleEngine._is_long_holiday(self, meta):
-            # 长假去外地：先挑不在本市的
-            pool = [item for item in spots if str(city or "") not in str(item.get("city") or "")] or list(spots)
+            indoor = [item for item in (_local or _same_prov or spots) if item.get("indoor")]
+            pool = indoor or list(_local or _same_prov or spots)
+        elif _long:
+            # 长假出省：先挑别的省，其次省内他市，最后才本市
+            pool = _out_prov or _same_prov or _local or list(spots)
         else:
-            pool = list(spots)
+            # 双休小旅行：省内其他城市与本市按日期种子对半分，
+            # 同一天刷新多少次结果都一样（seed 就是日期）。
+            if _same_prov and int(seed) % 2 == 0:
+                pool = _same_prov
+            else:
+                pool = _local or _same_prov or list(spots)
         if good_weather:
             outdoor = [item for item in pool if not item.get("indoor")]
             if outdoor:
@@ -2377,6 +2400,16 @@ def _mood_text(feel):
     return ("喜%d 怒%d 哀%d 惧%d 爱%d 精力%d 饿%d"
             % (value("joy"), value("anger"), value("sadness"), value("fear"),
                value("love"), value("energy"), value("hunger")))
+
+
+def _prov_stem(text) -> str:
+    """省份归一：贵州 / 贵州省 → 贵州，广西壮族自治区 → 广西。"""
+    name = str(text or "").strip()
+    for suffix in ("维吾尔自治区", "壮族自治区", "回族自治区", "特别行政区",
+                   "自治区", "省", "市"):
+        if name.endswith(suffix) and len(name) > len(suffix):
+            return name[: -len(suffix)]
+    return name
 
 
 def _scenic_text(scenic):
