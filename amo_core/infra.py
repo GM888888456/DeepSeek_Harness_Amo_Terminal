@@ -334,11 +334,11 @@ class InfraMixin:
             self.config.update(current)
             if hasattr(self.config, "save_config"):
                 self.config.save_config()
-            logger.info(
+            logger.debug(
                 "[amo] 已迁移旧版 amo_forever 配置: %s（%d 项）"
                 % (legacy, len(merged))
             )
-            logger.info("[amo] 升级提示：插件标识保持 Astrbot_Amo_forever；旧 amo_forever 配置/数据已自动迁移。")
+            logger.debug("[amo] 升级提示：插件标识保持 Astrbot_Amo_forever；旧 amo_forever 配置/数据已自动迁移。")
         except Exception as exc:
             logger.warning("[amo] 旧版 amo_forever 配置迁移失败: %s" % exc)
 
@@ -510,7 +510,7 @@ class InfraMixin:
 
         LarkMessageEvent.send = send
         LarkMessageEvent._amo_quote_guard = True
-        logger.info("[amo] 飞书引用守卫已安装：私聊不引用，群聊按概率")
+        logger.debug("[amo] 飞书引用守卫已安装：私聊不引用，群聊按概率")
 
     def _install_qq_quote_guard(self):
         """QQ 私聊也不许引用。
@@ -542,7 +542,7 @@ class InfraMixin:
 
         AiocqhttpMessageEvent.send = send
         AiocqhttpMessageEvent._amo_quote_guard = True
-        logger.info("[amo] QQ 引用守卫已安装：私聊不引用，群聊按概率")
+        logger.debug("[amo] QQ 引用守卫已安装：私聊不引用，群聊按概率")
 
     def _is_admin(self, event):
         uid = self._canonical_uid(event)
@@ -598,7 +598,7 @@ class InfraMixin:
                 logger.debug("[amo] 与数据插件同步失败: %s" % exc)
             self._ready = True
             self._loop_task = self._spawn(self._background_loop())
-            logger.info("[amo] 心跳已启动（后台循环 task=%r）" % bool(self._loop_task))
+            logger.debug("[amo] 心跳已启动（后台循环 task=%r）" % bool(self._loop_task))
             self._spawn(self._warm_up())
 
     def _body_tag_block(self, satiety: float, hydration: float, hungry_at: float) -> str:
@@ -657,9 +657,14 @@ class InfraMixin:
                 profile = self.db.get_profile(uid) or {}
             except Exception:
                 profile = {}
+            # RELATION_WIRE 2026-11-23：以前 alias 优先，小澜的 alias 是「呀；干嘛呀」，
+            # 于是名单里她叫「呀；干嘛呀」，别人喊「小澜」就认不出来。名字优先。
+            _alias = str(profile.get("alias") or "").strip()
+            if "；" in _alias or ";" in _alias or len(_alias) > 8:
+                _alias = ""
             name = (
-                str(profile.get("alias") or "").strip()
-                or str(profile.get("name") or "").strip()
+                str(profile.get("name") or "").strip()
+                or _alias
                 or str(row.get("name") or "").strip()
                 or uid
             )

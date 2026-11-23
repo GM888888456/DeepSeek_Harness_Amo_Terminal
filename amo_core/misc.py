@@ -162,7 +162,7 @@ class MiscMixin:
             return
         result = await self._change_outfit_now(style)
         if result.get("ok"):
-            logger.info("[amo] 她答应了换装但没调工具，已按她的意思换上：%s" % result.get("look"))
+            logger.debug("[amo] 她答应了换装但没调工具，已按她的意思换上：%s" % result.get("look"))
 
     def _spawn(self, coro):
         try:
@@ -197,7 +197,7 @@ class MiscMixin:
             self.db.conn.execute("DELETE FROM schedule_diary")
             self.db.conn.commit()
             self.db.kv_set("diary_continuity_521", True)
-            logger.info("[amo] 已清理旧版日程日记缓存（5.2.1 连续性修复）")
+            logger.debug("[amo] 已清理旧版日程日记缓存（5.2.1 连续性修复）")
         except Exception as exc:
             logger.debug("[amo] 清理日记缓存失败: %s" % exc)
 
@@ -303,7 +303,7 @@ class MiscMixin:
             return star
         previous = getattr(self, "_image_star", None)
         if previous is not None and previous is not star:
-            logger.info("[amo] 生图插件实例已刷新（重载/重装后自动换新）")
+            logger.debug("[amo] 生图插件实例已刷新（重载/重装后自动换新）")
         self._image_star = star
         return star
 
@@ -598,7 +598,7 @@ class MiscMixin:
                                "他喊我起床，我迷迷糊糊应了一声。")
         except Exception:
             pass
-        logger.info("[amo] 被他叫醒（夜里原因：%s）" % (reason.value if reason else "无"))
+        logger.debug("[amo] 被他叫醒（夜里原因：%s）" % (reason.value if reason else "无"))
 
     def _disturb_category(self, snap):
         category = (snap.get("activity") or {}).get("category", "")
@@ -746,7 +746,7 @@ class MiscMixin:
             self._last_reply_at[event.unified_msg_origin] = now_ts()
         except Exception:
             pass
-        logger.info("[amo] 直接发送 -> %s: %s" % (event.unified_msg_origin, text[:300]))
+        logger.debug("[amo] 直接发送 -> %s: %s" % (event.unified_msg_origin, text[:300]))
         return True
 
     def _guard_self_location(self, text, place):
@@ -950,7 +950,7 @@ class MiscMixin:
             ).fetchall()
             for row in rows:
                 self.db.update_profile(str(row["uid"]), relation="抵触")
-                logger.info("[amo] 仇恨超过7天，降为抵触: %s" % row["uid"])
+                logger.debug("[amo] 仇恨超过7天，降为抵触: %s" % row["uid"])
         except Exception as exc:
             logger.debug("[amo] 仇恨关系衰减失败: %s" % exc)
         # 2026-11-21：越界打的「抵触」是**临时**的。人家可能只是开玩笑，
@@ -977,7 +977,7 @@ class MiscMixin:
                     prof = self.db.get_profile(uid) or {}
                     if str(prof.get("relation") or "") == "抵触":
                         self.db.update_profile(uid, relation="陌生人")
-                        logger.info("[amo] 越界冷了 %d 天，降为陌生人: %s" % (cold_days, uid))
+                        logger.debug("[amo] 越界冷了 %d 天，降为陌生人: %s" % (cold_days, uid))
                     changed = True
                     continue
                 kept.append(mark)
@@ -1121,7 +1121,7 @@ class MiscMixin:
                     logger.warning("[amo] 记忆写入失败，本轮不标记已学: %s" % uid)
                     continue
                 if facts:
-                    logger.info("[amo] 自动学习：%s 学到 %d 条事实" % (user.get("name") or uid, len(facts)))
+                    logger.debug("[amo] 自动学习：%s 学到 %d 条事实" % (user.get("name") or uid, len(facts)))
                 self.db.kv_set(key, now_ts())
             except Exception as exc:
                 logger.debug("[amo] 自动学习失败: %s" % exc)
@@ -1491,7 +1491,7 @@ class MiscMixin:
             logger.debug("[amo] 奖励自己失败: %s" % exc)
             return
         if result.get("ok"):
-            logger.info("[amo] 股市赚了，奖励自己一顿 %.0f 元" % amount)
+            logger.debug("[amo] 股市赚了，奖励自己一顿 %.0f 元" % amount)
 
     def _doctor_line(self) -> str:
         """刚被带去看病（或没看成）：让她的反应接得上。"""

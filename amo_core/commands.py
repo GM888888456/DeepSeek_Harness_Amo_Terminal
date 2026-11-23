@@ -325,7 +325,7 @@ class CommandMixin:
                     if isinstance(v, dict) and not v.get("fav")]
             if not todo:
                 return
-            logger.info("[amo] 补收 QQ 收藏表情 %d 张" % len(todo))
+            logger.debug("[amo] 补收 QQ 收藏表情 %d 张" % len(todo))
             for key in todo[:60]:
                 entry = emoji_lib.get_entry(root, key)
                 path = _os_s.path.join(root, entry.get("file") or "")
@@ -336,7 +336,7 @@ class CommandMixin:
                     event, path,
                     remote_path=qq_face.napcat_emoji_path(entry.get("file")))
                 emoji_lib.set_fav(root, key, ok)
-                logger.info("[amo] %s 收进 QQ 收藏表情：%s"
+                logger.debug("[amo] %s 收进 QQ 收藏表情：%s"
                             % ("已" if ok else "没", path.split("/")[-1]))
                 await _aio_s.sleep(0.8)
         except Exception as exc:
@@ -427,7 +427,7 @@ class CommandMixin:
             logger.debug("[amo] 表情收藏 0 张（可能尺寸过大或取不到本地文件），根目录=%s" % root)
         if saved_n:
             st = emoji_lib.stats(root)
-            logger.info("[amo] 收藏表情 %d 张（库存 %d，已标注 %d 类）"
+            logger.debug("[amo] 收藏表情 %d 张（库存 %d，已标注 %d 类）"
                         % (saved_n, st.get("total", 0), len(st.get("tags") or {})))
 
     async def _tag_emoji(self, root, path, provider):
@@ -451,7 +451,7 @@ class CommandMixin:
             tags = [t for t in emoji_lib.ALL_TAGS if t in text]
             if tags:
                 emoji_lib.set_tags(root, path, tags)
-                logger.info("[amo] 表情已标注：%s -> %s"
+                logger.debug("[amo] 表情已标注：%s -> %s"
                             % (path.split("/")[-1], ",".join(tags)))
         except Exception as exc:
             logger.debug("[amo] 表情打标签失败: %s" % exc)
@@ -479,7 +479,7 @@ class CommandMixin:
             ok = await qq_face.add_favorite(event, path, remote_path=remote)
             if ok:
                 emoji_lib.set_fav(root, key, True)
-                logger.info("[amo] 表情已收进 QQ 收藏表情：%s" % path.split("/")[-1])
+                logger.debug("[amo] 表情已收进 QQ 收藏表情：%s" % path.split("/")[-1])
                 return
             logger.warning("[amo] 表情没收进 QQ 收藏（第 %d 次）：%s"
                            % (attempt + 1, path.split("/")[-1]))
@@ -588,41 +588,36 @@ class CommandMixin:
         uid = self._canonical_uid(event)
         if self._recent_bot_initiated(umo):
             self._disturb_until[str(umo)] = 0
-            logger.info("[amo] 主动消息后的回复，按正常聊天处理")
+            logger.info("[心流] ❤️心流：回（她刚主动找过他）")
             return
         if self._should_disturb(snap, umo, uid, event.message_str or "", group=False):
+            logger.info("[心流] ❤️心流：回（在忙被打扰，带着脾气回）")
             self._apply_disturbance(umo)
             # 不 stop_event，让 AstrBot 正常生成；<amo_state> 会带上被打扰的语气。
             return
-        probability = self.gate.private_probability(snap, profile)
-        roll = random.random()
-        logger.info(
-            "[amo] 私聊判定 | 概率=%.2f | roll=%.2f | %s"
-            % (probability, roll, "回复" if roll <= probability else "不回")
-        )
-        if roll <= probability:
+        # FUSE 2026-11-23（用户口径：融合，不要两套引擎）：私聊也交给心流，
+        # 旧的「概率 roll」只在心流没启用时兜底。
+        _reply = None
+        if self.heartflow is not None and self.cfg_bool("hf_enable_heartflow", True):
+            try:
+                _reply = await self.heartflow.on_private_message(event)
+            except Exception as exc:
+                logger.error("[amo] 私聊心流失败，按正常回复: %s" % exc)
+                _reply = True
+        if _reply is None:
+            _p = self.gate.private_probability(snap, profile)
+            _reply = random.random() <= _p
+            logger.debug("[amo] 私聊判定（旧概率兜底）| 概率=%.2f | %s"
+                        % (_p, "回复" if _reply else "不回"))
+        if _reply:
             return
         event.stop_event()
         if (
             self.cfg_bool("delay_reply", True)
-            and probability >= 0.20
             and profile.get("relation", "普通") not in ("仇恨", "抵触")
             and random.random() < 0.45
         ):
             self._schedule_delayed_reply(event, profile)
-
-    async def _handle_group_directed(self, event, text, profile):
-        umo = event.unified_msg_origin
-        group_id = event.get_group_id()
-        snap = self.state.snapshot()
-        recent = self._recent(umo, 8 if self.cfg_str("context_style", "lean") == "lean" else 12)
-        result = await self.gate.should_reply_group(
-            umo, group_id, text, recent, True, profile, snap
-        )
-        if self.cfg_bool("debug_log", False):
-            logger.debug("[amo] 群聊定向判定: %s" % json.dumps(result, ensure_ascii=False))
-        if not result["reply"]:
-            event.stop_event()
 
     async def _handle_money_gift(self, event, text) -> bool:
         """他转钱/发红包给她：算借款，走金融账本。

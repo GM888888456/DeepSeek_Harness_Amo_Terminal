@@ -120,7 +120,7 @@ class MediaMixin:
             logger.warning("[amo] 主动发送失败: %s" % exc)
             return False
         self._last_reply_at[umo] = now_ts()
-        logger.info("[amo] 主动 -> %s: %s" % (umo, text[:300]))
+        logger.debug("[amo] 主动 -> %s: %s" % (umo, text[:300]))
         self._remember_bot_message(umo, text)
         return True
 
@@ -184,7 +184,7 @@ class MediaMixin:
         place = str((scene or {}).get("place") or "").strip()
         activity = str((scene or {}).get("activity") or "").strip()
         zone = str((scene or {}).get("zone") or "").strip()
-        logger.info("[amo] 出图场景：%s / %s" % (place or "未定", activity or "未定"))
+        logger.debug("[amo] 出图场景：%s / %s" % (place or "未定", activity or "未定"))
         try:
             return await asyncio.wait_for(
                 plugin.draw_for(str(umo or ""), str(uid or ""), prompt, selfie=selfie,
@@ -222,6 +222,16 @@ class MediaMixin:
             return True, 0
         used = to_int(info.get("used"), 0)
         return (info.get("allowed", True) is not False), used
+
+    #: 私密/寝衣类关键词：这类衣服只在私聊出现，绝不进群。
+    PRIVATE_OUTFIT_WORDS = ("寝衣", "睡衣", "睡裙", "睡袍", "抹胸", "薄纱", "内衣", "泳衣", "泳装", "私密")
+
+    def _outfit_is_private(self, outfit):
+        """这套衣服能不能给群里看。2026-11-23（用户口径：寝衣别分享到群里）"""
+        text = str(outfit or "")
+        if not text:
+            return False
+        return any(word in text for word in self.PRIVATE_OUTFIT_WORDS)
 
     def _image_share_prompt(self, scene=None):
         """按她此刻在干嘛拼提示词；拿不到状态就用一句通用的自拍。
@@ -285,7 +295,7 @@ class MediaMixin:
             # 张数由生图插件自己记（draw_for 里 _mark_call），这里只记冷却时间，
             # 不重复计数——「今天发了几张」只有一个地方说了算。
             self.db.kv_set("image_share_last", now_ts())
-            logger.info("[amo] 主动分享了一张图（%s）" % ("群聊" if "GroupMessage" in umo else "私聊"))
+            logger.debug("[amo] 主动分享了一张图（%s）" % ("群聊" if "GroupMessage" in umo else "私聊"))
             # 让她下一轮知道自己刚发过图，别一问三不知
             self.db.kv_set("image_share_note", {"ts": now_ts(), "text": prefix or ""})
         except asyncio.TimeoutError:
@@ -336,6 +346,14 @@ class MediaMixin:
         if self.cfg_bool("image_share_quote", True):
             quote = str(getattr(getattr(event, "message_obj", None), "message_id", "") or "")
         scene = self._activity_snapshot(str(event.unified_msg_origin))
+        # 2026-11-23（用户口径）：寝衣/私密衣服只在私聊，群里一律不发
+        if not private:
+            try:
+                if self._outfit_is_private(str((scene or {}).get("outfit") or "")):
+                    logger.info("[amo] 群里不发这张：现在穿的是寝衣/私密衣服")
+                    return None
+            except Exception as exc:
+                logger.debug("[amo] 私密衣服闸判定失败: %s" % exc)
         return {
             "plugin": plugin,
             "umo": str(event.unified_msg_origin),

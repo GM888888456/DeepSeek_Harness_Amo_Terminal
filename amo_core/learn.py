@@ -218,7 +218,7 @@ class LearnMixin:
                 if not self.db.upsert_relation(a, b, relation, note):
                     continue
                 await self._push_relation_to_data(a, b, relation, note)
-                logger.info("[amo] 推测关系：%s ↔ %s（%s）" % (a, b, note))
+                logger.debug("[amo] 推测关系：%s ↔ %s（%s）" % (a, b, note))
             except Exception as exc:
                 logger.debug("[amo] 写推测关系失败: %s" % exc)
 
@@ -357,7 +357,7 @@ class LearnMixin:
             logger.debug("[amo] 记承诺失败: %s" % exc)
             return None
         if row:
-            logger.info("[amo] 记下她答应的事（%s/%s）：%s"
+            logger.debug("[amo] 记下她答应的事（%s/%s）：%s"
                         % (kind, row.get("wait"), text[:40]))
         return row
 
@@ -482,7 +482,7 @@ class LearnMixin:
                 return True
             # photo_record 这条路被守门人拦下过（结果就是拍了一堆照片一条记录都没有），
             # 退一步用普通事件记，宁可降级也不能丢
-            logger.info("[amo] photo_record 没写进去，降级为 event: %s" % text[:40])
+            logger.debug("[amo] photo_record 没写进去，降级为 event: %s" % text[:40])
             return await self._write_memory_checked(uid, "【照片】" + text, kind="event", tier=0)
         except Exception as exc:
             logger.warning("[amo] 照片记忆写入失败: %s" % exc)
@@ -532,7 +532,7 @@ class LearnMixin:
                     self.db.kv_set(key, now_ts())
                 except Exception:
                     pass
-                logger.info("[amo] 里程碑起点已设置（从现在开始）: uid=%s" % uid)
+                logger.debug("[amo] 里程碑起点已设置（从现在开始）: uid=%s" % uid)
                 continue
             if not _ms_should_archive(rows, every, min_messages):
                 continue
@@ -550,7 +550,7 @@ class LearnMixin:
                 continue
             content = _ms_build_content(label, summary)
             written = await self._write_memory_checked(uid, content, "milestone", 2)
-            logger.info("[amo] 里程碑归档%s: %s" % ("已写入" if written else "写入失败", content[:80]))
+            logger.debug("[amo] 里程碑归档%s: %s" % ("已写入" if written else "写入失败", content[:80]))
             if written:
                 try:
                     last_ts = int(rows[-1].get("created_at") or now_ts())

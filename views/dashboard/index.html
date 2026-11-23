@@ -399,7 +399,7 @@
   <div class="wrap">
     <header>
       <div style="display:flex;align-items:center">
-        <div class="brand" id="btnBrand" role="button" tabindex="0" title="双击打开心流设置"><span class="dot"></span> 陪伴</div>
+        <div class="brand" id="btnBrand" role="button" tabindex="0" title="陪伴"><span class="dot"></span> 陪伴</div>
       </div>
       <div style="display:flex;align-items:center;gap:8px">
         <div class="clock" id="clock" role="button" tabindex="0" title="双击打开时间/天气设置">--</div>
@@ -639,10 +639,6 @@
     </div>
 
     <div id="inlineView" hidden>
-      <section id="view-heart" class="inline-panel" hidden>
-        <div class="inline-top"><button class="close-text" type="button" data-close-inline>关闭</button></div>
-        <div class="inline-body" id="heartBody"></div>
-      </section>
       <section id="view-time" class="inline-panel" hidden>
         <div class="inline-top"><button class="close-text" type="button" data-close-inline>关闭</button></div>
         <div class="inline-body" id="timeBody"></div>
@@ -1383,10 +1379,10 @@
           worldPhotoTapCount = 0;
           worldPhotoTapTimer = null;
           if (count >= 3) clearWorldPhoto();
-          else openIdPhotoDialog();
+          else if (count === 2) openIdPhotoDialog();
         }, 420);
       });
-      photo.title = "单击：生成证件照；三击：取消";
+      photo.title = "双击：生成证件照；三击：取消";
     }
 
     // 刷新/重开面板后取回服务端存的那张图（iframe 里 localStorage 不可靠）
@@ -1555,7 +1551,8 @@
 
 
     // 设置页只放「双击陪伴 / 双击天气」里没有的开关；那两处保持原样不动。
-    const SWITCH_SKIP_GROUPS = new Set(["私聊", "时间天气"]);
+    // 2026-11-23（用户口径）：开关全部搬到设置页，不再靠双击弹窗才能看到
+    const SWITCH_SKIP_GROUPS = new Set([]);
 
     async function loadSwitches() {
       const box = document.getElementById("switchList");
@@ -2110,9 +2107,9 @@
       inlinePanels.forEach((panel) => {
         panel.hidden = panel.id !== "view-" + name;
       });
-      const body = document.getElementById(name === "heart" ? "heartBody" : "timeBody");
+      const body = document.getElementById("timeBody");
       ensureSettingsInBody(body);
-      settingsGroupFilter = name === "heart" ? "心流" : "时间天气";
+      settingsGroupFilter = "时间天气";
       const search = document.getElementById("settingsSearch");
       if (search) search.value = "";
       if (!configItems.length) loadSettings();
@@ -2131,17 +2128,7 @@
       button.addEventListener("click", closeInlineView);
     });
 
-    // 心流：550ms 内双击“陪伴”打开一级页。
-    const brandButton = document.getElementById("btnBrand");
-    if (brandButton) {
-      bindDoubleTap(brandButton, () => openInlineView("heart"));
-      brandButton.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          openInlineView("heart");
-        }
-      });
-    }
+    // 心流页已下线（2026-11-23）：双击「陪伴」不再跳转，标题也不再提示。
 
     // 时间文字：双击进时间天气一级页，不加新顶栏控件。
     const clock = document.getElementById("clock");
@@ -2362,34 +2349,7 @@
     }
 
     const TEMPLATE_FALLBACKS = {
-      hf_judge_rules: {
-        templates: {
-          rule: {
-            name: "评分规则",
-            items: {
-              dimension_name: { description: "维度标识（英文）", type: "string", default: "", invisible: true },
-              dimension_display: { description: "维度中文名", type: "string", default: "" },
-              weight: { description: "权重 (0-1)", type: "float", default: 0.2 },
-              low_desc: { description: "低分情况描述", type: "string", default: "" },
-              high_desc: { description: "高分情况描述", type: "string", default: "" },
-            },
-          },
-        },
-      },
-      hf_group_threshold_configs: {
-        templates: {
-          group_config: {
-            name: "群聊阈值配置",
-            items: {
-              chat_id: { description: "群聊标识", type: "string", default: "" },
-              reply_threshold: { description: "基础回复阈值", type: "float", default: 0.6 },
-              dynamic_threshold_max: { description: "动态阈值上限", type: "float", default: 0.85 },
-              dynamic_threshold_min: { description: "动态阈值下限", type: "float", default: 0.35 },
-            },
-          },
-        },
-      },
-    };
+};
 
     function templateDefs(item) {
       const own = item.templates || {};
@@ -2825,7 +2785,7 @@
 
     // 面板里不展示的配置项：评分规则是给「真要改判定标准」的人用的，
     // 放在面板上只会让人误以为必须调。想改还是能改配置文件。
-    const HIDDEN_CONFIG_KEYS = new Set(["hf_judge_rules"]);
+    const HIDDEN_CONFIG_KEYS = new Set([]);
 
     async function loadSettings() {
       try {

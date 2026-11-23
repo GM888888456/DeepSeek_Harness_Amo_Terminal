@@ -81,7 +81,7 @@ class RelationsMixin:
                 logger.debug("[amo] 获取机器人QQ昵称失败: %s" % exc)
         if not qq_nick:
             qq_nick = display_name or role_name
-            logger.info("[amo] get_login_info 不可用，QQ昵称回退为 %s" % qq_nick)
+            logger.debug("[amo] get_login_info 不可用，QQ昵称回退为 %s" % qq_nick)
         if not display_name:
             display_name = qq_nick
         if uid:
@@ -90,7 +90,7 @@ class RelationsMixin:
             self._self_display = display_name
         if getattr(self, "_self_identity_logged", "") != (uid + "|" + qq_nick + "|" + display_name):
             self._self_identity_logged = uid + "|" + qq_nick + "|" + display_name
-            logger.info(
+            logger.debug(
                 "[amo] 自身身份 | 角色名=%s | QQ昵称=%s | 显示名=%s | UID=%s"
                 % (role_name, qq_nick, display_name, uid or "未知")
             )
@@ -130,9 +130,9 @@ class RelationsMixin:
                 self.db.kv_set("self_face_identity_v1", True)
             except Exception:
                 pass
-            logger.info("[amo] 自我形象永久记忆已写入（kind=identity）")
+            logger.debug("[amo] 自我形象永久记忆已写入（kind=identity）")
         else:
-            logger.info("[amo] 自我形象永久记忆没写进去（守门人拦下），下轮再试")
+            logger.debug("[amo] 自我形象永久记忆没写进去（守门人拦下），下轮再试")
 
     def _relation_network_text(self, uid):
         """给当前用户生成两跳内的关系网摘要；只读。
@@ -358,7 +358,7 @@ class RelationsMixin:
             relation = "抵触"
         if relation != current:
             self.db.update_profile(uid, relation=relation)
-            logger.info(
+            logger.debug(
                 "[amo] 识别到冒充恋人称呼: %s -> %s（%s，5分钟内第%d次）"
                 % (uid, relation, hit, count)
             )

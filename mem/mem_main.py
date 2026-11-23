@@ -623,14 +623,14 @@ class AmoDataPlugin(Star):
                                     data_dir=_cfg_data_dir(_guard_dir, PLUGIN_NAME),
                                     logger=logger)
                 if _healed.get("restored"):
-                    logger.info("[config] 本次启动补回 %d 项配置（%s）"
+                    logger.debug("[config] 本次启动补回 %d 项配置（%s）"
                                 % (len(_healed["restored"]), ", ".join(_healed["restored"])))
             except Exception as exc:
                 logger.debug("[config] 配置自愈失败: %s" % exc)
         # 时区：服务器常在 UTC 跑，按配置时区算「今天/昨天/现在」，否则日期会错一天
         try:
             self.timezone_name = _clock.configure(str(self.config.get("timezone") or "Asia/Shanghai"))
-            logger.info("[amo_data] 时区: %s" % self.timezone_name)
+            logger.debug("[amo_data] 时区: %s" % self.timezone_name)
         except Exception:
             self.timezone_name = ""
         self.plugin_dir = os.path.dirname(os.path.abspath(__file__))
@@ -666,7 +666,7 @@ class AmoDataPlugin(Star):
             self._loop_task = asyncio.create_task(self._maintenance_loop())
         except Exception:
             self._loop_task = None
-        logger.info("[amo_data] 我想永远陪着你-记忆 %s 已加载（%s）" % (PLUGIN_VERSION, self.db_path))
+        logger.debug("[amo_data] 我想永远陪着你-记忆 %s 已加载（%s）" % (PLUGIN_VERSION, self.db_path))
 
     async def _maybe_daily_backup(self, bot_id: str) -> str:
         """每天自动备份一次数据库，保留 backup_keep 份。"""
@@ -685,7 +685,7 @@ class AmoDataPlugin(Star):
         except Exception:
             pass
         if path:
-            logger.info("[amo_data] 每日备份: %s" % os.path.basename(path))
+            logger.debug("[amo_data] 每日备份: %s" % os.path.basename(path))
         return path
 
     async def _maybe_weekly_cleanup(self, bot_id: str) -> dict:
@@ -715,7 +715,7 @@ class AmoDataPlugin(Star):
             self.store.cache_set(bot_id, key, "1", ttl=8 * 86400)
         except Exception:
             pass
-        logger.info("[amo_data] 每周记忆整理: %s" % result)
+        logger.debug("[amo_data] 每周记忆整理: %s" % result)
         return result
 
     async def api_memory_maintain(self):
@@ -1048,7 +1048,7 @@ class AmoDataPlugin(Star):
                 else:
                     registered += 1
         if registered:
-            logger.info("[amo_data] Web 面板接口已注册 %d 条" % registered)
+            logger.debug("[amo_data] Web 面板接口已注册 %d 条" % registered)
         else:
             logger.warning("[amo_data] Web 面板接口一条都没注册成功，面板会显示“后端未就绪”")
 
@@ -1651,4 +1651,4 @@ class AmoDataPlugin(Star):
             self.store.close()
         except Exception:
             pass
-        logger.info("[amo_data] 我想永远陪着你-记忆已卸载")
+        logger.debug("[amo_data] 我想永远陪着你-记忆已卸载")

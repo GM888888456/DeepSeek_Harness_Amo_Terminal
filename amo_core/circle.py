@@ -167,7 +167,7 @@ class CircleMixin:
         if fresh:
             data["new"] = (list(data["new"]) + fresh)[-CIRCLE_MAX_NEW:]
             for item in fresh:
-                logger.info("[amo] 社交圈：新%s「%s」"
+                logger.debug("[amo] 社交圈：新%s「%s」"
                             % ("群" if kind == "group" else "好友", item["name"]))
         # 通知里只剩号码的，等名单拿到后补上名字
         names = {str(item["id"]): item["name"] for item in data[key]}
@@ -211,7 +211,7 @@ class CircleMixin:
         data["pending"] = [i for i in data["pending"]
                            if isinstance(i, dict) and float(i.get("ts") or 0) >= cutoff][-20:]
         self._circle_save(data)
-        logger.info("[amo] 社交圈已更新：%d 个群 / %d 个好友（登录号 %s %s）"
+        logger.debug("[amo] 社交圈已更新：%d 个群 / %d 个好友（登录号 %s %s）"
                     % (len(data["groups"]), len(data["friends"]),
                        (data.get("self") or {}).get("id") or "?",
                        (data.get("self") or {}).get("name") or ""))
@@ -295,7 +295,7 @@ class CircleMixin:
         if changed:
             self._circle_save(data)
             if note:
-                logger.info("[amo] 社交圈：%s" % note)
+                logger.debug("[amo] 社交圈：%s" % note)
 
     async def _circle_track(self, event):
         """每条消息都过一遍：通知类记下来，名单过期就顺手刷新。"""

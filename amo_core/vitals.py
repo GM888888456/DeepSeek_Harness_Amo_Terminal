@@ -73,7 +73,7 @@ class VitalsMixin:
                 continue
             try:
                 self.feelings.set_physiology(energy=target)
-                logger.info("[amo] 歇了一会儿，精力回到 %d" % int(target))
+                logger.debug("[amo] 歇了一会儿，精力回到 %d" % int(target))
             except Exception as exc:
                 logger.debug("[amo] 白天回精力失败: %s" % exc)
             return
@@ -107,7 +107,7 @@ class VitalsMixin:
                 return
             self.feelings.set_physiology(energy=88.0)
             self.db.kv_set("energy_wake_date", today)
-            logger.info("[amo] 早上醒了，精力回满")
+            logger.debug("[amo] 早上醒了，精力回满")
         except Exception as exc:
             logger.debug("[amo] 睡醒回精力失败: %s" % exc)
 
@@ -172,7 +172,7 @@ class VitalsMixin:
             self.db.kv_set("device_wish", wish)
         except Exception:
             pass
-        logger.info("[amo] 想换设备：%s" % text)
+        logger.debug("[amo] 想换设备：%s" % text)
 
     async def _ritual_pending(self, profile):
         """现在是否正处在「还没发」的问候时段。
@@ -239,14 +239,14 @@ class VitalsMixin:
                 data = await self._image_bytes(
                     prompt, umo, str(row.get("uid") or ""), selfie=True)
                 if not data:
-                    logger.info("[amo] 答应的照片没拍成，等下一轮：%s" % row.get("text"))
+                    logger.debug("[amo] 答应的照片没拍成，等下一轮：%s" % row.get("text"))
                     continue
                 ok = await self._send_image_to_umo(
                     umo, data, text="", label="自拍", prompt=prompt)
                 if ok:
                     self.promises.mark_done(pid)
                     self._promise_settle_siblings(row)
-                    logger.info("[amo] 答应的照片补拍发出（%s）：%s"
+                    logger.debug("[amo] 答应的照片补拍发出（%s）：%s"
                                 % (look or "此刻穿着", row.get("text")))
                 return  # 一轮只补一张
         except Exception as exc:

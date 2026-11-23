@@ -79,7 +79,7 @@ def pick_holiday_plan(engine, day, meta, weather, health, period, event,
     """长假当天一次性定活动；同一天只由日期种子决定，不随刷新变。"""
     if not is_long_holiday(engine.p, meta):
         return None
-    logger.info(
+    logger.debug(
         "[HOLIDAY_DEBUG] date=%s is_long_holiday=true holiday=%s holiday_days=%s "
         "source=%s",
         day, (meta or {}).get("holiday") or "-", (meta or {}).get("holiday_days") or 0,
@@ -127,7 +127,7 @@ def pick_holiday_plan(engine, day, meta, weather, health, period, event,
         plan["place"] = (str(city or "").strip() + "·商场").strip("·") or "商场"
         plan["zone"] = "mall"
     plan["kind"] = kind
-    logger.info(
+    logger.debug(
         "[PLAN_DEBUG] date=%s activity=%s zone=%s seed=%s stable=true",
         day, plan["kind"], plan["zone"], seed,
     )

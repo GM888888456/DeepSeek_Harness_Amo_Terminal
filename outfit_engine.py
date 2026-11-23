@@ -59,7 +59,7 @@ STYLE_CAMPS = (
 GENERIC_STYLE_WORDS = ("衣服", "一套", "一身", "一件", "换", "随便", "你挑", "都行")
 
 SWIM_WORDS = ("泳装", "泳衣", "泳裤", "比基尼")
-HOME_WEAR_WORDS = ("睡衣", "家居服", "睡裙")
+HOME_WEAR_WORDS = ("睡衣", "睡裙", "睡袍", "寝衣", "家居服", "居家服", "棉拖")
 BEACH_PLACES = ("海边", "沙滩", "泳池", "游泳馆", "温泉", "海滩", "水上乐园")
 BEACH_ACTIVITIES = ("游泳", "泡温泉", "玩水", "潜水", "冲浪")
 HOME_PLACE_WORDS = ("家", "小窝", "公寓", "住处", "宿舍", "房间")
@@ -162,7 +162,7 @@ class OutfitEngine:
             return "beach"
         if category == "sport" or any(word in text for word in ("健身", "跑步", "运动", "瑜伽")):
             return "sport"
-        if category == "work" or any(word in text for word in ("上班", "公司", "开会", "办公")):
+        if category == "work" or any(word in text for word in ("上班", "公司", "开会", "办公", "工位", "晨会", "评审", "同事", "打卡", "加班")):
             return "work"
         if any(word in text for word in ("婚礼", "宴会", "年会", "正式", "面试")):
             return "formal"
@@ -248,6 +248,60 @@ class OutfitEngine:
         if scenes and all(scene == "home" for scene in scenes):
             return "home"
         return "casual" if scenes else "home"
+
+    # ---------- 当天锁定的那一套 ----------
+
+    @staticmethod
+    def _look_lock_key(day):
+        return "look_lock:" + str(day)
+
+    def locked_look(self, day):
+        """今天已经定下来的那一套衣服。
+
+        2026-11-22 事故：同一天里日程被重建过几次，每次重建按场景重抽一套，
+        她的群里自拍是淡蓝、私聊要的照片成了淡粉。从这天起一天只定一套，
+        之后重建日程、生图、面板试算全读这一个值；要换只能换装/洗澡/override。
+        """
+        day = str(day or "").strip()
+        if not day:
+            return ""
+        try:
+            data = self.plugin.db.kv_get(self._look_lock_key(day), {})
+        except Exception:
+            return ""
+        if isinstance(data, dict):
+            outfit = str(data.get("outfit") or "").strip()
+        else:
+            outfit = str(data or "").strip()
+        return outfit if self.look_lock_ok(outfit) else ""
+
+    def look_lock_ok(self, outfit):
+        """锁住的那套还在衣柜里吗（他可能把那套删了）。"""
+        text = str(outfit or "").strip()
+        if not text:
+            return False
+        if "｜" not in text:
+            return True
+        head = text.split("｜", 1)[0].strip()
+        try:
+            groups = self.sets() or {}
+        except Exception:
+            return True
+        if not groups:
+            # 衣柜读不到（启动早期 / 记忆库还没同步）时不能把锁扔掉，否则一天照样乱换
+            return True
+        return head in groups
+
+    def lock_look(self, day, outfit, scene=""):
+        day = str(day or "").strip()
+        text = str(outfit or "").strip()
+        if not day or not text:
+            return
+        try:
+            self.plugin.db.kv_set(self._look_lock_key(day), {
+                "outfit": text, "scene": str(scene or ""), "ts": time.time()})
+        except Exception:
+            pass
 
     # ---------- 手动换装 ----------
 
@@ -598,7 +652,13 @@ class OutfitEngine:
             return items
         gender = self.gender(persona)
         base_scene = self.day_scene(items)
-        pair = self._compose(base_scene, day, gender)
+        # 一天一套：今天已经定过就沿用，日程重建也不换
+        # 2026-11-23 事故：锁住的那套不合今天场景（寝衣锁在通勤日）时，
+        # 以前因为「已经有锁」就跳过写入，坏锁会一直留到晚上。现在锁被判不安全就重写。
+        locked = self.locked_look(day)
+        pair = self._safe(locked, base_scene) or self._compose(base_scene, day, gender)
+        if not locked or pair != locked:
+            self.lock_look(day, pair, base_scene)
         backup = self._compose(base_scene, "%s-b" % day, gender)
         # 淋湿/弄脏回家换衣服必须真换一套：换到和上午那套不同为止（最多再试 3 次）。
         # 以前只换一个种子，衣柜里同场景只有两套时有一半概率抽回原来那套。
@@ -658,6 +718,10 @@ class OutfitEngine:
         if own:
             return self._whole_set(own)
         scene = self.scene_of(activity)
+        if scene not in ("sleep", "beach"):
+            locked = self.locked_look(day)
+            if locked:
+                return locked
         # 一天一套：这一格没写衣服，就按今天的主场景算，不按这一格的场景来回换
         if scene not in ("sleep", "beach"):
             try:
@@ -670,4 +734,8 @@ class OutfitEngine:
         outfit = self._safe(self._compose(scene, day, self.gender(persona)), scene)
         if not outfit:
             outfit = self._pick(self.gender(persona), scene, day, key)
-        return outfit or self._pick(self.gender(persona), "casual", day, key)
+        if not outfit:
+            outfit = self._pick(self.gender(persona), "casual", day, key)
+        if outfit and scene not in ("sleep", "beach"):
+            self.lock_look(day, outfit, scene)
+        return outfit

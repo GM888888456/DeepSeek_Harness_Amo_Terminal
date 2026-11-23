@@ -139,7 +139,7 @@ class SyncMixin:
                 )
         elif pushed or not getattr(self, "_profile_sync_logged", False):
             self._profile_sync_logged = True
-            logger.info(message)
+            logger.debug(message)
         else:
             logger.debug(message)
         return pushed
@@ -152,7 +152,7 @@ class SyncMixin:
             return
         if not self._data_found_logged:
             self._data_found_logged = True
-            logger.info("[amo] 已连接数据插件 Astr_Amo_data，开始同步")
+            logger.debug("[amo] 已连接数据插件 Astr_Amo_data，开始同步")
         if self.wardrobe is not None:
             try:
                 await self.wardrobe.refresh()
@@ -181,7 +181,7 @@ class SyncMixin:
                 except Exception:
                     pass
             self.db.kv_set(marker, True)
-            logger.info("[amo] 已把关系网/日程缓存迁移到「我想永远陪着你-记忆」：%s" % pushed)
+            logger.debug("[amo] 已把关系网/日程缓存迁移到「我想永远陪着你-记忆」：%s" % pushed)
         # 画像每次都对齐（不看一次性标记）：缺的补、改过的重推
         try:
             await self._sync_profiles_to_data()

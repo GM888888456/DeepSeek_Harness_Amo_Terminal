@@ -150,9 +150,20 @@ class ReplyMixin:
             samples = DIALECT_SAMPLES.get(style, "")
             if style and samples:
                 system_parts.append("【方言】你的语种设定是「" + style + "」，偶尔自然用一点当地方言口语（如" + samples + "），但不要每句都用，也不要硬替换“就是/什么/怎么”。")
-        if relation == "相恋" and ((snap.get("feel_rel") or {}).get("anger", 50.0) >= 62
-                                   or (snap.get("feel_rel") or {}).get("sadness", 50.0) >= 62):
-            system_parts.append("【恋人情绪】你在生他的气，但会抱怨、闹别扭、要哄，不会像对普通人一样冷怼或赶人。")
+        if relation == "相恋":
+            # 2026-11-23：以前这里写「只会闹别扭、要哄、不冷怼」，她 anger 82 还在唯唯诺诺。
+            # 现在按怒气分档授权，见 hostility.lover_anger_hint()。
+            try:
+                try:
+                    from .hostility import lover_anger_hint as _anger_hint
+                except Exception:
+                    from hostility import lover_anger_hint as _anger_hint  # type: ignore
+                _mood_line = _anger_hint(snap.get("feel_rel") or {})
+            except Exception as _mood_exc:
+                logger.debug("[amo] 恋人情绪分级失败: %s" % _mood_exc)
+                _mood_line = ""
+            if _mood_line:
+                system_parts.append(_mood_line)
         if getattr(event, "amo_impersonation", False):
             system_parts.append("【冒充警告】当前 UID 不是你的恋人，却在冒充/使用恋人称呼；直接拆穿/怼回去，不要用恋人语气。")
         if self._recent_bot_initiated(umo):
@@ -258,7 +269,7 @@ class ReplyMixin:
                         text = ""
                 if text:
                     lines.append(text)
-                logger.info("[amo] 认出他发来的照片是自己的：%s %s"
+                logger.debug("[amo] 认出他发来的照片是自己的：%s %s"
                             % (row.get("date"), row.get("outfit") or ""))
                 if not self.cfg_bool("self_face_memory", True):
                     continue

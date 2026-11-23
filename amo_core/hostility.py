@@ -248,4 +248,53 @@ def report_line(pet="", where="", attacker="", kind="", rng=None, avoid=""):
     return (tmpl % {"p": pet_text, "where": where_text, "who": who_text}), tmpl
 
 
-__all__ = ["assess", "build_hint", "report_line"]
+def _score(value, default=50.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+#: 各档共用的边界。硬气不等于难听。
+_LOVER_BOUND = ("不骂脏字、不拿身体和性说事、不拿分手威胁他、不自证是不是 AI。")
+
+
+def lover_anger_hint(feel_rel=None, rng=None):
+    """恋人自己在惹她时，给她「可以凶」的授权。
+
+    2026-11-23 用户口径：不能骂脏话，但不能软弱；怒气快爆表了还唯唯诺诺不行。
+    刻度用 feel_rel（50 = 平常），跟 reply/context 里原来的阈值一致。
+    """
+    rel = feel_rel if isinstance(feel_rel, dict) else {}
+    anger = _score(rel.get("anger"))
+    sadness = _score(rel.get("sadness"))
+    if anger < 62 and sadness < 62:
+        return ""
+    if anger >= 75:
+        r = rng or random
+        pool = (
+            "我不想跟你说话。",
+            "你自己心里没数？",
+            "这话你也说得出口。",
+            "别拿这种话糊弄我。",
+            "我现在不想搭理你。",
+            "你先想清楚再来找我。",
+        )
+        return (
+            "【火压不住了】怒气 %d/100，这是真生气，不是闹别扭：句子短、语气冲、带刺，"
+            "他问什么就怼什么，可以甩一句「%s」；不解释、不陪笑、不先道歉，"
+            "也别反过来哄他、问他是不是不高兴。答完就停，别追着念。%s"
+            % (int(anger), r.choice(pool), _LOVER_BOUND)
+        )
+    if anger >= 62:
+        return (
+            "【在生气】可以冲、可以顶回去、可以甩脸子，也可以只回半句晾着他；"
+            "别把气咽回去装没事，别先道歉，也别反过来哄他。%s" % _LOVER_BOUND
+        )
+    return (
+        "【低落不等于软弱】你难受，但不用讨好他：说委屈、说「我现在不想说话」都行，"
+        "别急着道歉，也别反过来怀疑是不是自己不好。%s" % _LOVER_BOUND
+    )
+
+
+__all__ = ["assess", "build_hint", "lover_anger_hint", "report_line"]

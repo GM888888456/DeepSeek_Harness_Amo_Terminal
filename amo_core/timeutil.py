@@ -106,17 +106,63 @@ SOLAR_TERMS = {
     "2026-01-05": "小寒", "2026-01-20": "大寒", "2026-02-04": "立春", "2026-02-18": "雨水", "2026-03-05": "惊蛰", "2026-03-20": "春分", "2026-04-05": "清明", "2026-04-20": "谷雨", "2026-05-05": "立夏", "2026-05-21": "小满", "2026-06-05": "芒种", "2026-06-21": "夏至", "2026-07-07": "小暑", "2026-07-23": "大暑", "2026-08-07": "立秋", "2026-08-23": "处暑", "2026-09-07": "白露", "2026-09-23": "秋分", "2026-10-08": "寒露", "2026-10-23": "霜降", "2026-11-07": "立冬", "2026-11-22": "小雪", "2026-12-07": "大雪", "2026-12-21": "冬至",
     "2027-01-05": "小寒", "2027-01-20": "大寒", "2027-02-04": "立春", "2027-02-19": "雨水", "2027-03-06": "惊蛰", "2027-03-21": "春分", "2027-04-05": "清明", "2027-04-20": "谷雨", "2027-05-06": "立夏", "2027-05-21": "小满", "2027-06-06": "芒种", "2027-06-21": "夏至", "2027-07-07": "小暑", "2027-07-23": "大暑", "2027-08-08": "立秋", "2027-08-23": "处暑", "2027-09-08": "白露", "2027-09-23": "秋分", "2027-10-08": "寒露", "2027-10-24": "霜降", "2027-11-08": "立冬", "2027-11-22": "小雪", "2027-12-07": "大雪", "2027-12-22": "冬至",
 }
+#: holiday_calendar.json 覆盖层：{日期: {name, rest}}；rest=false 是调休补班。
+#: 缓存按 mtime 失效，改日历文件不用重启进程。
+_CALENDAR_OVERLAY = {"mtime": None, "rest": {}, "work": {}}
+
+
+def _calendar_overlay():
+    """读插件目录下的 holiday_calendar.json；读不到就用空表，内置表照旧。"""
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "holiday_calendar.json")
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return {}, {}
+    if _CALENDAR_OVERLAY.get("mtime") == mtime:
+        return _CALENDAR_OVERLAY["rest"], _CALENDAR_OVERLAY["work"]
+    rest, work = {}, {}
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            raw = json.load(handle) or {}
+    except Exception:
+        raw = {}
+    for key, value in (raw or {}).items():
+        day = str(key or "").strip()[:10]
+        if len(day) != 10:
+            continue
+        if isinstance(value, dict):
+            name = str(value.get("name") or "").strip()
+            flag = value.get("rest", True)
+        else:
+            name, flag = str(value or "").strip(), True
+        if flag is False:
+            work[day] = name or "调休"
+        else:
+            rest[day] = name or "假日"
+    _CALENDAR_OVERLAY.update({"mtime": mtime, "rest": rest, "work": work})
+    return rest, work
+
+
 def day_meta(day=None):
-    """返回某天的节日、节气和是否休息日。"""
+    """返回某天的节日、节气和上不上班：日历是唯一口径。
+
+    ``rest`` 为真 = 休息日，``work`` 为真 = 工作日。周末、法定节假日、
+    以及 holiday_calendar.json 里的调休补班（``rest: false``）都在这里判定；
+    日程骨架、日子类型、文案都只认这一份结果，不许再各自按星期猜
+    （2026-11-23：周一抽到宅家日，骨架全天在家、文案写在公司，照片就成了家里的自拍）。
+    """
     try:
         target = date.fromisoformat(str(day)) if day else _now().date()
     except Exception:
         target = _now().date()
     key = target.isoformat()
-    holiday = CN_HOLIDAYS.get(key, "")
+    extra_rest, forced_work = _calendar_overlay()
+    holiday = CN_HOLIDAYS.get(key, "") or extra_rest.get(key, "")
     term = SOLAR_TERMS.get(key, "")
     weekend = target.weekday() >= 5
-    rest = bool(weekend or holiday)
+    forced = key in forced_work
+    rest = False if forced else bool(weekend or holiday)
     holiday_days = 0
     if holiday:
         cursor = target
@@ -130,7 +176,7 @@ def day_meta(day=None):
     label = "、".join(item for item in (holiday, term) if item)
     if holiday_days >= 2:
         label += (" · " if label else "") + "%d天假期" % holiday_days
-    if not label and weekend:
+    if not label and weekend and not forced:
         label = "周末"
     return {
         "date": key,
@@ -140,6 +186,7 @@ def day_meta(day=None):
         "solar_term": term,
         "holiday_days": holiday_days,
         "rest": rest,
+        "work": not rest,
         "label": label,
     }
 def today_str():

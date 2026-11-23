@@ -328,7 +328,7 @@ class MemoryOpsMixin:
                     self.mem = plugin.mem
             except Exception:
                 pass
-            logger.info("[amo] 内嵌记忆已启动（融合模式，%s）" % getattr(plugin, "db_path", ""))
+            logger.debug("[amo] 内嵌记忆已启动（融合模式，%s）" % getattr(plugin, "db_path", ""))
             return plugin
         except Exception as exc:
             self._embedded_data_failed = True

@@ -253,7 +253,7 @@ class SocialMixin:
         try:
             report = merge_uid_alias_data(self.db.conn, mapping)
             self.db.kv_set("uid_alias_merged_signature", signature)
-            logger.info("[amo] 跨平台账号合并完成: %s" % report)
+            logger.debug("[amo] 跨平台账号合并完成: %s" % report)
         except Exception as exc:
             logger.warning("[amo] 跨平台账号合并失败: %s" % exc)
 
@@ -281,7 +281,7 @@ class SocialMixin:
         profile = self.db.get_profile(uid) or {}
         if str(profile.get("relation") or "") in ("抵触", "仇恨"):
             self.db.update_profile(uid, relation="相恋")
-            logger.info("[amo] 恋人 UID 恢复为相恋: %s" % uid)
+            logger.debug("[amo] 恋人 UID 恢复为相恋: %s" % uid)
 
     def _lover_aliases(self):
         aliases = {}
@@ -425,6 +425,122 @@ class SocialMixin:
             )
         return "\n".join(lines)
 
+    @staticmethod
+    def _rel_when(ts):
+        """关系/互动时间戳 → 「今天 20:06」「昨天 14:02」「11-20 15:32」。"""
+        try:
+            stamp = float(ts or 0)
+        except Exception:
+            return ""
+        if stamp <= 0:
+            return ""
+        try:
+            moment = datetime.fromtimestamp(stamp)
+            today = datetime.fromtimestamp(now_ts()).date()
+        except Exception:
+            return ""
+        delta = (today - moment.date()).days
+        if delta == 0:
+            return "今天 %02d:%02d" % (moment.hour, moment.minute)
+        if delta == 1:
+            return "昨天 %02d:%02d" % (moment.hour, moment.minute)
+        return "%02d-%02d %02d:%02d" % (moment.month, moment.day, moment.hour, moment.minute)
+
+    def _display_name(self, uid, fallback=""):
+        uid = str(uid or "").strip()
+        try:
+            profile = self.db.get_profile(uid) or {}
+        except Exception:
+            profile = {}
+        return (str(profile.get("name") or "").strip()
+                or str(profile.get("alias") or "").strip()
+                or str(fallback or "").strip()
+                or uid)
+
+    def _mentioned_person_lines(self, event, limit=2):
+        """这句话里点到的人：先认出是谁，再给两条关系（都带时间）。
+
+        RELATION_WIRE 2026-11-23 20:08：真的懈问「我和小澜什么关系？」，她答
+        「哪个小澜，我怎么晓得」——其实 profiles 里小澜是「熟识」、聊过 73 条，
+        relation_network 里还记着「真的懈↔小澜：熟人」。认得人却答不上来，
+        是因为「说话人↔这个人」这条边从来没被查出来喂给她。
+        """
+        try:
+            text = str(getattr(event, "message_str", "") or "")
+        except Exception:
+            return []
+        if len(text) < 2:
+            return []
+        try:
+            rows = self.db.list_profiles("", 500) or []
+        except Exception:
+            return []
+        try:
+            speaker = str(event.get_sender_id() or "").strip()
+        except Exception:
+            speaker = ""
+        hits = {}
+        for row in rows:
+            try:
+                name = str(row.get("name") or "").strip()
+                alias = str(row.get("alias") or "").strip()
+                uid = str(row.get("uid") or "").strip()
+            except Exception:
+                continue
+            if len(name) < 2 or not uid or uid == speaker:
+                continue
+            matched = ""
+            if name in text:
+                matched = name
+            elif len(alias) >= 2 and alias in text:
+                matched = alias
+            if matched:
+                hits[matched] = (len(matched), dict(row))
+        if not hits:
+            return []
+        picked = [item[1] for item in sorted(
+            hits.values(), key=lambda item: -item[0])[:max(1, int(limit))]]
+        speaker_name = self._display_name(speaker, "他") if speaker else "他"
+        lines = []
+        for row in picked:
+            name = str(row.get("name") or row.get("uid") or "").strip()
+            uid = str(row.get("uid") or "").strip()
+            relation = str(row.get("relation") or "").strip() or "普通"
+            try:
+                msg_count = int(row.get("msg_count") or 0)
+            except Exception:
+                msg_count = 0
+            line = "· %s（UID %s）：你俩「%s」" % (name, uid, relation)
+            if msg_count:
+                line += "，聊过 %d 条" % msg_count
+            when = self._rel_when(row.get("last_seen"))
+            if when:
+                line += "，最后一次 %s" % when
+            lines.append(line)
+            edge = {}
+            if speaker:
+                try:
+                    for item in (self.db.relations_for(speaker) or []):
+                        a = str(item.get("a_uid") or "")
+                        b = str(item.get("b_uid") or "")
+                        if uid in (a, b) and speaker in (a, b):
+                            edge = item
+                            break
+                except Exception:
+                    edge = {}
+            if edge:
+                sub = "  └ %s和她：「%s」" % (speaker_name, str(edge.get("relation") or "?"))
+                ewhen = self._rel_when(edge.get("updated_at"))
+                if ewhen:
+                    sub += "，%s 记的" % ewhen
+                note = str(edge.get("note") or "").strip()
+                if note:
+                    sub += "（%s）" % note[:40]
+                lines.append(sub)
+            else:
+                lines.append("  └ %s和她：关系网里没有记录，别替他编" % speaker_name)
+        return lines
+
     def _group_reply_guide(self, relation, name):
         """按关系给一句“该怎么回”的指引。"""
         relation = str(relation or "普通")
@@ -535,7 +651,7 @@ class SocialMixin:
                     removed += 1
             self.db.kv_set("legacy_memory_profiles_cleaned_432", True)
             if removed:
-                logger.info("[amo] 已移除 %d 个旧记忆插件导入画像，恢复本地画像模式" % removed)
+                logger.debug("[amo] 已移除 %d 个旧记忆插件导入画像，恢复本地画像模式" % removed)
         except Exception as exc:
             logger.debug("[amo] 清理旧记忆画像失败: %s" % exc)
 

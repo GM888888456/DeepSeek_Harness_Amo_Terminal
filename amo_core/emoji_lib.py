@@ -44,6 +44,52 @@ IDLE_STREAK = 10          # 连续多少条没带表情算「冷场」
 _EXTS = {b"\xff\xd8\xff": "jpg", b"\x89PNG": "png", b"GIF8": "gif", b"RIFF": "webp"}
 
 
+# EMOJI_MAX_CAP 2026-11-23：QQ 收藏表情上限 500，照它的规矩来，别无限收。
+MAX_ITEMS = 500
+
+
+def _evict_for_room(root: str, index: dict, need: int = 1) -> int:
+    """给新表情腾位置，返回删掉几张。
+
+    顺序：先删没收藏的，再删用得最少的，再删最久没发的，最后才动加得最早的。
+    """
+    removed = 0
+    need = max(0, int(need))
+    while removed < need and len(index) >= MAX_ITEMS:
+        pool = [(key, entry) for key, entry in index.items() if isinstance(entry, dict)]
+        if not pool:
+            break
+        pool.sort(key=lambda item: (
+            bool(item[1].get("fav")),
+            int(item[1].get("uses") or 0),
+            int(item[1].get("last") or 0),
+            int(item[1].get("added") or 0),
+        ))
+        key, entry = pool[0]
+        try:
+            rel = entry.get("file") or ""
+            path = os.path.join(root, rel)
+            if rel and os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            pass
+        index.pop(key, None)
+        removed += 1
+    return removed
+
+
+def enforce_limit(root: str) -> int:
+    """把现有表情库裁到上限内，返回删掉几张。"""
+    index = load_index(root)
+    excess = len(index) - MAX_ITEMS
+    if excess <= 0:
+        return 0
+    removed = _evict_for_room(root, index, excess)
+    if removed:
+        save_index(root, index)
+    return removed
+
+
 def root_dir(db_path: str) -> str:
     """表情库根目录（跟 amo_forever.db 同一个 plugin_data 目录）。"""
     return os.path.join(os.path.dirname(str(db_path or "")), "emoji")
@@ -97,6 +143,9 @@ def add_bytes(root: str, data: bytes, tags=()) -> tuple[str, str]:
             index[key] = entry
             save_index(root, index)
         return key, os.path.join(root, entry["file"])
+    # EMOJI_MAX_CAP：满了先腾位置再存，别让库无限长
+    if len(index) >= MAX_ITEMS:
+        _evict_for_room(root, index, 1)
     ext = _guess_ext(data)
     rel = os.path.join("files", "%s.%s" % (key, ext))
     abs_path = os.path.join(root, rel)

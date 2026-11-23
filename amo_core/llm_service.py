@@ -300,7 +300,7 @@ class LLMService:
         )
         if retry and not _pg_near_duplicate(retry, analysis["recent_bot_texts"], threshold):
             return retry
-        logger.info("[amo] 主动消息和最近的发言重复，跳过本次：%s" % str(text or retry or "")[:60])
+        logger.debug("[amo] 主动消息和最近的发言重复，跳过本次：%s" % str(text or retry or "")[:60])
         return ""
 
     async def extract_facts(self, umo, name, lines):

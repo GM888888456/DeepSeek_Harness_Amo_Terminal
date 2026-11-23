@@ -75,8 +75,8 @@ class AmoDB:
                         source = legacy_path + suffix
                         if os.path.exists(source):
                             _shutil.copy2(source, self.path + suffix)
-                    logger.info("[amo] 已迁移旧版 amo_forever 数据: %s -> %s" % (legacy_path, self.path))
-                    logger.info("[amo] 升级提示：插件标识保持 Astrbot_Amo_forever；旧 amo_forever 数据已迁移到新目录，配置文件也会自动合并。")
+                    logger.debug("[amo] 已迁移旧版 amo_forever 数据: %s -> %s" % (legacy_path, self.path))
+                    logger.debug("[amo] 升级提示：插件标识保持 Astrbot_Amo_forever；旧 amo_forever 数据已迁移到新目录，配置文件也会自动合并。")
                     break
         except Exception as exc:
             logger.warning("[amo] 旧版 amo_forever 数据迁移失败: %s" % exc)

@@ -86,7 +86,723 @@ class EconomyMixin:
         except Exception:
             pass
         self._sync_hunger_from_vitals()
-        logger.info("[amo] 日程吃饭：%s（饱食度 +%.0f）" % (dish, float(amount)))
+        logger.debug("[amo] 日程吃饭：%s（饱食度 +%.0f）" % (dish, float(amount)))
+
+    # ------------------------------------------------------------------
+    # 商超：她会自己买日用品、零食、看电器（2026-11-23 用户口径「让她有购买欲」）
+    # ------------------------------------------------------------------
+    #: 商超/零食/电器的月度预算占月薪比例（可配 market_budget_ratio）
+    MARKET_BUDGET_RATIO = 0.08
+    #: 两次逛超市至少隔多久（秒，可配 market_shop_min_gap）
+    MARKET_SHOP_MIN_GAP = 5400
+    #: 要买的东西分别去哪家店
+    MARKET_PAYEE = {"supermarket": "超市", "snacks": "便利店", "electronics": "数码店"}
+    #: 常备消耗品：(商品名, 还能用几天)。第一次进来先种一份，之后按天扣。
+    MARKET_STAPLES = (
+        ("维达抽纸 3层120抽x6包", 6),
+        ("潘婷洗发水 750ml", 9),
+        ("高露洁牙膏 180g", 12),
+        ("蓝月亮洗衣液 3kg", 15),
+        ("垃圾袋 45x50 100只", 8),
+        ("农夫山泉 550mlx12", 4),
+        ("苏菲夜用 290mm 10片", 5),
+    )
+
+    def _market_catalog(self):
+        """世态的商品表（纯数据）。拿不到就 None——绝不影响聊天和扣款。"""
+        if getattr(self, "_market_cat_loaded", False):
+            return getattr(self, "_market_cat", None)
+        self._market_cat_loaded = True
+        self._market_cat = None
+        try:
+            import importlib.util
+            import pathlib
+            path = (pathlib.Path(__file__).resolve().parents[2]
+                    / "DeepSeek_Harness_Amo_Market" / "catalog.py")
+            spec = importlib.util.spec_from_file_location("amo_market_catalog_ro", str(path))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            self._market_cat = mod
+        except Exception as exc:
+            logger.debug("[amo] 读不到世态商品表: %s" % exc)
+        return self._market_cat
+
+    def _market_rows(self, kind):
+        cat = self._market_catalog()
+        rows = getattr(cat, "CATALOGS", {}).get(str(kind or "")) if cat is not None else None
+        return list(rows or [])
+
+    @staticmethod
+    def _market_price(row):
+        try:
+            return round(float((row or {}).get("price") or 0), 2)
+        except Exception:
+            return 0.0
+
+    def _market_budget(self):
+        """这个月能花在商超/零食/电器上的钱：先认配置，再按月薪比例算。"""
+        try:
+            amount = float(self.p.cfg_float("market_budget_amount", 0) or 0)
+        except Exception:
+            amount = 0.0
+        if amount > 0:
+            return round(amount, 2)
+        try:
+            ratio = float(self.p.cfg_float("market_budget_ratio", self.MARKET_BUDGET_RATIO))
+        except Exception:
+            ratio = self.MARKET_BUDGET_RATIO
+        salary = 0.0
+        try:
+            salary = float((getattr(self.p, "worldview", {}) or {}).get("salary") or 0)
+        except Exception:
+            salary = 0.0
+        if salary <= 0:
+            salary = 20000.0
+        return round(max(0.0, ratio) * salary, 2)
+
+    def _market_month(self, now=None):
+        try:
+            return (now or _clock_now()).strftime("%Y-%m")
+        except Exception:
+            return ""
+
+    def _market_spent(self, month=None):
+        try:
+            return float(self.db.kv_get("market_spend:" + (month or self._market_month()), 0) or 0)
+        except Exception:
+            return 0.0
+
+    def _market_stock(self):
+        """常备消耗品余量（天）。没有就种一份，不然她永远想不起买东西。"""
+        stock = self.db.kv_get("market_stock", None)
+        if isinstance(stock, dict) and stock:
+            return stock
+        stock = {name: days for name, days in self.MARKET_STAPLES}
+        try:
+            self.db.kv_set("market_stock", stock)
+            self.db.kv_set("market_stock_ts", now_ts())
+        except Exception:
+            pass
+        return stock
+
+    def _market_stock_tick(self):
+        """按过去的整天数扣库存，返回 (余量, 今天用完了的清单)。"""
+        stock = dict(self._market_stock())
+        try:
+            last = float(self.db.kv_get("market_stock_ts", now_ts()) or now_ts())
+        except Exception:
+            last = now_ts()
+        days = int(max(0.0, now_ts() - last) // 86400)
+        if days <= 0:
+            return stock, []
+        ran_out = []
+        for name in list(stock):
+            stock[name] = max(0, int(stock[name]) - days)
+            if stock[name] <= 0:
+                ran_out.append(name)
+        try:
+            self.db.kv_set("market_stock", stock)
+            self.db.kv_set("market_stock_ts", float(last) + days * 86400)
+        except Exception:
+            pass
+        return stock, ran_out
+
+    def _shopping_wants(self, ran_out, now=None):
+        """此刻她想买什么：需求在前，冲动在后。返回 [(品类, 挑选条件, 理由)]。"""
+        wants = []
+        if ran_out:
+            wants.append(("supermarket", {"names": tuple(ran_out)}, "用完了，得补货"))
+        try:
+            period = self.state.period_info() or {}
+            phase = str(period.get("phase") or "")
+            if phase and "非" not in phase:
+                wants.append(("supermarket", {"tags": ("例假",)}, "来例假了，得买卫生巾"))
+        except Exception:
+            pass
+        weather = getattr(self.state, "weather", {}) or {}
+        try:
+            temp = float(weather.get("temp") or 0)
+        except Exception:
+            temp = 0.0
+        if temp >= 28:
+            wants.append(("snacks", {"tags": ("解渴", "热")}, "天热，想喝冰水"))
+        if "雨" in str(weather.get("text") or ""):
+            wants.append(("supermarket", {"tags": ("雨",)}, "下雨了，想买把伞"))
+        if wants:
+            return wants
+        # 冲动：心情不错，人又闲着或在外面，就随手买点吃的
+        try:
+            mood = (self.state.snapshot() or {}).get("mood") or {}
+            happy = float(mood.get("开心") or 0) + float(mood.get("兴奋") or 0)
+        except Exception:
+            happy = 0.0
+        try:
+            category = str((self.state.current_activity() or {}).get("category") or "")
+        except Exception:
+            category = ""
+        if happy >= 55 and category in ("play", "rest", "meal"):
+            wants.append(("snacks", {"tags": ("嘴馋",)}, "心情好，想买点零食"))
+        return wants
+
+    def _pick_market_row(self, kind, spec, price_cap):
+        rows = self._market_rows(kind)
+        names = tuple(spec.get("names") or ())
+        tags = tuple(spec.get("tags") or ())
+        if names:
+            rows = [row for row in rows if str(row.get("name") or "") in names]
+        elif tags:
+            rows = [row for row in rows
+                    if all(tag in (row.get("tags") or ()) for tag in tags)]
+        rows = [row for row in rows if 0 < self._market_price(row) <= price_cap]
+        if not rows:
+            return {}
+        return dict(random.choice(rows))
+
+    def _maybe_shopping(self) -> None:
+        """逛超市：需求优先，预算封顶；超了就只看不买，并记住「想买但没钱」。"""
+        try:
+            gap = float(self.p.cfg_float("market_shop_min_gap", self.MARKET_SHOP_MIN_GAP))
+        except Exception:
+            gap = self.MARKET_SHOP_MIN_GAP
+        try:
+            last = float(self.db.kv_get("market_shop_ts", 0) or 0)
+        except Exception:
+            last = 0.0
+        if now_ts() - last < max(600.0, gap):
+            return
+        stock, ran_out = self._market_stock_tick()
+        wants = self._shopping_wants(ran_out)
+        if not wants:
+            return
+        kind, spec, why = wants[0]
+        try:
+            self.db.kv_set("market_shop_ts", now_ts())
+        except Exception:
+            pass
+        # 不设上限（2026-11-23 用户口径）：买得起就买；买不起就记住「买不起」，
+        # 把赚钱的紧迫感顶上去——他要的是她会为了钱着急，不是乖乖省钱。
+        try:
+            cash = float(self.balance() or 0)
+        except Exception:
+            cash = 0.0
+        # 储蓄也是她的钱：卡里不够就从储蓄补（金融 charge 默认就会这么做）
+        try:
+            inv = getattr(self.state, "invest", {}) or {}
+            cash += float(inv.get("savings") or 0)
+        except Exception:
+            pass
+        row, affordable = self._market_pick_affordable(kind, spec, cash)
+        if not row:
+            return
+        if not affordable:
+            name = str(row.get("name") or "")
+            self._bump_pressure(12, "想买%s，钱不够" % name)
+            try:
+                uid = self._primary_uid()
+                if uid:
+                    self._spawn(self._write_memory_checked(
+                        uid, "%s，看中%s（%.0f 元），可卡里只剩 %.0f，买不起"
+                        % (why, name, self._market_price(row), cash),
+                        kind="event", tier=0))
+            except Exception:
+                pass
+            return
+        self._spawn(self._do_shopping(row, kind, why))
+
+    async def _do_shopping(self, row, kind, why) -> None:
+        name = str(row.get("name") or "")
+        price = self._market_price(row)
+        if not name or price <= 0:
+            return
+        payee = self.MARKET_PAYEE.get(kind, "超市")
+        rid = "market:%s:%s" % (
+            self._market_month(),
+            hashlib.sha1(("%s|%.2f|%.0f" % (name, price, now_ts())).encode("utf-8")).hexdigest()[:12],
+        )
+        try:
+            result = await self.charge(price, reason="买%s" % name, payee=payee,
+                                       request_id=rid, source="market", detail=why)
+        except Exception as exc:
+            logger.debug("[amo] 买东西扣款失败: %s" % exc)
+            return
+        if not isinstance(result, dict) or not result.get("ok"):
+            return
+        spent_now = price
+        try:
+            spent_now = self._market_spent() + price
+            self.db.kv_set("market_spend:" + self._market_month(), round(spent_now, 2))
+        except Exception:
+            pass
+        # 有周期的商品（tags 里带天数）补回库存，下次按周期再买
+        try:
+            days = 0
+            for tag in (row.get("tags") or ()):
+                if str(tag).isdigit():
+                    days = int(tag)
+                    break
+            if days:
+                stock = dict(self.db.kv_get("market_stock", {}) or {})
+                stock[name] = days
+                self.db.kv_set("market_stock", stock)
+        except Exception:
+            pass
+        logger.debug("[amo] 买东西：%s ¥%.2f（%s），本月商超已花 ¥%.0f，余额 %s" % (
+            name, price, why, spent_now, result.get("balance")))
+        # 花完钱余额见底：紧迫感立刻跟上
+        try:
+            if float(result.get("balance") or 0) < 300:
+                self._bump_pressure(10, "花完钱只剩一点点")
+        except Exception:
+            pass
+
+    def _meal_note(self, start, dish, cost, payee) -> None:
+        """记下今天这顿吃了什么、多少钱：她答得出饭钱就是从这里来的。"""
+        try:
+            key = "meal_ledger:" + _clock_now().date().isoformat()
+            rows = self.db.kv_get(key, []) or []
+            if not isinstance(rows, list):
+                rows = []
+            rows.append({"start": str(start), "dish": str(dish),
+                         "cost": round(float(cost), 2), "payee": str(payee)})
+            self.db.kv_set(key, rows[-12:])
+        except Exception as exc:
+            logger.debug("[amo] 记饭钱失败: %s" % exc)
+
+    #: 活动里出现这些词就照着挑菜（长的排前面，「火锅」先于「锅」）
+    DISH_WORDS = ("火锅", "烤鱼", "烧烤", "披萨", "汉堡", "寿司", "拉面", "米线", "麻辣烫",
+                  "饺子", "馄饨", "包子", "炸鸡", "牛排", "意面", "咖喱", "粥", "粉", "面",
+                  "串", "奶茶", "咖啡", "甜品", "沙拉", "小龙虾", "酸汤鱼", "辣子鸡", "丝娃娃")
+    #: 自己做饭时端上桌的是什么（菜名用来说话，不是菜场货名）
+    HOME_DISHES = ("西红柿炒蛋", "青椒肉丝", "土豆丝", "蛋炒饭", "番茄鸡蛋面",
+                   "红烧茄子", "韭菜炒蛋", "肉末豆角", "冬瓜排骨汤", "青菜面")
+
+    def _meal_pick(self, item, day):
+        """这一顿吃什么、多少钱：从世态目录挑，同一天同一格价格固定。
+
+        - 自己做饭：菜场挑三样算一顿菜钱（单样封顶 30），菜名用家常菜
+        - 在家吃 / 外卖：外卖目录
+        - 在外面吃：堂食目录，单人封顶 60，双人套餐不进单人池；
+          他说请客 / 聚餐 / 火锅 / 生日才放开到 260
+        """
+        activity = str(item.get("activity") or "")
+        zone = str(item.get("zone") or "").strip()
+        place = str(item.get("place") or "")
+        start = str(item.get("start") or "")
+        cooking = any(word in activity for word in ("做饭", "下厨", "炒", "煮", "买菜", "下锅"))
+        if cooking:
+            kind, payee, reason = "groceries", "菜场", "自己做饭"
+        elif "外卖" in activity:
+            kind, payee, reason = "takeout", "外卖", "点外卖"
+        elif zone == "home" or "家" in place:
+            kind, payee, reason = "takeout", "外卖", "在家吃"
+        else:
+            kind, payee, reason = "dining", (place or "餐馆"), "在外面吃"
+        rows = self._market_rows(kind)
+        if not rows:
+            dish, cost = {"groceries": ("家常菜", 22.0), "takeout": ("外卖", 36.0),
+                          "dining": ("一顿饭", 58.0)}[kind]
+            return dish, cost, payee, reason
+        rnd = random.Random("amo-meal:%s:%s:%s" % (day, start, kind))
+        if kind == "groceries":
+            # 一顿饭的菜钱：挑三样，单样封顶 30（别拿春节礼盒当晚饭）
+            picks = [rnd.choice(rows) for _ in range(3)]
+            cost = round(sum(min(self._market_price(row), 30.0) for row in picks), 1)
+            dish = rnd.choice(self.HOME_DISHES)
+            return dish, max(8.0, cost or 22.0), "菜场", reason
+        if kind == "dining":
+            feast = any(word in activity for word in ("请", "聚", "火锅", "烤鱼", "生日", "庆祝"))
+            cap = 260.0 if feast else 60.0
+            pool = [row for row in rows
+                    if self._market_price(row) <= cap
+                    and "双人" not in str(row.get("name") or "")]
+            if pool:
+                rows = pool
+        # 他说吃什么就尽量挑那个：说“火锅”却端上披萨，一眼就假
+        for word in self.DISH_WORDS:
+            if word and word in activity:
+                pool = [row for row in rows if word in str(row.get("name") or "")]
+                if pool:
+                    rows = pool
+                break
+        row = rnd.choice(rows)
+        dish = str(row.get("name") or "") or "一顿饭"
+        cost = self._market_price(row) or 30.0
+        shop = str(row.get("shop") or "").strip()
+        if shop:
+            payee = shop
+        return dish, cost, payee, reason
+
+    #: 照片里会出现在手上的吃喝 → 世态目录里的说法（第一列是提示词词，第二列是目录词）
+    PHOTO_PROP_WORDS = (
+        ("奶茶", ("奶茶",)), ("奶昔", ("奶昔", "奶茶")), ("咖啡", ("咖啡",)),
+        ("冰淇淋", ("冰淇淋", "雪糕")), ("雪糕", ("雪糕", "冰淇淋")),
+        ("蛋糕", ("蛋糕", "甜品")), ("酸奶", ("酸奶", "牛奶")),
+        ("可乐", ("可乐", "汽水")), ("果汁", ("果汁", "饮料")),
+        ("饮料", ("饮料", "水")), ("零食", ("零食", "薯片")),
+        ("面包", ("面包",)), ("炸鸡", ("炸鸡",)), ("烤串", ("烧烤", "串")),
+    )
+
+    async def photo_prop_bill(self, text: str) -> dict:
+        """照片里她要拿吃喝 → 先按世态目录买下来、记账，再让她画。
+
+        2026-11-23 用户口径：照片里手里有奶茶，账上就得有这笔钱。
+        返回 {"ok", "item", "cost", "payee", "line", "code"}：
+        调用方拿 ``line`` 写进提示词；``ok`` 为假就按「手上空着」画。
+        """
+        text = str(text or "")
+        words = ()
+        for word, kinds in self.PHOTO_PROP_WORDS:
+            if word in text:
+                words = kinds
+                break
+        if not words:
+            return {"ok": False, "code": "no_prop", "line": ""}
+        rows = []
+        for kind in ("snacks", "supermarket", "dining"):
+            try:
+                rows.extend(self._market_rows(kind) or [])
+            except Exception:
+                continue
+        pool = [row for row in rows
+                if any(word in str(row.get("name") or "") for word in words)]
+        if not pool:
+            return {"ok": False, "code": "not_in_catalog", "line": ""}
+        # 照片里是「手里那份」，不是整箱：大包装/分享装/整箱/临期一律让开
+        bulk = ("x12", "x6", "x8", "x4", "大包装", "分享装", "整箱", "家庭装", "临期")
+        single = [row for row in pool
+                  if not any(word in str(row.get("name") or "") for word in bulk)]
+        if single:
+            pool = single
+        day = _clock_now().date().isoformat()
+        rnd = random.Random("amo-photo-prop:%s:%s" % (day, text[:12]))
+        row = rnd.choice(pool)
+        name = str(row.get("name") or "").strip()
+        cost = self._market_price(row) or 0.0
+        if not name or cost <= 0:
+            return {"ok": False, "code": "no_price", "line": ""}
+        shop = str(row.get("shop") or "").strip() or "街边小店"
+        rid = "photo-prop:%s:%s" % (day, name[:8])
+        try:
+            result = await self.charge(cost, reason="买%s" % name, payee=shop,
+                                       request_id=rid, source="photo_prop", detail=shop)
+        except Exception as exc:
+            logger.debug("[amo] 照片道具扣款失败: %s" % exc)
+            return {"ok": False, "code": "charge_error", "line": ""}
+        if not isinstance(result, dict) or not result.get("ok"):
+            try:
+                self._bump_pressure(6, "照片里的%s买不起" % name)
+            except Exception:
+                pass
+            return {"ok": False, "code": "no_money", "line": ""}
+        line = "手里那份是刚在%s买的%s（%.0f 元）" % (shop, name, cost)
+        try:
+            uid = self._primary_uid()
+            if uid:
+                await self._write_memory_checked(
+                    uid, "在%s买了%s，%.0f 元" % (shop, name, cost),
+                    kind="event", tier=0)
+        except Exception:
+            pass
+        logger.debug("[amo] 照片道具记账：%s（%.0f 元，%s）" % (name, cost, shop))
+        return {"ok": True, "item": name, "cost": cost, "payee": shop, "line": line}
+
+    # ------------------------------------------------------------------
+    # 没钱的紧迫感 / 她真的会动股票 / 缺钱就去挣（2026-11-23 用户口径）
+    # ------------------------------------------------------------------
+    #: 没钱的紧迫感（0~100）：越高越想挣钱、越想赌一把
+    MONEY_PRESSURE_KEY = "money_pressure"
+    #: 两次动股票至少隔多久（秒，可配 invest_action_gap）
+    INVEST_ACTION_GAP = 10800
+    #: 两次挣外快至少隔多久（秒，可配 earn_gap）
+    EARN_GAP = 21600
+
+    def _money_pressure(self) -> float:
+        try:
+            value = float(self.db.kv_get(self.MONEY_PRESSURE_KEY, 0) or 0)
+        except Exception:
+            value = 0.0
+        return max(0.0, min(100.0, value))
+
+    def _bump_pressure(self, delta: float, why: str = "") -> float:
+        """缺钱的感觉往上顶：顺手写进心情，她才会真的着急。"""
+        value = max(0.0, min(100.0, self._money_pressure() + float(delta)))
+        try:
+            self.db.kv_set(self.MONEY_PRESSURE_KEY, round(value, 1))
+            if why:
+                self.db.kv_set("money_pressure_why", str(why)[:60])
+        except Exception:
+            pass
+        if delta > 0:
+            try:
+                self.feel_bump({"焦虑": min(12.0, float(delta) * 0.4),
+                                "紧张": min(8.0, float(delta) * 0.2)})
+            except Exception:
+                pass
+        return value
+
+    def _money_pressure_tick(self) -> None:
+        """余额见底自己往上顶，余额宽裕慢慢回落——不用等她想起「我缺钱」。"""
+        value = self._money_pressure()
+        try:
+            balance = float(self.balance() or 0)
+        except Exception:
+            balance = 0.0
+        # 手上没现金才算「急」；但总资产还厚的时候只是要挪钱，不是真要命
+        try:
+            inv = getattr(self.state, "invest", {}) or {}
+            total = (float(inv.get("cash") or 0) + float(inv.get("savings") or 0)
+                     + float(inv.get("value") or 0))
+        except Exception:
+            total = 0.0
+        if balance < 500 and total < 20000:
+            value = min(100.0, value + 2.5)
+        elif balance < 500:
+            value = min(100.0, value + 0.6)
+        elif balance < 1500:
+            value = min(100.0, value + 0.4)
+        elif balance > 3000:
+            value = max(0.0, value - 0.8)
+        else:
+            value = max(0.0, value - 0.3)
+        try:
+            self.db.kv_set(self.MONEY_PRESSURE_KEY, round(value, 1))
+        except Exception:
+            pass
+
+    def _market_pick_affordable(self, kind, spec, cash):
+        """挑一件想买的：买得起就随机挑，买不起就给出最便宜的那件（好让她记住买不起）。"""
+        rows = self._market_rows(kind)
+        names = tuple((spec or {}).get("names") or ())
+        tags = tuple((spec or {}).get("tags") or ())
+        if names:
+            rows = [row for row in rows if str(row.get("name") or "") in names]
+        elif tags:
+            rows = [row for row in rows
+                    if all(tag in (row.get("tags") or ()) for tag in tags)]
+        if not rows:
+            return {}, False
+        rows = sorted(rows, key=self._market_price)
+        ok = [row for row in rows if 0 < self._market_price(row) <= cash]
+        if ok:
+            return dict(random.choice(ok)), True
+        return dict(rows[0]), False
+
+    def _invest_pick_symbol(self) -> str:
+        """空仓时从金融的行情表里挑一只：优先买得起 100 股的便宜票。"""
+        try:
+            import json as _json
+            import pathlib as _pathlib
+            path = (_pathlib.Path(__file__).resolve().parents[2].parent
+                    / "plugin_data" / "DeepSeek_Harness_Amo_Finance" / "quotes.json")
+            data = _json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.debug("[amo] 读不到行情表: %s" % exc)
+            return ""
+        pool = []
+        for symbol, row in (data or {}).items():
+            try:
+                row = row or {}
+                price = 0.0
+                for key in ("price", "close", "last", "now"):
+                    if row.get(key):
+                        price = float(row.get(key))
+                        break
+            except Exception:
+                price = 0.0
+            if price > 0:
+                pool.append((price, str(symbol)))
+        if not pool:
+            return ""
+        pool.sort()
+        cheap = [sym for price, sym in pool if price <= 60][:6]
+        return random.choice(cheap or [sym for _, sym in pool[:3]])
+
+    def _invest_tick(self) -> None:
+        """她会真的下单：浮亏 + 缺钱 → 割肉；浮盈 + 手上有钱 → 加仓。
+
+        以前只有「韭菜话术」，从来不真买卖，所以持仓永远是原样（2026-11-23 用户指出）。
+        只动手上已有的票，不凭空挑新股票：没有标的池就不开新仓。
+        """
+        try:
+            gap = float(self.p.cfg_float("invest_action_gap", self.INVEST_ACTION_GAP))
+        except Exception:
+            gap = float(self.INVEST_ACTION_GAP)
+        try:
+            last = float(self.db.kv_get("invest_check_ts", 0) or 0)
+        except Exception:
+            last = 0.0
+        if now_ts() - last < max(600.0, min(float(gap), 1800.0)):
+            return
+        try:
+            # 检查就记检查，别每轮都去刷行情（这是会打网络的）
+            self.db.kv_set("invest_check_ts", now_ts())
+        except Exception:
+            pass
+        plugin = self._finance()
+        if plugin is None:
+            return
+        try:
+            summary = plugin.invest_summary()
+        except Exception as exc:
+            logger.debug("[amo] 读投资快照失败: %s" % exc)
+            return
+        if not isinstance(summary, dict):
+            return
+        raw_positions = summary.get("positions") or {}
+        if isinstance(raw_positions, dict):
+            items = [(str(sym), pos) for sym, pos in raw_positions.items()
+                     if isinstance(pos, dict)]
+        elif isinstance(raw_positions, list):
+            items = [(str((pos or {}).get("symbol") or ""), pos)
+                     for pos in raw_positions if isinstance(pos, dict)]
+        else:
+            items = []
+        pressure = self._money_pressure()
+        # 购买力 = （活期 + 储蓄）× 杠杆，金融已经算好了；别只拿活期当钱
+        try:
+            cash = float(summary.get("buying_power") or 0)
+        except Exception:
+            cash = 0.0
+        if cash <= 0:
+            try:
+                cash = (float(summary.get("cash") or 0)
+                        + float(summary.get("savings") or 0))
+            except Exception:
+                cash = 0.0
+        # 她要动，不是躺：底概率 0.35，缺钱更主动
+        chance = min(0.9, 0.35 + pressure / 200.0)
+        if random.random() > chance:
+            return
+        if not items:
+            # 空仓：自己挑一只开一仓。手上有 800 才动手（够买 100 股便宜的）
+            try:
+                self.db.kv_set("invest_action_ts", now_ts())
+            except Exception:
+                pass
+            symbol = self._invest_pick_symbol()
+            if symbol and cash >= 800:
+                self._spawn(self._do_invest(plugin, symbol, "open", 0.0, cash))
+            return
+        # 仓位真的会动：最赚的落袋，最亏的认赔，手上有钱就追涨杀跌
+        scored = []
+        for symbol, pos in items:
+            if not symbol:
+                continue
+            try:
+                pnl = float(pos.get("pnl_pct") or 0)
+            except Exception:
+                continue
+            scored.append((pnl, symbol))
+        if not scored:
+            return
+        scored.sort()
+        loser_pnl, loser_sym = scored[0]
+        winner_pnl, winner_sym = scored[-1]
+        target, action, pnl_pct = "", "", 0.0
+        if winner_pnl >= 3.5:
+            # 赚了就落袋为安（韭菜本色：赚一点就想卖）
+            pnl_pct, target, action = winner_pnl, winner_sym, "sell"
+        elif cash < 800 and winner_pnl >= 1.5:
+            # 手头没钱，先把最赚的那只卖掉换现金，才买得起别的
+            pnl_pct, target, action = winner_pnl, winner_sym, "sell"
+        elif loser_pnl <= -3.5 and pressure >= 20:
+            # 亏多了又缺钱：认赔离场
+            pnl_pct, target, action = loser_pnl, loser_sym, "sell"
+        elif cash >= 300:
+            if loser_pnl <= -2:
+                pnl_pct, target, action = loser_pnl, loser_sym, "buy"
+            elif winner_pnl >= 2:
+                pnl_pct, target, action = winner_pnl, winner_sym, "buy"
+        if not target:
+            return
+        try:
+            self.db.kv_set("invest_action_ts", now_ts())
+        except Exception:
+            pass
+        self._spawn(self._do_invest(plugin, target, action, pnl_pct, cash))
+
+    async def _do_invest(self, plugin, symbol, action, pnl_pct, cash) -> None:
+        uid = ""
+        try:
+            uid = self._primary_uid()
+        except Exception:
+            uid = ""
+        try:
+            if action == "sell":
+                result = await asyncio.to_thread(plugin.invest_sell, symbol, 0, True)
+                # 赚了卖掉叫落袋为安，亏了才是割肉——别把她赚钱的单子说成认赔
+                verb = "落袋为安" if pnl_pct > 0 else "割肉清仓"
+            elif action == "open":
+                budget = round(min(max(cash * 0.5, 800.0), 5000.0), 2)
+                result = await asyncio.to_thread(plugin.invest_buy, symbol, 0, budget)
+                verb = "建仓"
+            else:
+                budget = round(min(max(cash * 0.3, 300.0), 3000.0), 2)
+                if budget < 300:
+                    return
+                result = await asyncio.to_thread(plugin.invest_buy, symbol, 0, budget)
+                verb = "加仓"
+        except Exception as exc:
+            logger.debug("[amo] 动手买卖失败: %s" % exc)
+            return
+        ok = isinstance(result, dict) and (result.get("ok") or result.get("code") in (0, "ok"))
+        logger.debug("[amo] 股票%s：%s（%+.1f%%）-> %s" % (verb, symbol, pnl_pct, ok))
+        if not ok or not uid:
+            return
+        try:
+            self._sync_finance()
+        except Exception:
+            pass
+        line = "%s：%s %+.1f%%，我%s了" % (
+            "他问我钱够不够花" if self._money_pressure() >= 35 else "看盘",
+            symbol, pnl_pct, verb)
+        try:
+            await self._write_memory_checked(uid, line, kind="event", tier=0)
+        except Exception:
+            pass
+
+    def _earn_tick(self) -> None:
+        """缺钱就去挣：接私活、加班。紧迫感越高越常干，挣到了压力回落。"""
+        pressure = self._money_pressure()
+        if pressure < 30:
+            return
+        try:
+            gap = float(self.p.cfg_float("earn_gap", self.EARN_GAP))
+        except Exception:
+            gap = float(self.EARN_GAP)
+        try:
+            last = float(self.db.kv_get("earn_ts", 0) or 0)
+        except Exception:
+            last = 0.0
+        if now_ts() - last < max(3600.0, gap):
+            return
+        if random.random() > min(0.6, pressure / 160.0):
+            return
+        try:
+            self.db.kv_set("earn_ts", now_ts())
+        except Exception:
+            pass
+        self._spawn(self._do_earn(pressure))
+
+    async def _do_earn(self, pressure: float) -> None:
+        amount = round(random.uniform(150.0, 450.0) * (1.0 + pressure / 150.0), 2)
+        reason = random.choice(("接了个私活的尾款", "帮人做图", "周末加班的钱", "写了个小工具卖出去"))
+        try:
+            result = await self.income(amount, reason=reason)
+        except Exception as exc:
+            logger.debug("[amo] 挣外快失败: %s" % exc)
+            return
+        if not isinstance(result, dict) or not result.get("ok", True):
+            return
+        self._bump_pressure(-18, "")
+        logger.debug("[amo] 挣外快：%s ¥%.2f（紧迫感 %.0f）" % (reason, amount, self._money_pressure()))
+        try:
+            uid = self._primary_uid()
+            if uid:
+                await self._write_memory_checked(
+                    uid, "%s，进账 ¥%.0f" % (reason, amount), kind="event", tier=0)
+        except Exception:
+            pass
 
     def _bill_meals(self) -> None:
         """日程里吃饭却一直没扣钱：按活动补扣，同一天同一格只扣一次。
@@ -133,12 +849,9 @@ class EconomyMixin:
         for start, item, rid in sorted(pending, key=lambda row: row[0])[-3:]:
             activity = str(item.get("activity") or "")
             place = str(item.get("place") or "")
-            if "做饭" in activity or "下厨" in activity:
-                cost, payee, reason = 22.0, "菜场", "做饭"
-            elif "外卖" in activity or "家" in place:
-                cost, payee, reason = 36.0, "外卖", "外卖"
-            else:
-                cost, payee, reason = 58.0, (place or "餐馆"), "吃饭"
+            # 吃什么、多少钱从世态目录里挑；以前写死 22/36/58，
+            # 她因此答不出「今天这顿多少钱」（2026-11-23 用户指出）。
+            dish, cost, payee, reason = self._meal_pick(item, today)
             satiety = 38 if ("做饭" in activity or "下厨" in activity) else (
                 34 if ("外卖" in activity or "家" in place) else 42)
 
@@ -149,16 +862,20 @@ class EconomyMixin:
                 pass
 
             async def run(item=item, rid=rid, cost=cost, payee=payee,
-                          reason=reason, satiety=satiety, activity=activity):
+                          reason=reason, satiety=satiety, activity=activity,
+                          dish=dish, start=str(item.get("start") or "")):
                 try:
-                    result = await self.charge(cost, reason=reason, payee=payee,
-                                               request_id=rid, source="meal")
+                    # 菜名和店名一起交给记忆：她要知道自己吃了什么、花了多少
+                    result = await self.charge(cost, reason="吃%s" % dish, payee=payee,
+                                               request_id=rid, source="meal",
+                                               detail=payee)
                     if isinstance(result, dict) and result.get("ok"):
                         try:
                             self.db.kv_set("meal_billed:" + rid, True)
                         except Exception:
                             pass
-                        await self._eat_with_charge(satiety, activity or reason)
+                        self._meal_note(start, dish, cost, payee)
+                        await self._eat_with_charge(satiety, dish)
                 finally:
                     billing.discard(rid)
 
@@ -329,7 +1046,7 @@ class EconomyMixin:
             return
         try:
             self.db.kv_set("repay_pending", {"ts": now_ts(), "amount": amount})
-            logger.info("[amo] 她说要还 %.0f，账上还没动（只记事实）" % amount)
+            logger.debug("[amo] 她说要还 %.0f，账上还没动（只记事实）" % amount)
         except Exception:
             pass
 
@@ -373,7 +1090,7 @@ class EconomyMixin:
             logger.debug("[amo] 还款消息发送失败: %s" % exc)
             return False
         self._sync_finance()
-        logger.info("[amo] 已发还款消息：%.2f，剩 %.2f" % (amount, remaining))
+        logger.debug("[amo] 已发还款消息：%.2f，剩 %.2f" % (amount, remaining))
         return True
 
     def _invest_line(self) -> str:
@@ -481,7 +1198,7 @@ class EconomyMixin:
             % (first.get("name") or "一只股票", int(first.get("qty") or 0)),
             kind="asset",
         )
-        logger.info("[amo] 已记住建仓：%s %s 股" % (first.get("name"), first.get("qty")))
+        logger.debug("[amo] 已记住建仓：%s %s 股" % (first.get("name"), first.get("qty")))
 
     def _debt_line(self, can_ask: bool = False) -> str:
         """欠他钱的时候：更依赖、更黏，但别把「还钱」天天挂嘴上。只在私聊说。"""
@@ -569,6 +1286,12 @@ class EconomyMixin:
             "怎么说：用你自己的话，一两句就行。别套用以前那种固定句（一上来就夸他对你多好），"
             "也别每次都先道谢再报一遍欠款——那样听着像模板；上次说过的说法换个新的。"
             "这钱是让你吃好的、买点喜欢的，不是拿去补仓；先把自己喂饱。"
+            "【主语】钱是给你的：他说「去买X」「自己去买X」「拿去买X」时，去买、去吃的是你，"
+            "不是让他去；他饿没饿、吃没吃是他自己的事，别把钱和句子安到他头上。"
+            "【谁的钱紧】他说「别到时候月底X都不够」「我说你哦」这类话时，是在笑你手松、月光，X 是你的开销；"
+            "把话接成他调侃你，别读成他在跟你诉苦、也别替他算够不够花——只有他明说自己没钱了，才问他还够不够。"
+            "【别用开场模板】不要用「钱我收了」「钱收了」「收到啦」开头：钱到没到，不用跟他报账。"
+            "只挑一种反应，一句话说完；别一条里先打趣再叮嘱，那是模板味。"
             % (int(note.get("seconds") or 0), channel, amount,
                float(note.get("owed") or 0), hint)
         )

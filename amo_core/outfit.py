@@ -217,7 +217,7 @@ class OutfitMixin:
             return text
         if not full:
             return text
-        logger.info("[amo] 穿搭只有半套，按套名补整：%s -> %s" % (text[:40], full[:60]))
+        logger.debug("[amo] 穿搭只有半套，按套名补整：%s -> %s" % (text[:40], full[:60]))
         return full
 
     async def _change_outfit_now(self, style="", set_name=""):
@@ -244,7 +244,7 @@ class OutfitMixin:
             engine.remember_camp(engine.camp_of(set_name))
         except Exception:
             pass
-        logger.info("[审批] 换装放行（%s）：%s" % (text, look))
+        logger.debug("[审批] 换装放行（%s）：%s" % (text, look))
         return {"ok": True, "look": look, "set": set_name}
 
     async def _reseed_wardrobe_from_market(self) -> None:
@@ -292,7 +292,7 @@ class OutfitMixin:
         # 日程里就一个 outfit 都写不上（今天这一批踩到的就是这个）。
         try:
             await self.wardrobe.refresh(force=True)
-            logger.info("[amo] 衣柜快照已刷新：%d 件" % self.wardrobe.count())
+            logger.debug("[amo] 衣柜快照已刷新：%d 件" % self.wardrobe.count())
         except Exception as exc:
             logger.warning("[amo] 衣柜快照刷新失败: %s" % exc)
         # 衣柜重建后按新衣服重排今天。
@@ -303,7 +303,7 @@ class OutfitMixin:
         except Exception as exc:
             logger.debug("[amo] 重建衣柜后重排今日日程失败: %s" % exc)
         self.db.kv_set("wardrobe_seed", self.WARDROBE_SEED)
-        logger.info("[amo] 衣柜已重建（内置汉服/JK）：%d 件" % len(items))
+        logger.debug("[amo] 衣柜已重建（内置汉服/JK）：%d 件" % len(items))
 
 
 __all__ = [

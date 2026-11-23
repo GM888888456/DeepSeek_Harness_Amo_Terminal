@@ -295,7 +295,7 @@ class WebApiMixin:
                 persisted = bool(result)
             except Exception as exc:
                 logger.warning("[amo] 语音设置落盘失败（内存已生效）: %s" % exc)
-        logger.info("[amo] 语音设置已更新: %s" % ", ".join(sorted(applied)))
+        logger.debug("[amo] 语音设置已更新: %s" % ", ".join(sorted(applied)))
         return {"code": 0, "data": {"saved": applied, "persisted": persisted}}
 
     async def api_config_save(self):
@@ -479,7 +479,7 @@ class WebApiMixin:
                     cache.pop(umo, None)
         except Exception:
             pass
-        logger.info("[amo] 已删除档案 %s（清理 %s）" % (uid, counts))
+        logger.debug("[amo] 已删除档案 %s（清理 %s）" % (uid, counts))
         return {"code": 0, "msg": "已删除", "data": {"uid": uid, "counts": counts}}
 
     async def api_relation_save(self):
@@ -944,7 +944,7 @@ class WebApiMixin:
             except Exception:
                 pass
         style_now = self._dialect_style().strip()
-        logger.info("[amo] 重建语种: style=%s region=%s rows=%d kb=%s" % (
+        logger.debug("[amo] 重建语种: style=%s region=%s rows=%d kb=%s" % (
             style_now, self._dialect_region(), len(self._dialect_rows()), self._dialect_kb_name()
         ))
         kb = await self._ensure_dialect_kb()

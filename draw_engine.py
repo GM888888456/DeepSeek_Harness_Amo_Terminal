@@ -502,7 +502,7 @@ class DrawEngine:
                 self._skip_log = log
             if now - log.get(reason, 0.0) >= 60:
                 log[reason] = now
-                logger.info("[amo] 画图跳过：%s" % reason)
+                logger.debug("[amo] 画图跳过：%s" % reason)
         except Exception as _amo_exc:
             _note_swallowed("draw_engine.DrawEngine._skip", _amo_exc)
         return None
@@ -759,7 +759,7 @@ class DrawEngine:
             self._inflight.add(umo)
         self._last_prompt[uid] = (prompt, time.monotonic())
         self._stats["scheduled"] += 1
-        logger.info("[审批] 画图放行（%s%s）：%s"
+        logger.debug("[审批] 画图放行（%s%s）：%s"
                     % (reason, "/缓存" if cached else "", prompt[:60]))
         if self._spawn(self._run(event, prompt, uid, umo, cached, cache_key, selfie)) is None:
             if umo:

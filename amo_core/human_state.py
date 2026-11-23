@@ -1001,7 +1001,7 @@ class HumanState:
             self.schedule[day] = merged
             self.db.kv_set("schedule", self._sanitize_schedule(self.schedule))
             self.db.save_schedule(day, merged)
-            logger.info("[amo] 出行日程对齐：今天在 %s（%s 回）" % (
+            logger.debug("[amo] 出行日程对齐：今天在 %s（%s 回）" % (
                 city, "%02d:00" % int(trip.get("return_hour") or 22)))
             return merged
         return items
@@ -1199,10 +1199,10 @@ class HumanState:
                 self.db.kv_set("travel_billed:" + rid, True)
             except Exception:
                 pass
-            logger.info("[amo] 旅游记账：%s ¥%.2f（余额 ¥%s）" % (
+            logger.debug("[amo] 旅游记账：%s ¥%.2f（余额 ¥%s）" % (
                 city, float(cost), result.get("balance")))
         elif isinstance(result, dict):
-            logger.info("[amo] 旅游记账没扣成：%s（%s）" % (
+            logger.debug("[amo] 旅游记账没扣成：%s（%s）" % (
                 city, result.get("reason") or result.get("code") or ""))
 
     @staticmethod
@@ -1226,10 +1226,14 @@ class HumanState:
             import datetime as _dt
 
             d = _dt.date.fromisoformat(str(day))
-            is_weekend = d.weekday() >= 5
-            # 职业来自世界观（人格识别出来的）：护士周末也可能上班，
-            # 家庭主妇周中也不排上班日。
-            picked = pick_day_type(self._day_types(), is_weekend, str(day), self.worldview)
+            info = day_meta(str(day)) or {}
+            is_weekend = bool(info.get("weekend", d.weekday() >= 5))
+            # 日历说了算（周末 / 法定节假日 / 调休补班）：工作日排上班类，休息日排休息类。
+            # 职业只决定「有没有班可上」（家庭主妇/无业就不排上班日），
+            # 不再决定哪一天上班——以前周一能抽到「宅家日」，骨架全天在家。
+            work_day = bool(info.get("work", not info.get("rest", is_weekend)))
+            picked = pick_day_type(self._day_types(), is_weekend, str(day), self.worldview,
+                                   work_day=work_day)
             trip = self._active_trip(str(day))
             if trip and str(trip.get("city") or "") != _CITY_DEFAULT:
                 # 人在外面旅游，日子类型就不能是「宅家日」，否则骨架一整天空在家
@@ -1238,7 +1242,7 @@ class HumanState:
                     {"id": "outing", "name": "外出日", "guide": ""},
                 )
                 picked = dict(outing)
-                logger.info("[amo] 今天在外面（%s），日子类型改为：%s" % (
+                logger.debug("[amo] 今天在外面（%s），日子类型改为：%s" % (
                     trip.get("city"), picked.get("name")))
             self.db.kv_set("day_type_" + str(day), picked)
             logger.debug("[amo] 今天的日子类型: %s" % picked.get("name"))
@@ -1262,13 +1266,25 @@ class HumanState:
             items = self.state.schedule.get(key) or self.db.get_schedule(key) or []
             if not items:
                 return
+            allowed, why = True, ""
+            try:
+                try:
+                    from ..schedule_change import hold_change
+                except Exception:
+                    from schedule_change import hold_change  # type: ignore
+                allowed, why = hold_change(change, items, _clock_now())
+            except Exception as exc:
+                logger.debug("[amo] 判断上班时段失败（按允许处理）: %s" % exc)
+            if not allowed:
+                logger.debug("[amo] 没按他的话改日程：%s → %s" % (why, change.get("activity")))
+                return
             new_items = apply_sched_change(items, change, _clock_now())
             if new_items == items:
                 return
             self.state.schedule[key] = new_items
             self.db.kv_set("schedule", self._sanitize_schedule(self.state.schedule))
             self.db.save_schedule(key, new_items)
-            logger.info("[amo] 按用户的话改了日程: %s" % change.get("activity"))
+            logger.debug("[amo] 按用户的话改了日程: %s" % change.get("activity"))
         except Exception as exc:
             logger.debug("[amo] 按话改日程失败: %s" % exc)
 
@@ -1337,7 +1353,7 @@ class HumanState:
                 self.p._rewrite_today_schedule(today)
             except Exception as exc:
                 logger.debug("[amo] 上班日重排穿搭失败: %s" % exc)
-            logger.info("[amo] 你说今天要上班，日程已改成上班日（%d 格：现在→下班）" % changed)
+            logger.debug("[amo] 你说今天要上班，日程已改成上班日（%d 格：现在→下班）" % changed)
             return True
         except Exception as exc:
             logger.debug("[amo] 上班事实纠偏失败: %s" % exc)
@@ -1408,7 +1424,7 @@ class HumanState:
                 self.p._rewrite_today_schedule(today)
             except Exception as exc:
                 logger.debug("[amo] 上班日自纠重排穿搭失败: %s" % exc)
-            logger.info("[amo] 日程里出现公司/上班，休息日已自动改成上班日（%d 格）" % changed)
+            logger.debug("[amo] 日程里出现公司/上班，休息日已自动改成上班日（%d 格）" % changed)
             return True
         except Exception as exc:
             logger.debug("[amo] 上班事实自纠失败: %s" % exc)
@@ -1582,7 +1598,7 @@ class HumanState:
                 self.schedule.pop(day, None)
                 self.schedule_ctx.pop(day, None)
         self.db.kv_set("schedule_ctx", self.schedule_ctx)
-        logger.info("[amo] 生成日程主干 %s：%s" % (
+        logger.debug("[amo] 生成日程主干 %s：%s" % (
             today, (context or {}).get("event", {}).get("kind", "none"),
         ))
         try:
@@ -1742,7 +1758,7 @@ class HumanState:
                 self.db.clear_diaries(today)
         except Exception:
             pass
-        logger.info("[amo] 出发日日程：%s 点坐车去 %s" % (start, name))
+        logger.debug("[amo] 出发日日程：%s 点坐车去 %s" % (start, name))
         return True
 
     def _log_follow_day(self, city, day):
@@ -1802,7 +1818,7 @@ class HumanState:
             self.db.clear_diaries(today)
         except Exception:
             pass
-        logger.info("[amo] 旅游最后一天：%s 点前在 %s，之后回家" % (until, name))
+        logger.debug("[amo] 旅游最后一天：%s 点前在 %s，之后回家" % (until, name))
         return True
 
     def apply_travel_overlay(self, city=None):
@@ -1823,7 +1839,7 @@ class HumanState:
         if not existing:
             from_hour = 0
         if home and from_hour >= 22:
-            logger.info("[amo] 超过 22 点才回去，今晚住酒店，今天日程不再改")
+            logger.debug("[amo] 超过 22 点才回去，今晚住酒店，今天日程不再改")
             return False
         keep = []
         for item in existing:
@@ -1870,7 +1886,7 @@ class HumanState:
             self.db.clear_diaries_from(today, "%02d:00" % from_hour)
         except Exception:
             pass
-        logger.info("[amo] 出行日程已写入：%s 起在 %s%s" % (
+        logger.debug("[amo] 出行日程已写入：%s 起在 %s%s" % (
             "%02d:00" % from_hour, name, "（回家）" if home else "",
         ))
         return True
@@ -1990,7 +2006,7 @@ class HumanState:
         except Exception:
             persona = ""
         hours = [item for item in (items or []) if str(item.get("start") or "")]
-        logger.info("[amo] 开始批量生成小日记 %s（%d 条）" % (day, len(hours)))
+        logger.debug("[amo] 开始批量生成小日记 %s（%d 条）" % (day, len(hours)))
         total = 0
         previous = ""
         for begin in range(0, len(hours), 6):
@@ -2025,7 +2041,7 @@ class HumanState:
             except Exception:
                 continue
             rows = json_extract_list(raw)
-            logger.info("[amo] 日记批次 %d-%d：raw=%d 字，解析 %s 条" % (
+            logger.debug("[amo] 日记批次 %d-%d：raw=%d 字，解析 %s 条" % (
                 begin, min(begin + 6, len(hours)), len(str(raw or "")),
                 len(rows) if isinstance(rows, list) else -1))
             if not isinstance(rows, list):
@@ -2047,7 +2063,7 @@ class HumanState:
                 except Exception:
                     pass
         if total:
-            logger.info("[amo] 今日小日记已预生成 %d 条（详细版）" % total)
+            logger.debug("[amo] 今日小日记已预生成 %d 条（详细版）" % total)
         return {"total": total, "hours": len(hours)}
 
     def warm_schedule_diaries(self, day, items, umo):

@@ -269,11 +269,11 @@ class PresenceMixin:
         if name:
             self.db.kv_set("he_place", {"ts": now_ts(), "city": name,
                                         "away": name != _CITY_DEFAULT})
-            logger.info("[amo] 记住他在哪：%s（%s）" % (name, "外地" if name != _CITY_DEFAULT else "同城"))
+            logger.debug("[amo] 记住他在哪：%s（%s）" % (name, "外地" if name != _CITY_DEFAULT else "同城"))
             return
         if any(word in body for word in self.HE_AWAY_WORDS):
             self.db.kv_set("he_place", {"ts": now_ts(), "city": "", "away": True})
-            logger.info("[amo] 记住他在哪：外地（没细说城市）")
+            logger.debug("[amo] 记住他在哪：外地（没细说城市）")
 
     def _his_presence_line(self, uid, umo="") -> str:
         """他已经醒着/刚说过话时，把这件事当硬事实给她，堵住「醒了没」。
@@ -505,7 +505,7 @@ class PresenceMixin:
             self._private_buffers.pop(umo, None)
         merged = "｜".join(item for item in buffer["texts"] if item).strip()[:300]
         if len(buffer["texts"]) > 1:
-            logger.info("[amo] 私聊合并 %d 条: %s" % (len(buffer["texts"]), merged[:200]))
+            logger.debug("[amo] 私聊合并 %d 条: %s" % (len(buffer["texts"]), merged[:200]))
             try:
                 event.set_extra("amo_debounce_count", len(buffer["texts"]))
             except Exception:

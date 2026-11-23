@@ -547,9 +547,11 @@ except ImportError:  # pragma: no cover
         _mem_prepare = None
         _mem_commit = None
 try:
-    from ..text_clean import has_tool_markup, strip_pseudo_tags, strip_tool_markup
+    from ..text_clean import (has_tool_markup, strip_meta_monologue,
+                            strip_pseudo_tags, strip_tool_markup)
 except ImportError:  # 直接按文件加载时
-    from text_clean import has_tool_markup, strip_pseudo_tags, strip_tool_markup
+    from text_clean import (has_tool_markup, strip_meta_monologue,
+                         strip_pseudo_tags, strip_tool_markup)
 try:
     from .. import label_bus as _label_bus
 except Exception:

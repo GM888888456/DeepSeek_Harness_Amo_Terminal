@@ -283,7 +283,7 @@ class SchemaMixin(_StoreBase):
                 conn.commit()
                 self._fts_tri = True
                 if rebuilt:
-                    logger.info("[amo_data] trigram 索引已重建：%d 条记忆" % total)
+                    logger.debug("[amo_data] trigram 索引已重建：%d 条记忆" % total)
         except Exception as exc:
             self._fts_tri = False
             logger.warning("[amo_data] trigram 索引不可用，召回退回 LIKE 全表扫: %s" % exc)

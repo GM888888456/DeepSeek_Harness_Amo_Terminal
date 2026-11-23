@@ -145,9 +145,9 @@ class WeatherMixin:
         tomorrow = items[1] if len(items) > 1 else {}
         brief = forecast_brief(now_data, today, tomorrow)
         if not brief:
-            logger.info("[amo] 天气查询：没有可用数据")
+            logger.debug("[amo] 天气查询：没有可用数据")
             return "【天气查询】这会儿取不到天气数据，别编温度，直接说看不太准。"
-        logger.info("[amo] 天气查询: %s" % brief)
+        logger.debug("[amo] 天气查询: %s" % brief)
         return "【天气查询】" + brief
 
     async def _switch_weather_city(self, hit):
@@ -216,7 +216,7 @@ class WeatherMixin:
             try:
                 if hasattr(self.config, "save_config"):
                     self.config.save_config()
-                logger.info("[amo] 城市「%s」→ LocationID %s（已回填）" % (raw, hit["id"]))
+                logger.debug("[amo] 城市「%s」→ LocationID %s（已回填）" % (raw, hit["id"]))
             except Exception as exc:
                 logger.error("[amo] 回填城市配置失败: %s" % exc)
         return changed

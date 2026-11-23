@@ -23,6 +23,12 @@ from astrbot.api import logger, AstrBotConfig
 from astrbot.api.message_components import Plain, At, Reply
 from astrbot.api.provider import LLMResponse
 
+# 2026-11-23：群聊认人（移植自上游 amo_group_guard）：成员名册 + 机器人识别 + 判定表
+try:
+    from .amo_core.group_guard import MemberBook, addressing_verdict, is_bot_sender
+except Exception:  # 直接按文件加载时
+    from amo_core.group_guard import MemberBook, addressing_verdict, is_bot_sender  # type: ignore
+
 # ============================================================
 # 正则
 # ============================================================
@@ -94,6 +100,9 @@ REPLY_WEIGHT_DEFAULTS = {
     "relation": 0.15,    # 说话的人跟她什么关系（恋人/熟人更想接）
     "feel": 0.15,        # 她此刻想不想说话（七情六欲）
     "timing": 0.20,      # 刚说过、群太吵、没人往下接
+    # FUSE 2026-11-23：可得性——融合旧 ReplyGate.private_probability。
+    # 睡着/上班/通勤会实打实压分，恋人也不是随叫随到。
+    "availability": 0.30,
 }
 
 BASE_JUDGE_PROMPT = """你是群聊机器人决策系统，判断机器人是否应该回复消息。
@@ -102,6 +111,10 @@ BASE_JUDGE_PROMPT = """你是群聊机器人决策系统，判断机器人是否
 机器人名字：{bot_name}
 机器人别名：{bot_aliases}
 如果当前消息包含这些名字或别名，说明群友是在叫机器人，不是叫其他群友；relevance、continuity 必须给高分。
+群里最近说过话的人：{member_names}
+这些是**群友**的名字，不是机器人：消息里出现其中任何一个（包括只写了名字开头几个字、
+去掉「的/小/阿」之后的简称，或者外号，例如「真懈」指「真的懈」），都是在叫别人，
+`target` 必须给 `other`、`is_mentioning_bot` 必须给 false。
 {lover_hint}
 
 ## ⚠️ 最高优先级：关注机器人自己的发言
@@ -525,6 +538,33 @@ class HeartflowEngine:
         # 少而准式裁决：规则分与模型分的混合比例（0=只看模型，1=只看规则）
         self.rule_weights = dict(REPLY_WEIGHT_DEFAULTS)
         self.rule_blend = 0.55
+        # PURE_RULE 2026-11-23（用户口径）：不用判官了，只走内置评分。
+        # 判官当初是配 v4 的，v4 太贵；小模型又读不懂大 prompt，反而又慢又给 0 分。
+        try:
+            self.pure_rule = bool(self.config.get("pure_rule_judge", True))
+        except Exception:
+            self.pure_rule = True
+        # SPEAK_SELF_DECIDE 2026-11-23：要不要说话由她自己决定（生成时先给自己一句 SPEAK 0/1）
+        try:
+            self.speak_self_decide = bool(self.config.get("speak_self_decide", False))
+        except Exception:
+            self.speak_self_decide = False
+        # INTERJECT 2026-11-23：主动插话的配额（不是被叫才开口，但也别刷屏）
+        try:
+            self.interject_enable = bool(self.config.get("interject_enable", True))
+            self.interject_prob = max(0.0, min(1.0, float(
+                self.config.get("interject_prob", 1.0) or 1.0)))
+            self.interject_cooldown = float(self.config.get("interject_cooldown", 300) or 300)
+            self.interject_hourly_max = int(self.config.get("interject_hourly_max", 6) or 6)
+        except Exception:
+            self.interject_enable = True
+            self.interject_prob = 1.0
+            self.interject_cooldown = 300.0
+            self.interject_hourly_max = 6
+        self._interject_last = {}
+        self._interject_times = []
+        # 群成员名册（内存）：谁是谁、谁是别的机器人
+        self._members = MemberBook()
         plugin = getattr(self, "plugin", None)
         try:
             raw_weights = plugin.cfg_str("hf_reply_weights", "") if plugin is not None else ""
@@ -556,6 +596,11 @@ class HeartflowEngine:
         self._judge_last_error = ""
         self.immersive_mode_duration: int = self.config.get("immersive_mode_duration", 30)
         self.judgment_paused_timeout: int = self.config.get("judgment_paused_timeout", 60)
+        # JUDGE_TIMEOUT 2026-11-23：判官实测 6~11s，卡在回复前面；超时就走规则兜底
+        try:
+            self.judge_timeout = max(0.0, float(self.config.get("judge_timeout", 4.0) or 4.0))
+        except Exception:
+            self.judge_timeout = 4.0
 
         # 动态阈值配置
         self.enable_dynamic_threshold: bool = self.config.get("enable_dynamic_threshold", False)
@@ -690,7 +735,7 @@ class HeartflowEngine:
         chosen = pool[0]["provider"]
         self._judge_auto_cache = {"signature": signature, "provider": chosen}
         try:
-            logger.info(
+            logger.debug(
                 "[心流] 判定模型自动选择: %s (%s)%s"
                 % (pool[0]["id"], pool[0]["model"] or "?",
                    "；避开主对话模型 " + using_id if using_id and others else "")
@@ -767,7 +812,7 @@ class HeartflowEngine:
         self.bot_name = new_name
         self.bot_aliases = new_aliases
         if self.bot_name or self.bot_aliases:
-            logger.info("[心流] 身份：名字=%s | 别名=%s" % (self.bot_name or "未设置", "、".join(self.bot_aliases) or "无"))
+            logger.debug("[心流] 身份：名字=%s | 别名=%s" % (self.bot_name or "未设置", "、".join(self.bot_aliases) or "无"))
 
     #: 恋人之间才用的爱称：只有发件人确实是恋人时才算「在叫你」（群里别人喊老婆不算）
     LOVER_CALL_WORDS = ("老婆", "老婆子", "老婆大人", "媳妇", "媳妇儿", "婆娘", "宝宝", "宝贝",
@@ -845,6 +890,24 @@ class HeartflowEngine:
             if len(value) >= 2 and value in normalized:
                 return candidate
         return ""
+
+    def _member_names(self, event) -> str:
+        """最近在群里说过话的群友名字（去掉括号备注），给判定模型当「这些人不是她」的名单。
+
+        以前提示词里只有她自己的名字，模型看到一个陌生名字就猜「大概是她的别名」——
+        2026-11-23「真懈」就是这么被判成在叫她的。
+        """
+        names = []
+        try:
+            for msg in self._get_raw_buffer(event.unified_msg_origin)[-12:]:
+                if msg.is_bot:
+                    continue
+                name = re.sub(r"[（(][^）)]*[）)]", "", str(msg.sender_name or "")).strip()
+                if len(name) >= 2 and name not in names:
+                    names.append(name)
+        except Exception:
+            pass
+        return "、".join(names[:8]) or "（暂无）"
 
     @staticmethod
     def _is_side_question(text: str) -> bool:
@@ -982,6 +1045,20 @@ class HeartflowEngine:
             if len(name) >= 2 and name in plain and name != re.sub(r"\s+", "", text):
                 if not self._addresses_bot(name):
                     return "other", False
+        # 5b. 简称/外号：整名没出现，但名字开头的字大多都在（「真懈」指
+        #     「真的懈（没回就是上课了，等着吧）」）。只做软证据，不硬否决：
+        #     判错了最多是她少接一句，比答错人强。
+        head_text = plain[:6]
+        for msg in reversed(history[-6:]):
+            if msg.is_bot:
+                continue
+            raw_name = re.sub(r"[（(][^）)]*[）)]", "", str(msg.sender_name or "")).strip()
+            head = re.sub(r"\s+", "", raw_name)[:3]
+            if len(head) < 2 or self._addresses_bot(head):
+                continue
+            hit = sum(1 for ch in set(head) if ch in head_text)
+            if hit >= 2:
+                return "other", False
         return "", False
 
     def _log_detail(self, msg: str) -> None:
@@ -1417,89 +1494,40 @@ class HeartflowEngine:
     # ============================================================
     # ---------- 判定服务故障时的降级 ----------
 
-    def _judge_is_transient(self, exc) -> bool:
-        """上游 503 / 429 / 超时值得再试一次；解析错、参数错不值得。"""
-        text = str(exc).lower()
-        for word in ("503", "502", "504", "429", "timeout", "timed out",
-                     "temporarily unavailable", "service_unavailable",
-                     "connection reset", "connection error"):
-            if word in text:
-                return True
-        return False
 
-    def _judge_ok(self) -> None:
-        self._judge_fail_streak = 0
-        self._judge_breaker_until = 0.0
 
-    def _judge_breaker_open(self) -> bool:
-        return float(getattr(self, "_judge_breaker_until", 0) or 0) > time.time()
 
-    def _judge_note_failure(self, exc) -> None:
-        """记一次失败：日志最多 60 秒一条，连败 3 次熔断 60 秒。
 
-        上游一挂，每条消息都 ERROR 一遍，日志全是噪音，还拖慢回复。
-        """
-        now = time.time()
-        self._judge_fail_streak = int(getattr(self, "_judge_fail_streak", 0)) + 1
-        self._judge_last_error = str(exc)[:160]
-        # key 被封 / 无权限 / 模型不存在：这个模型这一轮就不能用了，换下一个。
-        # 只拉黑「配置层」的错误；限流、超时仍然按临时故障重试。
-        text = str(exc).lower()
-        dead_text = ("api-key is blocked", "invalid api key", "incorrect api key",
-                     "unauthorized", "401", "403", "model_not_found", "no permission")
-        if any(word in text for word in dead_text):
-            try:
-                bad = self._auto_pick_judge_provider()
-            except Exception:
-                bad = None
-            bad_id = str((getattr(bad, "provider_config", None) or {}).get("id") or "") if bad else ""
-            if bad_id:
-                dead = set(getattr(self, "_judge_dead_providers", set()) or set())
-                dead.add(bad_id)
-                self._judge_dead_providers = dead
-                self._judge_auto_cache = None   # 下次重选，跳过它
-                all_dead = len(dead) >= len(self._list_chat_providers() or [1])
-                if all_dead:
-                    logger.warning(
-                        "[心流] 所有可用模型都报 %s：多半是同一个 API key 被封，"
-                        "换模型没用，需要去 AstrBot「服务提供商」换 key；"
-                        "这段时间她只会在被叫到时回复。" % bad_id)
-                else:
-                    logger.warning("[心流] 判定模型 %s 不可用（%s），已换下一个模型"
-                                   % (bad_id, str(exc)[:60]))
-        last = float(getattr(self, "_judge_last_warn", 0) or 0)
-        if now - last >= 60:
-            self._judge_last_warn = now
-            logger.warning("[心流] 判定服务调用失败（连续 %d 次）：%s"
-                           % (self._judge_fail_streak, self._judge_last_error))
-        if self._judge_fail_streak >= 3:
-            if not self._judge_breaker_open():
-                logger.warning("[心流] 判定服务连续失败，熔断 60 秒：期间只在被叫到时回复")
-            self._judge_breaker_until = now + 60
-            self._judge_fail_streak = 0
-
-    def _judge_fallback(self, event, reason: str = "") -> JudgeResult:
-        """判定服务不可用时的兜底：只在「明确在叫她」时才回。
-
-        不判定不等于一律沉默——名字/别名被叫到、被连续打扰，还是要应一声。
-        """
-        addressed = ""
-        try:
-            addressed = self._addresses_bot(str(getattr(event, "message_str", "") or "")) or self._lover_calls_bot(event)
-        except Exception:
-            addressed = ""
-        force = bool(getattr(event, "amo_force_reply", False))
-        if addressed or force:
-            return JudgeResult(
-                relevance=float(self.score_max), willingness=float(self.score_max),
-                social=float(self.score_max), timing=float(self.score_max),
-                continuity=float(self.score_max),
-                should_reply=True, confidence=0.5, overall_score=0.5, target="bot",
-                reasoning="判定服务不可用，但她在叫我（%s）" % (addressed or "连续打扰"),
-            )
-        return JudgeResult(should_reply=False, reasoning="判定服务不可用：%s" % reason)
 
     #: 每个信号 -1..1；加权后 0.5 是「不偏不倚」
+    def _availability(self, event=None):
+        """此刻她有多「够得着」：-1（在睡）… +0.3（闲）。FUSE 2026-11-23
+
+        旧 ReplyGate.private_probability 里那套「睡觉 0.02 / 上班 0.42 / 吃饭 0.85」，
+        这里换成同一个引擎里的一项分数，不再单独 roll 一道概率。
+        """
+        value = 0.0
+        try:
+            plugin = getattr(self, "plugin", None)
+            snap = plugin.state.snapshot() if plugin is not None else {}
+            category = str(((snap.get("activity") or {}).get("category")) or "")
+            value = {
+                "sleep": -1.0,
+                "work": -0.55,
+                "study": -0.55,
+                "commute": -0.35,
+                "meal": 0.15,
+            }.get(category, 0.0)
+            try:
+                health = str(((snap.get("health") or {}).get("status")) or "")
+            except Exception:
+                health = ""
+            if health and health not in ("健康", ""):
+                value -= 0.3
+        except Exception:
+            value = 0.0
+        return max(-1.0, min(0.5, value))
+
     def _rule_score(self, event, target="", mention=False):
         """那种少而准的裁决：先算「该不该说话」，再和模型分混合。
 
@@ -1583,273 +1611,193 @@ class HeartflowEngine:
             pass
         detail["timing"] = max(-1.0, min(1.0, timing))
 
+        # ⑥ 可得性：睡着/上班/通勤（FUSE 2026-11-23，融合旧概率引擎）
+        try:
+            detail["availability"] = self._availability(event)
+        except Exception:
+            detail["availability"] = 0.0
+
         score = 0.5
         for key, value in detail.items():
             score += float(self.rule_weights.get(key, 0.0)) * float(value)
         return max(0.0, min(1.0, score)), detail
 
-    async def judge_with_tiny_model(self, event: AstrMessageEvent) -> JudgeResult:
-        """使用小模型进行多维度评分判断"""
-        if getattr(event, "amo_force_reply", False):
-            logger.debug("[心流] 💢 连续打扰强制回复")
-            return JudgeResult(
-                relevance=float(self.score_max), willingness=float(self.score_max),
-                social=float(self.score_max), timing=float(self.score_max),
-                continuity=float(self.score_max), reasoning="睡眠/上班期间被连续打扰，强制回复",
-                should_reply=True, confidence=1.0, overall_score=1.0,
-            )
-        addressed = self._addresses_bot(event.message_str or "") or self._lover_calls_bot(event)
-        if addressed:
-            logger.info("[心流] 🎯 消息直接呼叫机器人（%s），跳过评分" % addressed)
-            return JudgeResult(
-                relevance=float(self.score_max), willingness=float(self.score_max),
-                social=float(self.score_max), timing=float(self.score_max),
-                continuity=float(self.score_max), reasoning="消息直接呼叫机器人名字/别名",
-                should_reply=True, confidence=1.0, overall_score=1.0, target="bot",
-            )
-        if self._judge_breaker_open():
-            return self._judge_fallback(event, "熔断中")
-        provider = await self._resolve_judge_provider(event)
+    async def _judge_chat(self, provider, **kwargs):
+        """判定调用包一层超时：判官再慢也不能把回复卡住。JUDGE_TIMEOUT"""
+        timeout = float(getattr(self, "judge_timeout", 4.0) or 0.0)
+        if timeout <= 0:
+            return await provider.text_chat(**kwargs)
+        try:
+            return await asyncio.wait_for(provider.text_chat(**kwargs), timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.warning("[心流] 判定超时（>%.1fs），这轮按规则分走" % timeout)
+            raise
 
-        if not provider:
-            return JudgeResult(should_reply=False, reasoning="提供商未配置或不存在")
+    def _interject_allowed(self, event):
+        """只剩两条常识闸，没有配额。NO_QUOTA 2026-11-23
 
-        scoring_rules = _build_rules_section(self.judge_rules)
-        prompt_template = BASE_JUDGE_PROMPT
-        reasoning_part = ', "reasoning": "简短分析原因"' if self.judge_include_reasoning else ""
-        mid_score = (self.score_min + self.score_max) / 2
-        dynamic_threshold, activity, _ = self._get_dynamic_threshold(event.unified_msg_origin)
-        activity_desc = self._get_activity_description(activity)
+        用户在意的「像不像人」：说不说话由她的状态和心情决定，不由每小时几条决定。
+        所以这里只留「功能关掉」和「她睡着了」两种不该开口的情况。
+        """
+        if not getattr(self, "interject_enable", True):
+            return False, ""
+        try:
+            if float(self._availability(event)) <= -0.8:
+                return False, ""
+        except Exception:
+            pass
+        try:
+            angle = random.choice(INTERJECT_ANGLES)
+        except Exception:
+            angle = ""
+        return True, angle
 
-        fmt_kwargs = dict(
-            chat_id=event.unified_msg_origin,
-            minutes_since_reply=self._get_minutes_since_last_reply(event.unified_msg_origin),
-            chat_context=self._build_chat_context(event),
-            chat_flow=self._analyze_conversation_flow(event),
-            last_bot_reply=self._get_last_bot_reply(event) or "无",
-            sender_name=event.get_sender_name(),
-            message=event.message_str,
-            message_marks=self._current_message_marks(event),
-            bot_name=self.bot_name or "机器人",
-            bot_aliases="、".join(self.bot_aliases) or "无",
-            lover_hint=self._lover_hint(event),
-            scoring_rules=scoring_rules,
-            threshold=dynamic_threshold,
-            reasoning_part=reasoning_part,
-            score_min=int(self.score_min), score_max=int(self.score_max), mid=int(mid_score),
-            activity_level=activity, activity_desc=activity_desc,
-        )
+    def _small_speak_prompt(self, event) -> str:
+        """给小模型的关键词事实包：心情 / 场景 / 时机 / 对方 / 最近几条。NO_QUOTA
+
+        用户口径：这些状态不再由心流打分，全部交给小模型自己判断；
+        篇幅要小（别撑爆小模型），所以只给数字和短句，不写小作文。
+        """
+        try:
+            text = str(getattr(event, "message_str", "") or "")[:120]
+        except Exception:
+            text = ""
+        plugin = getattr(self, "plugin", None)
+        try:
+            feel = (plugin.state.feel_rel() or {}) if plugin is not None else {}
+        except Exception:
+            feel = {}
+
+        def val(key, default=50.0):
+            try:
+                return float(feel.get(key, default))
+            except Exception:
+                return default
+
+        mood = "怒%.0f 委屈%.0f 黏%.0f 累%.0f 开心%.0f" % (
+            val("anger"), val("sadness"), val("love"), val("fatigue"), val("joy"))
+
+        scene = "未知"
+        try:
+            snap = plugin.state.snapshot() if plugin is not None else {}
+            act = (snap.get("activity") or {})
+            scene = "%s·%s" % (str(act.get("category") or "?"), str(act.get("place") or "?"))
+        except Exception:
+            pass
 
         try:
-            judge_prompt = prompt_template.format(**fmt_kwargs)
-        except KeyError as e:
-            logger.warning(f"[心流] 提示词模板变量缺失 {e}，使用基础默认模板重试")
-            judge_prompt = BASE_JUDGE_PROMPT.format(**fmt_kwargs)
+            minute = float(self._get_minutes_since_last_reply(event.unified_msg_origin))
+            when = "还没说过话" if minute > 600 else "%.0f 分钟前说过" % minute
+        except Exception:
+            when = "未知"
 
-        system_inst = f"你是群聊机器人决策系统，严格返回JSON，不要输出其他内容。所有分数必须在{int(self.score_min)}到{int(self.score_max)}之间，不能为0。"
-        contexts = self._build_optimized_contexts(self._get_raw_history_for_context(event))
+        try:
+            nick = str(event.get_sender_name() or "群友")
+        except Exception:
+            nick = "群友"
+        relation = "普通"
+        try:
+            uid = str(event.get_sender_id() or "")
+            profile = plugin.db.get_profile(uid) if plugin is not None else {}
+            relation = str((profile or {}).get("relation") or "普通")
+        except Exception:
+            pass
 
-        for attempt in range(self.judge_max_retries + 1):
-            try:
-                resp = await provider.text_chat(
-                    # AstrBot 4.29.4：不传就是 0，会被兜成 1 还打 WARN；这里显式给 2
-                    request_max_retries=2,
-                    prompt=judge_prompt,
-                    contexts=contexts,
-                    system_prompt=system_inst,
-                    image_urls=[]
-                )
-                _record_judge_tokens(self, provider, resp)
-                data = _extract_json(resp.completion_text.strip())
-                scores = {
-                    "relevance": safe_extract_score(data, "relevance", self.score_min, self.score_max),
-                    "willingness": safe_extract_score(data, "willingness", self.score_min, self.score_max),
-                    "social": safe_extract_score(data, "social", self.score_min, self.score_max),
-                    "timing": safe_extract_score(data, "timing", self.score_min, self.score_max),
-                    "continuity": safe_extract_score(data, "continuity", self.score_min, self.score_max),
-                }
-                normalized_scores = {k: (v - self.score_min) / (self.score_max - self.score_min) for k, v in scores.items()}
-                overall = sum(normalized_scores[k] * self.weights[k] for k in self.weights)
-                target = _normalize_target(data.get("target"))
-                thought = str(data.get("thought") or "").strip()
-                mention = bool(data.get("is_mentioning_bot", False))
-                # 少而准式裁决：模型给「像不像话」，规则给「该不该说」，
-                # 再按 rule_blend 混合。规则分里含她此刻的七情六欲。
-                rule_score, rule_detail = self._rule_score(event, target, mention)
-                blended = (1.0 - self.rule_blend) * overall + self.rule_blend * rule_score
-                if self.enable_detailed_log:
-                    logger.info(
-                        "[心流] ⚖️ 裁决 模型%.2f 规则%.2f（点名%+.1f 具体%+.1f 关系%+.1f 时机%+.1f）"
-                        " → 混合%.2f / 阈值%.2f"
-                        % (overall, rule_score, rule_detail.get("addressed", 0.0),
-                           rule_detail.get("concrete", 0.0), rule_detail.get("relation", 0.0),
-                           rule_detail.get("timing", 0.0),
-                           blended, dynamic_threshold)
-                    )
-                overall = blended
-                should_reply = overall >= dynamic_threshold
-                if mention:
-                    target = "bot"
-                context_type = _normalize_context_type(data.get("context_type"))
-                topic = str(data.get("topic") or "").strip()[:20]
-                style = _normalize_style(data.get("reply_style"))
-                # 语音 / 发图 的意愿：0~1，交给下游当提示与系数，不再由挂载插件自己拍脑袋
-                try:
-                    setattr(event, "amo_voice_urge",
-                            max(0.0, min(1.0, float(safe_extract_score(data, "voice", 0, 10)) / 10.0)))
-                    setattr(event, "amo_photo_urge",
-                            max(0.0, min(1.0, float(safe_extract_score(data, "share_photo", 0, 10)) / 10.0)))
-                except Exception:
-                    pass
-                force = bool(getattr(event, "amo_force_reply", False))
-                muted_by_style = False
-                # 模型说“这次别说话”才压掉；如果是被点名/@，仍按对机器人说处理
-                if style == "none" and not force and not mention and target != "bot":
-                    should_reply = False
-                    muted_by_style = True
-                avg_absolute_score = sum(scores.values()) / len(scores)
-                dim_order = ["relevance", "willingness", "social", "timing", "continuity"]
-                dim_scores = " | ".join([f"{dim}:{scores[dim]:.1f}" for dim in dim_order])
-                who = {"bot": "对机器人说", "other": "对某个群友说", "all": "对全群说", "unknown": "看不出对谁说"}.get(target, "未判定对象")
-                extra = " | 类型:%s | 话题:%s | 风格:%s" % (context_type or "?", topic or "?", style or "?")
-
-                # 只留结论（2026-11-20 用户口径：日志不用写原因，✅说话/❌跳过 就够）。
-                _logf = logger.info if self.enable_detailed_log else logger.debug
-                if should_reply:
-                    _logf("[心流] ✅说话 %.3f/%.3f" % (overall, dynamic_threshold))
-                elif muted_by_style:
-                    # 分数够但她自己说“这条不用开口”：单独标一下，否则看着像 bug
-                    _logf("[心流] ❌跳过·不必开口 %.3f/%.3f" % (overall, dynamic_threshold))
-                else:
-                    _logf("[心流] ❌跳过 %.3f/%.3f" % (overall, dynamic_threshold))
-                self._judge_ok()
-                return JudgeResult(
-                    **scores, reasoning=data.get("reasoning", "") or thought,
-                    should_reply=should_reply, confidence=overall, overall_score=overall,
-                    target=target or "unknown", is_mentioning_bot=mention,
-                    context_type=context_type, topic=topic, reply_style=style,
-                )
-            except (json.JSONDecodeError, ValueError):
-                if attempt == self.judge_max_retries:
-                    return JudgeResult(should_reply=False, reasoning="JSON解析失败")
-            except Exception as e:
-                self._judge_note_failure(e)
-                if self._judge_is_transient(e) and attempt < self.judge_max_retries:
-                    await asyncio.sleep(0.4)
+        lines = []
+        try:
+            rows = list(self._get_raw_history_for_context(event) or [])[-4:]
+            for row in rows:
+                content = str((row or {}).get("content") or "").strip()[:40]
+                if not content:
                     continue
-                return self._judge_fallback(event, "异常: %s" % e)
-        return JudgeResult(should_reply=False, reasoning="未知错误")
+                who = "你" if str((row or {}).get("role")) in ("assistant", "bot") else str(
+                    (row or {}).get("name") or "群友")
+                lines.append("%s：%s" % (who, content))
+        except Exception:
+            pass
 
-    async def judge_immersive_mode(self, event: AstrMessageEvent) -> JudgeResult:
-        """沉浸模式下的判断（更严格）"""
-        if getattr(event, "amo_force_reply", False):
-            logger.info("[心流] 💢 连续打扰，沉浸模式也回复")
-            return JudgeResult(
-                relevance=float(self.score_max), willingness=float(self.score_max),
-                social=float(self.score_max), timing=float(self.score_max),
-                continuity=float(self.score_max), reasoning="睡眠/上班期间被连续打扰，强制回复",
-                should_reply=True, confidence=1.0, overall_score=1.0,
-            )
-        addressed = self._addresses_bot(event.message_str or "") or self._lover_calls_bot(event)
-        if addressed:
-            logger.info("[心流] 🌊 消息直接呼叫机器人（%s），沉浸模式也回复" % addressed)
-            return JudgeResult(
-                relevance=float(self.score_max), willingness=float(self.score_max),
-                social=float(self.score_max), timing=float(self.score_max),
-                continuity=float(self.score_max), reasoning="消息直接呼叫机器人名字/别名",
-                should_reply=True, confidence=1.0, overall_score=1.0, target="bot",
-            )
-        provider = await self._resolve_judge_provider(event)
+        return ("她此刻：心情 %s；场景 %s；%s。\n"
+                "说话的人：%s（和她关系：%s）。\n"
+                "最近：\n%s\n"
+                "这条：%s\n\n"
+                "你现在想不想说话？想说话就 1，不想就 0；想说时给一个切入角度。\n"
+                "只输出 JSON：{\"speak\":0或1,\"why\":\"不超过8字\",\"angle\":\"不超过10字\"}"
+                % (mood, scene, when, nick, relation,
+                   "\n".join(lines) or "（无）", text))
 
-        if not provider:
-            return JudgeResult(should_reply=False, reasoning="提供商未配置或不存在")
-
-        remaining = self._get_immersive_mode_remaining(event.unified_msg_origin)
-        _, activity, _ = self._get_dynamic_threshold(event.unified_msg_origin)
-        activity_desc = self._get_activity_description(activity)
-        system_inst = "你是严格的群聊机器人判断系统，严格返回JSON，不要输出其他内容。"
-        immersive_reasoning_part = ', "reasoning": "简短原因"' if self.judge_include_reasoning else ""
-        contexts = self._build_optimized_contexts(self._get_raw_history_for_context(event))
-        
-        lover_hint = self._lover_hint(event)
-        judge_prompt = f"""
-## 机器人身份
-机器人名字：{self.bot_name or "机器人"}
-机器人别名：{"、".join(self.bot_aliases) or "无"}
-如果当前消息包含这些名字或别名，就是在叫机器人，不是叫其他群友。
-{lover_hint}
-
-## ⚠️ 最高优先级：追踪机器人自己的发言
-对话历史（contexts）中，role 为 assistant 的消息是【机器人自己】之前说的话，role 为 user 的消息是群友说的话（带 [昵称] 前缀）。
-你必须先找到机器人最近说了什么，然后判断当前消息与机器人发言的关系。
-
-## 沉浸模式判断规则
-先按顺序推理：① 从对话历史还原最近谁在跟谁说话 ② 判断当前这条在对谁说（bot / other / all / unknown）
-③ 再决定要不要说话。
-
-你的默认倾向是 **不回复**。只有在以下情况之一时才回复：
-1. 消息直接 @ 了机器人或提到机器人名字
-2. 消息明确向机器人提问
-3. 消息是机器人发起的对话的延续
-4. 消息内容与机器人刚聊的话题直接相关
-5. 群聊中出现冷场，机器人的回复能自然活跃气氛
-6. 群里正聊得热闹、话题轻松，机器人插一句能接上（不要求被点名）
-
-## 当前状态
-- 模式: 沉浸模式 | 剩余: {remaining}秒 | 活跃度: {activity_desc} ({activity:.0%})
-
-## 待判断消息
-[{event.get_sender_name()}] {event.message_str}
-
-## 严格判断
-根据上述规则严格判断。沉默也是好的选择，但不要因为“没叫我”就一律沉默。
-严格返回 JSON：
-{{"should_reply": true或false, "target": "bot|other|all|unknown", "voice": 0-10的整数, "share_photo": 0-10的整数, "thought": "一句话说明在对谁说"{immersive_reasoning_part}}}
-"""
-        if self._judge_breaker_open():
-            return self._judge_fallback(event, "熔断中")
-        for attempt in range(self.judge_max_retries + 1):
+    async def _small_speak(self, event) -> bool:
+        """免费小模型判「你现在想不想说话」；失败退回规则分，不惊动主模型。"""
+        provider = None
+        try:
+            provider = await self._resolve_judge_provider(event)
+        except Exception:
+            provider = None
+        if provider is None:
             try:
-                resp = await provider.text_chat(
-                    # AstrBot 4.29.4：不传就是 0，会被兜成 1 还打 WARN；这里显式给 2
-                    request_max_retries=2,
-                    prompt=judge_prompt,
-                    contexts=contexts,
-                    system_prompt=system_inst,
-                    image_urls=[]
-                )
-                _record_judge_tokens(self, provider, resp)
-                data = _extract_json(resp.completion_text.strip())
-                should_reply = bool(data.get("should_reply", False))
-                target = _normalize_target(data.get("target")) or "unknown"
-                thought = str(data.get("thought") or "").strip()
-                try:
-                    setattr(event, "amo_voice_urge",
-                            max(0.0, min(1.0, float(safe_extract_score(data, "voice", 0, 10)) / 10.0)))
-                    setattr(event, "amo_photo_urge",
-                            max(0.0, min(1.0, float(safe_extract_score(data, "share_photo", 0, 10)) / 10.0)))
-                except Exception:
-                    pass
-                if should_reply:
-                    logger.info(f"[心流] 🌊 沉浸模式: ✅触发 | 对象:{target} | 剩余{remaining}秒 | 活跃度:{activity_desc}({activity:.0%}) | {thought or data.get('reasoning', '')}")
-                else:
-                    logger.info(f"[心流] 🌊 沉浸模式: ❌跳过 | 对象:{target} | 剩余{remaining}秒 | 活跃度:{activity_desc}({activity:.0%}) | {thought or data.get('reasoning', '')}")
-                self._judge_ok()
-                return JudgeResult(should_reply=should_reply, reasoning=data.get("reasoning", "") or thought, confidence=1.0 if should_reply else 0.0, overall_score=1.0 if should_reply else 0.0, target=target)
-            except (json.JSONDecodeError, ValueError):
-                if attempt == self.judge_max_retries:
-                    return JudgeResult(should_reply=False, reasoning="JSON解析失败")
-            except Exception as e:
-                self._judge_note_failure(e)
-                if self._judge_is_transient(e) and attempt < self.judge_max_retries:
-                    await asyncio.sleep(0.4)
-                    continue
-                return self._judge_fallback(event, "异常: %s" % e)
-        return JudgeResult(should_reply=False, reasoning="未知错误")
+                score, _ = self._rule_score(event, "", False)
+                return score >= float(self._get_dynamic_threshold(event.unified_msg_origin)[0])
+            except Exception:
+                return False
+        try:
+            resp = await self._judge_chat(
+                provider,
+                request_max_retries=1,
+                prompt=self._small_speak_prompt(event),
+                contexts=[],
+                system_prompt="",
+                image_urls=[],
+            )
+            raw = str(getattr(resp, "completion_text", "") or "")
+            match = re.search(r"\{.*\}", raw, re.S)
+            data = json.loads(match.group()) if match else {}
+            speak = int(data.get("speak", 0)) == 1
+            self._last_speak_reason = str(data.get("why") or "")[:14]
+            return speak
+        except Exception as exc:
+            logger.warning("[心流] 小模型判定失败，退回规则分：%s" % exc)
+            try:
+                score, _ = self._rule_score(event, "", False)
+                return score >= float(self._get_dynamic_threshold(event.unified_msg_origin)[0])
+            except Exception:
+                return False
 
-    # ============================================================
-    # 核心事件监听器
-    # ============================================================
+    def _speak_plan(self, event) -> str:
+        """要不要说话：先判「这句是不是冲她说的」，再让她自己决定。GROUP_GUARD
+
+        'force'   被叫到（名字/@/引用/强制）→ 直接生成，不给「沉默」选项
+        'silence' 明确在跟别人说话，或刚说过话 → 这次不生成（省一次调用）
+        'ask'     其余 → 交给免费小模型 / 说话欲
+        """
+        try:
+            forced = bool(getattr(event, "amo_force_reply", False))
+        except Exception:
+            forced = False
+        try:
+            hint, hard = self._retrieve_addressing(event)
+        except Exception:
+            hint, hard = "", False
+        try:
+            mentioning = bool(getattr(event, "amo_mention_bot", False))
+        except Exception:
+            mentioning = False
+        try:
+            minute = float(self._get_minutes_since_last_reply(event.unified_msg_origin))
+        except Exception:
+            minute = 99.0
+        text = str(getattr(event, "message_str", "") or "").strip()
+        soft = (not hard) and minute < 10.0 and len(text) <= 30
+        _allowed, reason = addressing_verdict(
+            target=hint, mentioning_bot=mentioning, hard=hard, soft=soft,
+            only_when_addressed=True, forced=forced,
+        )
+        if reason in ("forced", "addressed"):
+            return "force"
+        if reason == "hard_other":
+            return "silence"
+        if minute < 2.0:
+            return "silence"
+        return "ask"
+
     async def on_group_message(self, event: AstrMessageEvent):
         """群消息监听入口"""
         if not self.config.get("enable_heartflow", False):
@@ -1885,11 +1833,58 @@ class HeartflowEngine:
 
         self._record_raw_message(event, is_bot=False)
         self._cleanup_old_messages(umo)
+        try:
+            _uid = str(event.get_sender_id() or "")
+            _name = str(event.get_sender_name() or "")
+            self._members.observe(umo, _uid, _name,
+                                  is_bot=is_bot_sender(_name, _uid))
+        except Exception:
+            pass
 
         try:
             is_immersive = self._is_immersive_mode_active(umo)
-            res = await self.judge_immersive_mode(event) if is_immersive else await self.judge_with_tiny_model(event)
+            # 2026-11-23：判官删掉后，沉浸模式没有判定分支了——统一按「这轮不开口」处理，
+            # 否则 res 未赋值会在下面 if res.should_reply 处抛 UnboundLocalError。
+            res = None
+            if not is_immersive:
+                plan = self._speak_plan(event)
+                if plan == "silence":
+                    logger.info("[心流] ❤️心流：不回（刚说过 / 在跟别人说）")
+                    return
+                if plan == "force":
+                    logger.info("[心流] ❤️心流：回（叫到我了）")
+                if plan == "ask":
+                    # INTERJECT 2026-11-23：没被叫到 → 先过插话配额，过了才有机会开口
+                    _allow, _angle = self._interject_allowed(event)
+                    if not _allow:
+                        logger.debug("[心流] 🔇 在睡/关掉了主动插话，这轮不开口")
+                        return
+                    # SMALL_DECIDE 2026-11-23：判定用免费小模型，主模型只在真要说话时生成
+                    _speak = False
+                    try:
+                        _speak = await self._small_speak(event)
+                    except Exception as _sm_exc:
+                        logger.debug("[心流] 小模型判定异常，按不接处理: %s" % _sm_exc)
+                    _why = str(getattr(self, "_last_speak_reason", "") or "")[:14]
+                    if not _speak:
+                        logger.info("[心流] ❤️心流：不回（%s）" % (_why or "她不想说"))
+                        return
+                    logger.info("[心流] ❤️心流：回（%s）" % (_why or "她想说"))
+                    try:
+                        event.set_extra("amo_interject", True)
+                        event.set_extra("amo_interject_angle", _angle)
+                        setattr(event, "heartflow_mode_hint", "interject")
+                        setattr(event, "heartflow_angle", _angle)
+                    except Exception:
+                        pass
+                res = JudgeResult(should_reply=True, overall_score=0.6, confidence=0.7,
+                                  reasoning="被叫到 / 小模型同意",
+                                  target="bot" if plan == "force" else "")
 
+
+            if res is None:
+                logger.debug("[心流] 沉浸模式没有判定分支，这轮不开口")
+                return
             if res.should_reply:
                 mode_name = "immersive" if is_immersive else "score"
                 # 心流判定通过后，再检索一次上下文：这条到底是不是在跟机器人说。
@@ -1913,13 +1908,13 @@ class HeartflowEngine:
                     _text = event.message_str or ""
                     if self._should_veto_side_question(target, hard, _text):
                         # 两个人在一问一答，她插进去只会像“没问你，去玩吧你”
-                        logger.info("[心流] 🔇 这条明确在对别人说（上一条 @ 了别人），不接：%s" % _text[:40])
+                        logger.debug("[心流] 🔇 这条明确在对别人说（上一条 @ 了别人），不接：%s" % _text[:40])
                         state.total_messages += 1
                         return
                 if style == "none" and target != "bot":
                     # 少而准：判定「这次只能说句空话」就不开口。以前这里把 none
                     # 改回 comment，等于每条都被迫回一句，群里就成了复读机（13.3.0）。
-                    logger.info("[心流] 🤐 这次没什么可说的，不接：%s" % (event.message_str or "")[:40])
+                    logger.debug("[心流] 🤐 这次没什么可说的，不接：%s" % (event.message_str or "")[:40])
                     state.total_messages += 1
                     return
                 if style == "none":
@@ -1954,7 +1949,7 @@ class HeartflowEngine:
 
                 if mode_hint == "direct":
                     setattr(event, "heartflow_mode_hint", "direct")
-                    logger.info(
+                    logger.debug(
                         "[心流] 🎯 对象:%s(%s) 类型:%s → 按这条消息直接回（%s）"
                         % (target, "硬证据" if hard else "模型判定", res.context_type or "?", (res.reasoning or "")[:40])
                     )
@@ -1962,7 +1957,7 @@ class HeartflowEngine:
                     angle = random.choice(INTERJECT_ANGLES)
                     setattr(event, "heartflow_mode_hint", "interject")
                     setattr(event, "heartflow_angle", angle)
-                    logger.info(
+                    logger.debug(
                         "[心流] 💬 对象:%s 类型:%s 话题:%s → 插话角度「%s」"
                         % (target, res.context_type or "?", res.topic or "?", angle)
                     )
@@ -1981,7 +1976,7 @@ class HeartflowEngine:
                             "cancelled": False,
                             "trigger_sender_id": str(event.get_sender_id()),
                         }
-                    logger.info(f"[心流] ⏳ 触发防抖等待 ({self.debounce_delay}s) | 触发者: {event.get_sender_name()}")
+                    logger.debug(f"[心流] ⏳ 触发防抖等待 ({self.debounce_delay}s) | 触发者: {event.get_sender_name()}")
 
                     # 防抖等待 + 清理放 try/finally：等待期间被取消/抛异常也不会留下 active=True 的死状态
                     try:
@@ -2017,7 +2012,7 @@ class HeartflowEngine:
                 setattr(event, "heartflow_triggered", True)
                 setattr(event, "heartflow_mode", mode_name)
                 self._activate_immersive_mode(umo)
-                logger.info(f"[心流] 🎯 心流触发: {event.message_str[:50]}... | 模式: {'🌊沉浸' if is_immersive else '📊评分'}")
+                logger.debug(f"[心流] 🎯 心流触发: {event.message_str[:50]}... | 模式: {'🌊沉浸' if is_immersive else '📊评分'}")
 
             state.total_messages += 1
         except Exception as e:

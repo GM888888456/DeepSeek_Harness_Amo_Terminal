@@ -621,7 +621,10 @@ class ScheduleEngine:
         if not workplace:
             workplace = self._extract_work(text)
         if not workplace:
+            # 世界观里的单位常写成「智脑科技（贵阳），观山湖区」：地点只留公司名那一段，
+            # 否则日程和自拍提示词都会变成「在智脑科技（贵阳），观山湖区」。
             world_work = str(world.get("workplace") or "").strip()
+            world_work = re.split(r"[，,、;；/|]", world_work)[0].strip() if world_work else ""
             if world_work and world_work not in ("公司", "单位", "工作地点", "上班"):
                 workplace = world_work
         if not workplace:
@@ -728,7 +731,12 @@ class ScheduleEngine:
             matched = re.search(pattern, text)
             if not matched:
                 continue
-            value = str(matched.group(1) or "").strip(" 的了是在")
+            # 全角空格（U+3000）按空白处理：人格里「　　上班」以前会被抓成公司名，
+            # 日程就成了「在　　」。顺手拒掉没有任何可见字符的结果。
+            value = str(matched.group(1) or "").replace("\u3000", " ").strip()
+            value = value.strip(" 的了是在")
+            if not re.search(r"[\w\u4e00-\u9fff]", value):
+                continue
             # 「平时上班 / 一般上班 / 通常上班」这种是时间副词，不是公司名：
             # 以前直接抓成公司，日程就出现「在平时上班」「平时附近吃午饭」。
             if any(word in value for word in WORK_NAME_BAD_WORDS):
@@ -1233,6 +1241,16 @@ class ScheduleEngine:
         event_kind = (ctx.get("event") or {}).get("kind")
         meta = ctx.get("meta") or {}
         day_id = str(((ctx or {}).get("day_type") or {}).get("id") or "")
+        # 日历闸：日子类型是抽出来的，日历是死的。休息日不许走上班骨架，
+        # 工作日也不许走宅家/外出骨架（2026-11-23：周一抽到宅家日，骨架全天在家，
+        # 文案却写着在公司上班，照片就成了家里的一张自拍）。
+        rest_day = bool(meta.get("rest"))
+        if not rest_day and day_id in ("restday", "outing", "homebody"):
+            logger.debug("[amo] 日历是工作日，%s 改按上班日排骨架" % day_id)
+            day_id = "workday"
+        elif rest_day and day_id in ("workday", "overtime", "slacking"):
+            logger.debug("[amo] 日历是休息日，%s 改按休息日排骨架" % day_id)
+            day_id = "restday"
         sick = bool((ctx.get("health") or {}).get("sick"))
         sick_leave = sick and str(ctx.get("sick_action") or "") == "take_sick_leave"
         good_weather = bool(ctx.get("good_weather", True))
@@ -1851,10 +1869,19 @@ class ScheduleEngine:
         scenic = ctx.get("scenic") or {}
         day_type = ctx.get("day_type") or {}
         day_fact = ""
+        meta_info = ctx.get("meta") or {}
+        rest_day = bool(meta_info.get("rest"))
         try:
             day_obj = date.fromisoformat(str(ctx.get("day") or "")[:10])
             weekday_label = ("星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日")[day_obj.weekday()]
-            day_kind = "法定工作日，她需要上班" if day_obj.weekday() < 5 else "休息日，不用上班"
+            # 「上不上班」只按日历说，不再按星期几自己推：
+            # 以前周中一律说「法定工作日，她需要上班」，宅家日/节假日的骨架就被写歪了。
+            if rest_day:
+                holiday_name = str(meta_info.get("holiday") or "").strip()
+                day_kind = ("日历上是休息日（%s），放假，不上班" % holiday_name) if holiday_name \
+                    else "日历上是休息日，不用上班"
+            else:
+                day_kind = "日历上是工作日，她要上班（调休补班也算工作日）"
             day_fact = "【绝对事实】今天是%s，%s。\n" % (weekday_label, day_kind)
         except Exception:
             day_fact = ""
@@ -1863,6 +1890,19 @@ class ScheduleEngine:
             day_type_line = "今天是「%s」：%s\n" % (
                 str(day_type.get("name") or "普通一天"), str(day_type["guide"]).strip(),
             )
+        # 文案必须跟着骨架的 zone 走：骨架里没有公司，就不许写公司/工位/开会，
+        # 否则日程写着上班、place/zone 写在家，出图就成了在家拍的（2026-11-23）。
+        has_work_slot = any(
+            str(item.get("zone") or "") in ("office", "work")
+            or str(item.get("category") or "") == "work"
+            for item in items
+        )
+        if has_work_slot:
+            zone_rule = ("5. 按骨架的 zone 写：zone=office 写公司/工位上的事，"
+                         "zone=road 写通勤路上，zone=home 写家里的事，不许跨区；\n")
+        else:
+            zone_rule = ("5. 今天骨架里没有公司，全部按骨架的 zone 写（home 写家里的事、"
+                         "road 写路上），不许出现公司、工位、办公室、开会、同事、加班、通勤这些词；\n")
         system = "你是角色的日程文案助手。只输出 JSON 数组，不要输出解释。"
         prompt = (
             "角色设定：\n" + _brief_world(ctx.get("world") or {}) + "\n"
@@ -1879,7 +1919,7 @@ class ScheduleEngine:
             "2. 时间、地点、类别按骨架原样保留；睡觉就写睡觉，在路上就写在路上；\n"
             "3. 在景区要写具体项目；开车要体现堵车/找停车位；\n"
             "4. 相邻两小时用不同的句子；写生活本身，不写“日程”“AI”“模型”这些词；\n"
-            "5. 工作日 07:00-09:00 必须写通勤/出门，09:00-18:00 必须写公司/工位，不能写在家发呆、看剧；\n"
+            "%s"
             "6. 只输出 JSON 数组，例如 [\"...\",\"...\"]。"
         ) % (
             ctx.get("day"), (ctx.get("meta") or {}).get("label") or "普通一天",
@@ -1893,6 +1933,7 @@ class ScheduleEngine:
             event.get("note") or "无",
             _scenic_text(scenic),
             "\n".join(lines),
+            zone_rule,
         )
         data = await self.llm_json(llm, umo, system, prompt, timeout=15)
         if isinstance(data, dict):

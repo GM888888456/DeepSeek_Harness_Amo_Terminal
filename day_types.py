@@ -123,34 +123,61 @@ def works_on_weekend(world) -> bool:
     return any(word in _world_text(world) for word in WEEKEND_WORK_WORDS)
 
 
-def pick_day_type(day_types: list[dict], is_weekend: bool, seed: str, world=None) -> dict:
-    """按职业 + 星期抽一个今天的类型；同一个种子结果稳定。
+#: 日子类型分池：日历是工作日只抽上班类，是休息日只抽休息类。
+WORK_DAY_IDS = frozenset({"workday", "overtime", "slacking"})
+REST_DAY_IDS = frozenset({"restday", "outing", "homebody"})
+
+
+def day_type_kind(item) -> str:
+    """这个日子类型属于「work / rest / both」哪一池。
+
+    先按 id 认（配置里存的 scope 可能还是旧的 "any"，例如宅家日），
+    认不出来再看 scope：weekday=上班类、weekend=休息类、any=两池都行。
+    """
+    ident = str((item or {}).get("id") or "").strip().lower()
+    if ident in WORK_DAY_IDS:
+        return "work"
+    if ident in REST_DAY_IDS:
+        return "rest"
+    scope = str((item or {}).get("scope") or "any").strip().lower()
+    if scope == "weekday":
+        return "work"
+    if scope == "weekend":
+        return "rest"
+    return "both"
+
+
+def pick_day_type(day_types: list[dict], is_weekend: bool, seed: str, world=None,
+                  work_day=None) -> dict:
+    """按日历 + 职业抽一个今天的类型；同一个种子结果稳定。
+
+    2026-11-23 用户定：**日历说了算**——日历是工作日就排上班类（上班日/加班日/
+    摸鱼日），日历是休息日就排休息类（休息日/外出日/宅家日），两边不许串台；
+    「宅家日」这类休息型日子类型再也不能在工作日被抽到（那正是「日程在公司上班、
+    照片却在家里」的来源）。
 
     2026-11-21 她说「并不是所有的 Amo 都需要上班，日程根据职业来定」：
-    - 学生/教师/办公室：周中上班，周末休息（周末被公司叫走另走事实纠偏）；
-    - 医护/服务业/轮班：周末也能抽到上班日；
-    - 家庭主妇/退休/无业：周中也不排上班日。
+    家庭主妇/退休/无业，日历再是工作日也不排上班日。
+
+    ``work_day`` 由 day_meta() 给出；不传时按 ``is_weekend`` 兜底（老调用点不变）。
     """
     weekend = bool(is_weekend)
     working = has_job(world)
-    weekend_worker = weekend and works_on_weekend(world)
+    work = bool(work_day if work_day is not None else (working and not weekend)) and working
     pool = []
     for item in day_types:
         if not item.get("enabled", True):
             continue
-        scope = item.get("scope", "any")
-        if scope == "weekday":
-            if weekend and not weekend_worker:
-                continue
-            if not working:
-                continue
-        if scope == "weekend" and not weekend and working:
-            continue
         if float(item.get("weight") or 0) <= 0:
+            continue
+        kind = day_type_kind(item)
+        if kind != "both" and (kind == "work") != work:
             continue
         pool.append(item)
     if not pool:
-        return {"id": "workday", "name": "上班日", "guide": ""}
+        if work:
+            return {"id": "workday", "name": "上班日", "guide": ""}
+        return {"id": "restday", "name": "休息日", "guide": ""}
     total = sum(float(x["weight"]) for x in pool)
     rng = random.Random(seed)
     point = rng.random() * total

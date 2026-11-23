@@ -109,3 +109,85 @@ def strip_pseudo_tags(text):
     if body:
         return body
     return saved
+
+# ---------------------------------------------------------------------------
+# 元话语 / 思维外泄
+# ---------------------------------------------------------------------------
+# 2026-11-23 15:27:38，群里她连发两条：
+#   叔问“你有尾巴吗？”——直接半句怼回去。
+#   “我又不是猴，哪来尾巴”11字，冲，短
+# 没有标签、没有 DSML：前面两道闸门（strip_pseudo_tags / voice_guard）都拦不住，
+# 因为它们看着就是人话。这里按「形态」认，全部是整行判定，
+# 宁可不拦，也不吞掉正常的一句话。
+
+_META_REHEARSAL_RE = re.compile(
+    r"^[^\s，。！？]{1,6}(?:问|说|讲)[：:]?\s*[“\"「『][^”\"」』]{0,80}[”\"」』]\s*"
+    r"(?:——|—{2,3}|--)\s*(?:直接|干脆|就)?\s*"
+    r"(?:半句|一句|怼|答|回他|回她|接他|接她|应他)"
+    r"[^。！？!?\n]{0,10}[。！？!?]?$"
+)
+_META_BARE_RE = re.compile(
+    r"^(?:直接|干脆|就|先)?(?:半句|一句)(?:怼|回|答|接|应)"
+    r"[^。！？!?\n]{0,10}[。！？!?]?$"
+)
+_META_COUNT_RE = re.compile(
+    r"^(?:\d{1,3}\s*字|半句|一句|短句)\s*(?:[，,、]\s*"
+    r"(?:冲|短|软|硬|冷|狠|稳|暖|凶|平|长|干|直)){0,4}\s*[。！？!?]?$"
+)
+#: 引号台词后面挂的字数标注：`“…”11字，冲，短`
+_META_QUOTE_COUNT_RE = re.compile(
+    r"([”\"」』])\s*\d{1,3}\s*字\s*(?:[，,、][^。！？!?\n]{0,20})?$")
+#: 句尾括号标注：`（1-2句，短，冲）`
+_META_BRACKET_TAIL_RE = re.compile(r"[（(]\s*([^（）()]{1,20})[）)]\s*[。！？!?]?\s*$")
+#: 清理后只剩一句被引号包着的台词 → 把引号也摘掉，真人说话不带引号
+_QUOTE_WRAP_RE = re.compile(r"^[“\"「『]([^”\"」』\n]{1,60})[”\"」』]$")
+
+
+def _bracket_is_meta(inner):
+    core = str(inner or "").strip()
+    if not core:
+        return False
+    if re.search(r"\d\s*[-–~]?\s*\d{0,2}\s*[句字]", core):
+        return True
+    return core in ("半句", "一句", "短句", "字数")
+
+
+def strip_meta_monologue(text):
+    """切掉「模型把自己的推演当正文」的句子。
+
+    返回 (清理后文本, 命中的标签列表)；没命中时原样返回。
+    """
+    raw = str(text or "")
+    if not raw.strip():
+        return raw, []
+    hits = []
+    out = []
+    for line in raw.split("\n"):
+        s = line.strip()
+        if not s:
+            out.append("")
+            continue
+        if _META_REHEARSAL_RE.match(s):
+            hits.append("排练句")
+            continue
+        if _META_BARE_RE.match(s) or _META_COUNT_RE.match(s):
+            hits.append("字数标注")
+            continue
+        if _META_QUOTE_COUNT_RE.search(s):
+            hits.append("字数标注")
+            s = _META_QUOTE_COUNT_RE.sub(r"\1", s).strip()
+            if not s:
+                continue
+        m = _META_BRACKET_TAIL_RE.search(s)
+        if m and _bracket_is_meta(m.group(1)):
+            hits.append("括号标注")
+            s = s[: m.start()].rstrip()
+            if not s:
+                continue
+        out.append(s)
+    body = re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
+    if hits:
+        m = _QUOTE_WRAP_RE.match(body)
+        if m:
+            body = m.group(1).strip()
+    return body, hits

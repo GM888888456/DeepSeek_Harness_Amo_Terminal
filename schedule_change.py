@@ -8,6 +8,9 @@ from __future__ import annotations
 import datetime
 
 # (触发词, 新的活动, 分类, 需要的时间推断方式)
+#: 每条规则的 kind 决定它在工作日上班时段能不能落地：
+#: home（回家）/ pickup（来接我）/ off（不去了、请假）/ sleep（睡觉）算明确改行程，
+#: outing（去吃、去超市）/ visit（过来吧）只是聊天，上班时段不挪地点。
 _RULES = [
     {
         "keys": ("回来吧", "快回来", "回家吧", "回来呀", "别逛了", "别玩了", "别转了",
@@ -16,6 +19,7 @@ _RULES = [
         "place": "家",
         "category": "rest",
         "after": "now",
+        "kind": "home",
     },
     {
         "keys": ("过来吧", "过来", "来我这儿", "来陪我", "来找我", "来我这里"),
@@ -23,6 +27,7 @@ _RULES = [
         "place": "他那儿",
         "category": "rest",
         "after": "now",
+        "kind": "visit",
     },
     {
         "keys": ("去超市", "去趟超市", "去商场", "去咖啡店", "去公园", "去买点"),
@@ -30,6 +35,7 @@ _RULES = [
         "place": "外面",
         "category": "rest",
         "after": "now",
+        "kind": "outing",
     },
     {
         "keys": ("来接我", "来接下我", "接我一下", "过来接我", "开车来接", "来接一下",
@@ -38,6 +44,7 @@ _RULES = [
         "place": "路上",
         "category": "commute",
         "after": "下班",     # 从下班那段开始改
+        "kind": "pickup",
     },
     {
         "keys": ("早点回家", "提前回家", "先回去了", "想回家"),
@@ -45,6 +52,7 @@ _RULES = [
         "place": "家",
         "category": "rest",
         "after": "now",
+        "kind": "home",
     },
     {
         "keys": ("不去了", "不去了吧", "不加班了", "别加班了"),
@@ -52,6 +60,7 @@ _RULES = [
         "place": "家",
         "category": "rest",
         "after": "now",
+        "kind": "off",
     },
     {
         "keys": ("一起吃", "去吃", "出来吃", "出去吃", "请你吃饭"),
@@ -59,6 +68,7 @@ _RULES = [
         "place": "外面",
         "category": "meal",
         "after": "now",
+        "kind": "outing",
     },
     {
         "keys": ("一起睡", "早点睡", "睡吧", "该睡了", "去睡觉"),
@@ -66,6 +76,7 @@ _RULES = [
         "place": "家",
         "category": "sleep",
         "after": "now",
+        "kind": "sleep",
     },
 ]
 
@@ -82,6 +93,7 @@ def detect_schedule_change(text: str) -> dict | None:
                 "place": rule["place"],
                 "category": rule["category"],
                 "from_now": rule.get("after") == "now",
+                "kind": rule.get("kind") or "",
             }
     return None
 
@@ -111,7 +123,9 @@ def _sleep_until(change: dict, cur: int) -> int:
     return max(cur, min(24 * 60, minutes))
 
 
-HOME_WORDS = ("家", "回家", "家里", "小窝", "房间", "宿舍")
+#: 家的样子：日程里的 home 名可能只是「观山湖三居室」这种，不含「家」字，
+#: 2026-11-23 才发现 _is_home("观山湖三居室") 是 False，到达后 zone 空着。
+HOME_WORDS = ("家", "回家", "家里", "小窝", "房间", "宿舍", "居室", "公寓", "住处")
 
 
 def _is_home(place: str) -> bool:
@@ -119,13 +133,24 @@ def _is_home(place: str) -> bool:
     return any(word in text for word in HOME_WORDS)
 
 
+#: 这些词就是「人在街面上」，别给空 zone 让生图按字符串去猜
+STREET_WORDS = ("外面", "街上", "街边", "楼下", "路边", "门口")
+
+
 def _zone_for(place: str) -> str:
-    """到达之后的环境：家给 home，其它地点交给生图按地点名匹配。
+    """到达之后的环境：家给 home，街面给 street，其它地点交给生图按地点名匹配。
 
     以前到达那格直接继承出发地的 zone（从景区回家，到家那格还是 scenic；
     从家出门，到超市那格还是 home），照片的环境就会和她嘴上说的地点打架。
+    2026-11-23 的坑：place 写「外面」却给了空 zone，生图只能按字符串 hash 兜底，
+    猜成城市街道，于是 94 秒内从办公室跳到街上。
     """
-    return "home" if _is_home(place) else ""
+    text = str(place or "").strip()
+    if _is_home(text):
+        return "home"
+    if any(word in text for word in STREET_WORDS):
+        return "street"
+    return ""
 
 
 def _arrive(place: str, hour: int):
@@ -136,6 +161,68 @@ def _arrive(place: str, hour: int):
         return options[hour % len(options)], place, "rest"
     options = ("在%s慢慢逛" % place, "在%s待着看看" % place, "在%s坐一会儿" % place)
     return options[hour % len(options)], place, "play"
+
+
+#: 工作日上班时段只认这些明确改行程的说法；别的（去吃/去超市/过来吧）只当聊天
+WORK_HOURS_KINDS = ("home", "pickup", "off", "sleep")
+
+#: 算「在上班」的 zone / category
+WORK_ZONES = ("work", "office")
+WORK_CATEGORIES = ("work",)
+
+
+def _as_minutes(value) -> int:
+    """接受 datetime 或已算好的分钟数。"""
+    if isinstance(value, bool):
+        return -1
+    if isinstance(value, int):
+        return value
+    try:
+        return int(value.hour) * 60 + int(value.minute)
+    except Exception:
+        return -1
+
+
+def cell_at(items, now):
+    """now 落在哪一格（认不出就 None）。"""
+    cur = _as_minutes(now)
+    if cur < 0:
+        return None
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        start = _hhmm_to_min(item.get("start"))
+        end = _hhmm_to_min(item.get("end"))
+        if start >= 0 and end > start and start <= cur < end:
+            return item
+    return None
+
+
+def at_work(items, now) -> bool:
+    """此刻她是不是正坐在公司的上班格里（日历说的上班时间）。"""
+    cell = cell_at(items, now)
+    if not cell:
+        return False
+    zone = str(cell.get("zone") or "").strip()
+    category = str(cell.get("category") or "").strip()
+    return zone in WORK_ZONES or category in WORK_CATEGORIES
+
+
+def hold_change(change, items, now):
+    """上班时段闲聊不许挪地点：返回 (是否允许, 原因)。
+
+    2026-11-23 13:29：他一句「待会去吃」命中「去吃」规则，把正在上班的她拆成
+    「办公室 → 路上 → 外面 → 办公室」，两张照片 94 秒内从办公室跳到街上。
+    日历说了今天上班，闲聊就不该把她从工位上搬走。
+    """
+    if not change:
+        return False, ""
+    kind = str(change.get("kind") or "")
+    if kind in WORK_HOURS_KINDS:
+        return True, ""
+    if not at_work(items, now):
+        return True, ""
+    return False, "上班时段不挪地点（%s）" % (kind or "outing")
 
 
 def apply_change(items: list[dict], change: dict, now: datetime.datetime,
@@ -275,9 +362,12 @@ def apply_change(items: list[dict], change: dict, now: datetime.datetime,
                 })
             changed = True
             continue
+        # 以前这里是 `not _is_home(place) == _is_home(target)`：公司和外面都
+        # 「不是家」，被判成没变化，于是外面只占 30 分钟，前后继续是办公室。
+        # 现在只要这一格不是目标地点就跟着改：出门就一路到底。
         if (start < arrive + hold
                 and str(row.get("category") or "") not in ("sleep", "meal")
-                and not _is_home(str(it.get("place") or "")) == _is_home(target_place)):
+                and str(row.get("place") or "").strip() != target_place):
             text, place, cat = _arrive(target_place, (start // 60) % 24)
             row["activity"] = text
             row["place"] = place

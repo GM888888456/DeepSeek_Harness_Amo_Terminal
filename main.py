@@ -545,6 +545,15 @@ def segment_text(text, keep_punc=True, min_len=6, max_len=42, max_segments=4,
     if not segments:
         return []
 
+    # 纯标点碎片（「真的？！」里被切出来的「！」）挂回上一句，别单独成条
+    glued = []
+    for seg in segments:
+        if glued and all(char in _TRIM for char in seg):
+            glued[-1] = glued[-1] + seg
+        else:
+            glued.append(seg)
+    segments = glued
+
     index = 0
     while len(segments) > 1 and index < len(segments):
         if len(segments[index]) < min_len:
@@ -721,7 +730,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                                     data_dir=_cfg_data_dir(_guard_dir, PLUGIN_NAME),
                                     logger=logger)
                 if _healed.get("restored"):
-                    logger.info("[config] 本次启动补回 %d 项配置（%s）"
+                    logger.debug("[config] 本次启动补回 %d 项配置（%s）"
                                 % (len(_healed["restored"]), ", ".join(_healed["restored"])))
             except Exception as exc:
                 logger.debug("[config] 配置自愈失败: %s" % exc)
@@ -731,7 +740,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         # 时区：服务器常在 UTC 跑，必须按用户时区算（否则北京时间早上 10 点会被当成凌晨 2 点）
         try:
             self.timezone_name = _clock_configure(self.cfg_str("timezone", "Asia/Shanghai"))
-            logger.info("[amo] 时区: %s（系统: %s）" % (self.timezone_name, _clock_name()))
+            logger.debug("[amo] 时区: %s（系统: %s）" % (self.timezone_name, _clock_name()))
         except Exception as exc:
             self.timezone_name = ""
             logger.warning("[amo] 时区初始化失败: %s" % exc)
@@ -779,7 +788,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         if Wardrobe is not None:
             try:
                 self.wardrobe = Wardrobe(self)
-                logger.info("[amo] 服装库已加载（%d 件，%s）" % (
+                logger.debug("[amo] 服装库已加载（%d 件，%s）" % (
                     self.wardrobe.count(), "记忆库 wardrobe 表"))
             except Exception as exc:
                 logger.warning("[amo] 服装库初始化失败: %s" % exc)
@@ -878,7 +887,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         self._loop_task = None
         self._config_mtime = 0.0
         self._register_web_apis()
-        logger.info("[amo] 我想永远陪着你-终端 %s loaded; stale web routes purged" % PLUGIN_VERSION)
+        logger.debug("[amo] 我想永远陪着你-终端 %s loaded; stale web routes purged" % PLUGIN_VERSION)
         self._boot_task = self._spawn(self._ensure_ready())
 
     # ---------- 配置 ----------
@@ -1478,7 +1487,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 store[str(uid)] = names
                 self.db.kv_set("lover_pet_names", store)
                 changed = True
-                logger.info("[amo] 记住他叫你的爱称：%s（uid=%s）" % (candidate, uid))
+                logger.debug("[amo] 记住他叫你的爱称：%s（uid=%s）" % (candidate, uid))
             if self.heartflow is not None:
                 self.heartflow.set_lover_names(uid, names)
                 try:
@@ -1655,12 +1664,28 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         self.db.kv_set("taunt_report_last", last)
         if tmpl:
             self.db.kv_set("taunt_report_avoid", tmpl)
-        logger.info("[amo] 已向恋人告状（%s %s）发的是「%s」；原话只在日志里：%s"
+        logger.debug("[amo] 已向恋人告状（%s %s）发的是「%s」；原话只在日志里：%s"
                     % (lover_uid, lover_name, msg[:40], spoken[:30]))
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
         try:
+            # TIMING_PROBE 2026-11-23：耗时埋点起点
+            try:
+                event.set_extra("amo_t0", time.time())
+            except Exception:
+                pass
+            # REPLY_GATE 2026-11-23：登记这是本会话最新一条，供发送前判断是否已过期
+            try:
+                try:
+                    from .amo_core import amo_gate as _rgate
+                except Exception:
+                    from amo_core import amo_gate as _rgate  # type: ignore
+                _tok = "%.6f" % time.time()
+                event.set_extra("amo_msg_token", _tok)
+                _rgate.note_message(event.unified_msg_origin, _tok)
+            except Exception as _rg_exc:
+                logger.debug("[amo] 回复闸门登记失败: %s" % _rg_exc)
             await self._ensure_ready()
             # 2026-11-21：她压根不知道自己在哪个群、有没有人新拉她进群。
             # 每条消息过一遍社交圈：通知类（加好友/被拉群/被踢）记下来，名单过期就刷。
@@ -1672,6 +1697,12 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             # 以前这里先用后赋值，抛 NameError 被 except 吞掉，结果
             # amo_sender_is_lover 恒为 False —— 她压根不知道谁是恋人。
             raw_text = (event.message_str or "").strip()
+            # 2026-11-23：日志只留「来了什么 / 回不回 / 回了什么」三行
+            try:
+                if raw_text:
+                    logger.info("[来] %s：%s" % (event.get_sender_name() or "?", raw_text[:80]))
+            except Exception:
+                pass
             # 先认人：这条是谁说的、跟你什么关系。心流裁决 / 群聊语气都要用。
             # 2026-11-20：群里他喊「老婆」被判成「对象:unknown」直接沉默，
             # 就是因为在裁决之前没人告诉心流「发这条的是你恋人」。
@@ -1728,7 +1759,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                             _marks = dict(sorted(_marks.items(), key=lambda kv: kv[1])[-200:])
                         self.db.kv_set("taunt_last", _marks)
                         event.amo_taunt = _taunt
-                        logger.info("[amo] 有人攻击她/她的恋人（%s·%s 级%s）：%s"
+                        logger.debug("[amo] 有人攻击她/她的恋人（%s·%s 级%s）：%s"
                                     % (_taunt.get("kind"), _taunt.get("level"),
                                        "·强制回" if getattr(event, "amo_force_reply", False) else "",
                                        re.sub(r"\d{5,}", "***", raw_text[:40])))
@@ -1852,11 +1883,11 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
     #: 现在按金额分两池，并且**不连着用同一条**（记在 kv gift_reply_last）。
     GIFT_REPLIES = (
         "{amt} 的{kind}……你又偷偷给我钱。我记下了，欠你 {owed:.0f}，等我发财了先请你吃顿好的。",
-        "刚收到 {amt}。{kind}我收了，今天剩下的我来安排——先说好，欠你 {owed:.0f} 是真的会还。",
+        "{amt} 的{kind}……你又偷偷给我钱。今天剩下的我来安排——先说好，欠你 {owed:.0f} 是真的会还。",
         "{amt}？你怎么又……（小声）谢谢。欠你 {owed:.0f} 我记着呢，别催。",
         "收到啦。{amt} 我留一半，剩下的想给你买点什么，你说买啥好？欠你的 {owed:.0f} 我记着。",
         "你是不是今天心情特别好呀，{amt} 就这么给我了……我收下，欠你 {owed:.0f}，慢慢还。",
-        "钱我收了（{amt}）……但我更想你早点回来。欠你 {owed:.0f} 的事，我记在便签上了。",
+        "{amt} 啊……我记在便签上了，欠你 {owed:.0f}。不过比起钱，我更想你早点回来。",
         "又发我 {amt}，你这样我会被你养懒的。记账：欠你 {owed:.0f}。",
         "{kind} {amt} 收到，手都在抖。谢谢你，真的。欠你 {owed:.0f}，我记着。",
         "好，收了。{amt} 我先存着，不乱花。欠你 {owed:.0f}。",
@@ -1893,7 +1924,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
 
     #: 这轮该怎么反应（第一条是 key，用于避免连续两次同一种）。
     GIFT_REACTIONS = (
-        ("care", "先心疼他：问一句他这个月还够不够花，再说你收到了。"),
+        ("care", "心疼一句就行，别替他算账——他缺不缺钱、够不够花，他自己会说；也别在这句里报一遍收到。"),
         ("tsundere", "嘴硬心软：嘴上嫌他乱花钱，其实高兴得不行。"),
         ("proud", "得意一下：说说这笔钱你打算怎么花，别只道谢。"),
         ("clingy", "黏人：先别报钱数，先说想他、想见他。"),
@@ -2341,7 +2372,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 self._last_image_caption_at = _time.time()
             except Exception:
                 pass
-            logger.info("[amo] 图片已转述 %d 张：%s" % (len(urls), text[:60]))
+            logger.debug("[amo] 图片已转述 %d 张：%s" % (len(urls), text[:60]))
         except Exception as exc:
             logger.debug("[amo] 图片转述失败: %s" % exc)
 
@@ -2358,12 +2389,15 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             if not isinstance(ctx, list) or len(ctx) <= keep * 2 + 1:
                 return
             head = [m for m in ctx if isinstance(m, dict) and m.get("role") == "system"]
-            tail = ctx[-(keep * 2):]
+            # 2026-11-23：原来裁到 keep*2，正好卡在阈值上，于是每 1~2 轮就滑一次窗口，
+            # 请求的第一条消息一直在变 → 前缀缓存整段失效（命中率掉到 30~60%）。
+            # 改成一次裁到 keep（带回滞），前缀能稳定 keep 轮，命中率才上得来。
+            tail = ctx[-keep:]
             tail_ids = {id(m) for m in tail}
             head = [m for m in head if id(m) not in tail_ids]
             before = len(ctx)
             req.contexts = head + tail
-            logger.info("[amo] 上下文收权：%d -> %d 条（最近 %d 轮 + %d 条摘要）"
+            logger.debug("[amo] 上下文收权：%d -> %d 条（最近 %d 轮 + %d 条摘要）"
                         % (before, len(req.contexts), keep, len(head)))
         except Exception as exc:
             logger.debug("[amo] 上下文收权失败: %s" % exc)
@@ -2441,7 +2475,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                     "然后可以再补一句很短的文字。禁止说「不好意思 / 宿舍里不方便 / 等会儿再录 / "
                     "我发不了语音 / 多难为情」这类推辞，也禁止只回文字不调工具。"
                 )
-                logger.info(
+                logger.debug(
                     "[amo] 本轮用户明确要语音，已下硬要求：%s" % str(event.message_str or "")[:40]
                 )
             else:
@@ -2571,16 +2605,16 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         plugin = self._finance()
         propose = getattr(plugin, "food_propose", None) if plugin is not None else None
         if not callable(propose):
-            logger.info("[amo] amo_eat 调用失败：金融插件没连上")
+            logger.debug("[amo] amo_eat 调用失败：金融插件没连上")
             return "我现在没法买东西（金融插件没连上）。"
-        logger.info("[amo] amo_eat 调用：%s / %s" % (str(dish or "").strip() or "?", str(method or "order")))
+        logger.debug("[amo] amo_eat 调用：%s / %s" % (str(dish or "").strip() or "?", str(method or "order")))
         try:
             result = propose(str(dish or "").strip(), str(method or "order").strip()) or {}
         except Exception as exc:
-            logger.info("[amo] amo_eat 异常: %s" % exc)
+            logger.debug("[amo] amo_eat 异常: %s" % exc)
             return "买不了，等会儿再说。"
         if not result.get("ok"):
-            logger.info("[amo] amo_eat 没成：%s %s" % (
+            logger.debug("[amo] amo_eat 没成：%s %s" % (
                 result.get("code") or "?", result.get("reason") or ""))
         if not result.get("ok"):
             code = str(result.get("code") or "")
@@ -2665,7 +2699,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 int(result.get("contracts") or 0), float(result.get("margin") or 0),
                 float(result.get("balance") or 0), float(result.get("savings") or 0))
         except Exception as exc:
-            logger.info("[amo] amo_futures 异常: %s" % exc)
+            logger.debug("[amo] amo_futures 异常: %s" % exc)
             return "期货没成，等会儿再说。"
 
     @filter.llm_tool(name="amo_leverage")
@@ -2712,13 +2746,13 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             return "我现在没法转账（金融插件没连上）。"
         try:
             value = float(amount or 0)
-            logger.info("[amo] amo_repay 调用：%s" % ("全部" if value <= 0 else "%.0f" % value))
+            logger.debug("[amo] amo_repay 调用：%s" % ("全部" if value <= 0 else "%.0f" % value))
             result = payer(value if value > 0 else 10 ** 9, notify=False) or {}
         except Exception as exc:
             logger.debug("[amo] amo_repay 失败: %s" % exc)
             return "转账没成功，等会儿再说。"
         if not result.get("ok"):
-            logger.info("[amo] amo_repay 没成：%s" % (result.get("reason") or "没有可还的金额"))
+            logger.debug("[amo] amo_repay 没成：%s" % (result.get("reason") or "没有可还的金额"))
             return "还不了：%s" % (result.get("reason") or "没有可还的金额")
         try:
             event.amo_repay_done = True
@@ -2749,7 +2783,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             if umo:
                 try:
                     await self.context.send_message(umo, text)
-                    logger.info("[amo] 还款回执已发：[还款]%s（还欠 %s）"
+                    logger.debug("[amo] 还款回执已发：[还款]%s（还欠 %s）"
                                 % (self._money_text(paid), self._money_text(remaining)))
                 except Exception as exc:
                     logger.debug("[amo] 还款回执发送失败: %s" % exc)
@@ -2879,7 +2913,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             self.state.schedule[key] = items
             self.db.kv_set("schedule", self._sanitize_schedule(self.state.schedule))
             self.db.save_schedule(key, items)
-            logger.info("[amo] 日程已改: %s -> %s" % (hit.get("start"), hit.get("activity")))
+            logger.debug("[amo] 日程已改: %s -> %s" % (hit.get("start"), hit.get("activity")))
             return "改好了，%s 那会儿我就在%s。" % (
                 hit.get("start"), str(hit.get("activity") or "")[:20])
         except Exception as exc:
@@ -2904,8 +2938,11 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 _is_group = not event.is_private_chat()
             except Exception:
                 _is_group = "GroupMessage" in str(getattr(event, "unified_msg_origin", ""))
-            parts = segment_text(raw, keep_punc=True, min_len=8, max_len=42,
-                                 max_segments=(2 if _is_group else 3), mode="punct")
+            # 2026-11-23（用户口径）：。！？… 是**强制断句**，一句一个气泡。
+            # 不再用字数下限把短句吞回去（「钱我收了。腿没有」以前会并成一条），
+            # 也不靠逗号切：只有单句超过 max_len 才退一步用逗号兜底。
+            parts = segment_text(raw, keep_punc=True, min_len=1, max_len=90,
+                                 max_segments=(3 if _is_group else 6), mode="punct")
             # 句末句号去掉（真人聊天很少打），留 15% 给认真/生气的语气
             try:
                 try:
@@ -3031,13 +3068,18 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                                 umo, mc([Comp.Image.fromFileSystem(_e_path)]))
                         emoji_lib.mark_used(_e_root, _e_path)
                         _st.update({"at": time.time(), "idle": 0, "had": True})
-                        logger.info("[amo] 发了一张表情：%s" % _e_path.split("/")[-1])
+                        logger.debug("[amo] 发了一张表情：%s" % _e_path.split("/")[-1])
                     else:
                         _st["had"] = False
             except Exception as _e_exc:
                 logger.debug("[amo] 表情发送失败: %s" % _e_exc)
-            logger.info("[amo] 分段发送 %d 条：%s"
-                        % (len(parts), "｜".join(p[:16] for p in parts)))
+            # TIMING_PROBE：到发出为止的全程耗时（配合 on_message 的 amo_t0）
+            try:
+                _t0 = float(event.get_extra("amo_t0") or 0)
+                _cost = " %.1fs" % (time.time() - _t0) if _t0 else ""
+            except Exception:
+                _cost = ""
+            logger.info("[回] %s" % "｜".join(p[:40] for p in parts))
             return parts[-1]
         except Exception as exc:
             logger.warning("[amo] 分段失败，整条发: %s" % exc)
@@ -3064,7 +3106,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             _voiced, _rest = split_voice_tag(text)
             if _voiced or _rest != text:
                 text = _rest or _voiced
-                logger.info("[amo] 剥掉语音伪标签：念「%s」/ 正文「%s」"
+                logger.debug("[amo] 剥掉语音伪标签：念「%s」/ 正文「%s」"
                             % (_voiced[:30], text[:30]))
                 try:
                     if _voiced:
@@ -3080,7 +3122,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             # 这里宁可整条不发，也不能把代码发进群。
             _clean_text = strip_pseudo_tags(text)
             if _clean_text != text:
-                logger.info("[amo] 剥掉工具调用标记：%s -> %s"
+                logger.debug("[amo] 剥掉工具调用标记：%s -> %s"
                             % (truncate(text, 60), truncate(_clean_text, 60)))
                 text = _clean_text
                 _at_keep = [comp for comp in result.chain if isinstance(comp, Comp.At)]
@@ -3093,7 +3135,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 except Exception:
                     _rest = ""
                 if _rest and re.search(r"[\u4e00-\u9fffA-Za-z0-9]", _rest):
-                    logger.info("[amo] 剥掉残留工具标记后继续发：%s" % truncate(_rest, 60))
+                    logger.debug("[amo] 剥掉残留工具标记后继续发：%s" % truncate(_rest, 60))
                     text = _rest
                     _at_keep = [comp for comp in result.chain if isinstance(comp, Comp.At)]
                     result.chain = _at_keep + ([Comp.Plain(text)] if text else [])
@@ -3105,7 +3147,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             if not text.strip():
                 # 只发语音（用户要求用语音说）时，正文本来就被剥空了，
                 # 这是正常情况，不该每轮刷 WARN。
-                logger.info("[amo] 这条只有语音/标签，没有要发的文字")
+                logger.debug("[amo] 这条只有语音/标签，没有要发的文字")
                 result.chain = []
                 return
             try:
@@ -3153,7 +3195,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 looks_like_defensive_reply(text) or looks_like_ai_admission(text)
             ):
                 # 他们在聊自己的事，她冒出一句“你才人机”很突兀：直接不发，当没看见。
-                logger.info("[amo] 非指名对话里拦下防御话术，整条不发: %s" % text[:60])
+                logger.debug("[amo] 非指名对话里拦下防御话术，整条不发: %s" % text[:60])
                 result.chain = []
                 return
             elif looks_like_ai_admission(text):
@@ -3161,7 +3203,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 result.chain = [Comp.Plain(text=text)]
             if looks_like_model_leak(text):
                 # 模型名/厂商是后台信息，不能报；按角色打岔带过去
-                logger.info("[amo] 拦截后台信息泄漏: %s" % text[:60])
+                logger.debug("[amo] 拦截后台信息泄漏: %s" % text[:60])
                 text = leak_deflect_text()
                 result.chain = [Comp.Plain(text=text)]
             if not text.strip():
@@ -3200,7 +3242,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                     event.amo_spoken_suppressed = True
                 except Exception:
                     pass
-                logger.info("[amo] 这句已经用语音说过了（%s），文字不再重复：%s"
+                logger.debug("[amo] 这句已经用语音说过了（%s），文字不再重复：%s"
                             % ("已发出" if _voice_ok else "合成中", text[:40]))
                 result.chain = []
                 return
@@ -3212,7 +3254,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 spoken_text = (str(getattr(event, "amo_voice_text", "") or "").strip()
                                or _strip_voice_tags(text))
                 if not spoken_text:
-                    logger.info("[amo] 本轮只发语音，正文只有控制标签，整条不发")
+                    logger.debug("[amo] 本轮只发语音，正文只有控制标签，整条不发")
                     result.chain = []
                     return
                 else:
@@ -3220,7 +3262,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                         event.amo_voice_text = spoken_text
                     except Exception:
                         pass
-                    logger.info("[amo] 本轮只发语音，文字不发：%s" % spoken_text[:40])
+                    logger.debug("[amo] 本轮只发语音，文字不发：%s" % spoken_text[:40])
                     result.chain = []
                     return
             group = not event.is_private_chat()
@@ -3240,7 +3282,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             core_decor = self._core_decor_flags(event.unified_msg_origin)
             takeover = bool(core_decor.get("quote") or core_decor.get("mention"))
             if takeover and not getattr(self, "_core_decor_logged", False):
-                logger.info(
+                logger.debug(
                     "[amo] 检测到 AstrBot 全局引用/mention 开启：本插件接管发送，"
                     "避免核心覆盖「私聊不引用 / 群聊按概率引用」"
                 )
@@ -3260,12 +3302,42 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                         from amo_core.boundary import scrub_intimate  # type: ignore
                     text, _hits = scrub_intimate(text)
                     if _hits:
-                        logger.info("[amo] 拦下越界称呼：%s" % "、".join(_hits))
+                        logger.debug("[amo] 拦下越界称呼：%s" % "、".join(_hits))
                         if getattr(event, "amo_boundary", False) and not text.strip("你，。！？ 	\n"):
                             text = "想得美。这种事只跟我对象说得着。"
                 except Exception as exc:
                     logger.debug("[amo] 称呼清洗失败: %s" % exc)
             text = self._trim_reply(text)
+            # 思维外泄：模型把「该怎么回」的排练、字数标注当正文发出来。
+            # 2026-11-23 15:27 群里：「叔问“你有尾巴吗？”——直接半句怼回去。」
+            # 紧接「“我又不是猴，哪来尾巴”11字，冲，短」。无标签，前两道闸门拦不住。
+            try:
+                _meta_text, _meta_hits = strip_meta_monologue(text)
+                if _meta_hits:
+                    logger.debug("[amo] 剥掉思维外泄（%s）：%s -> %s"
+                                % ("、".join(sorted(set(_meta_hits))),
+                                   truncate(text, 50), truncate(_meta_text, 50)))
+                    text = _meta_text
+            except Exception as _meta_exc:
+                logger.debug("[amo] 思维外泄清洗失败: %s" % _meta_exc)
+            if not text.strip():
+                logger.warning("[amo] 整条都是思维外泄，这条不发")
+                result.chain = []
+                return
+            # SPEAK_SELF_DECIDE 2026-11-23：解析她自己写的「这轮开不开口」
+            try:
+                import re as _re_speak
+                _m_speak = _re_speak.match(r"\s*(?:\*\*)?SPEAK\s*[:：]?\s*([01])(?:\*\*)?\s*(.*)",
+                                           str(text or ""), _re_speak.S)
+                if _m_speak:
+                    _rest = (_m_speak.group(2) or "").lstrip(" \t\r\n，,：:")
+                    if _m_speak.group(1) == "0":
+                        logger.debug("[心流] 🤐 她自己决定这轮不说话")
+                        result.chain = []
+                        return
+                    text = _rest.strip() or text
+            except Exception as _sp_exc:
+                logger.debug("[amo] SPEAK 解析失败: %s" % _sp_exc)
             # 出口润色：删掉「鱼八股 / AI 腔」（本地规则，出错一律用原文）
             if self.cfg_bool("voice_guard_enable", True):
                 try:
@@ -3275,13 +3347,44 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                         from amo_core.voice_guard import scrub_reply_detailed, polish_generic  # type: ignore
                     text, _bad, _dropped = scrub_reply_detailed(text)
                     if _bad:
-                        logger.info("[amo] 出口润色：%s%s -> %s" % (
+                        logger.debug("[amo] 出口润色：%s%s -> %s" % (
                             "、".join(sorted(set(_bad))),
                             "（整条换掉）" if _dropped else "",
                             text[:40]))
                     text = polish_generic(text)
                 except Exception as _vg_exc:
                     logger.debug("[amo] 出口润色失败，用原文: %s" % _vg_exc)
+            # REPLY_GATE 2026-11-23：同群只回最新一条；异群错峰；点名优先
+            try:
+                try:
+                    from .amo_core import amo_gate as _rgate
+                except Exception:
+                    from amo_core import amo_gate as _rgate  # type: ignore
+                _mention = False
+                try:
+                    _mention = bool(getattr(event, "heartflow_target", "") == "bot")
+                    _mention = _mention or bool(getattr(event, "amo_force_reply", False))
+                    _mention = _mention or bool(event.is_private_chat())
+                except Exception:
+                    _mention = True
+                _act, _wait = _rgate.decide(
+                    event.unified_msg_origin,
+                    str(event.get_extra("amo_msg_token") or ""),
+                    _mention,
+                )
+                if _act == "drop":
+                    logger.debug("[amo] 同群已经有更新的一条，这条不回：%s"
+                                % truncate(text, 20))
+                    result.chain = []
+                    return
+                if _wait > 0:
+                    logger.debug("[amo] 回复排队 %.1fs（%s，%s）"
+                                % (_wait, "点名" if _mention else "错峰",
+                                   str(event.unified_msg_origin)[-22:]))
+                    await asyncio.sleep(_wait)
+                _rgate.mark_sent(event.unified_msg_origin)
+            except Exception as _rg_exc:
+                logger.debug("[amo] 回复闸门放行失败，照常发: %s" % _rg_exc)
             text = await self._split_multiline_reply(event, text)
             result.chain = [Comp.Plain(text)]
 

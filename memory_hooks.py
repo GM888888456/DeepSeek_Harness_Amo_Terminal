@@ -249,7 +249,7 @@ class MemoryProvider:
 
     def note(self, message):
         try:
-            self.rt.logger.info("[记忆] " + str(message))
+            self.rt.logger.debug("[记忆] " + str(message))
         except Exception:
             pass
 

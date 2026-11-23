@@ -75,7 +75,7 @@ class DataBridgeMixin:
         """第一次没找到数据插件：记一次日志，并在 60 秒后再确认一次（只提醒一次）。"""
         if not self._data_missing_logged:
             self._data_missing_logged = True
-            logger.info("[amo] 未检测到数据插件 Astr_Amo_data，继续用本地库（装好后面板数据为空是正常的）")
+            logger.debug("[amo] 未检测到数据插件 Astr_Amo_data，继续用本地库（装好后面板数据为空是正常的）")
         if not self._data_warn_scheduled:
             self._data_warn_scheduled = True
             self._spawn(self._warn_data_missing_later())
@@ -210,7 +210,7 @@ class DataBridgeMixin:
         except Exception as exc:
             logger.warning("[amo] 拉回画像 %s 失败: %s" % (uid, exc))
             return False
-        logger.info("[amo] 画像从数据插件拉回：%s %s" % (uid, ",".join(fields.keys())))
+        logger.debug("[amo] 画像从数据插件拉回：%s %s" % (uid, ",".join(fields.keys())))
         return True
 
     async def _push_relation_to_data(self, a_uid, b_uid, relation, note=""):

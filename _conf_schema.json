@@ -11,12 +11,6 @@
     "default": true,
     "hint": "私聊里他说「我在清远 / 我到广州了 / 我回东莞」这类明确说法时，把她所在的城市改成那里；只是聊天提到城市不算，重名要写清楚（深圳南山）。"
   },
-  "city_follow_weather": {
-    "type": "bool",
-    "description": "跟着换城市时同时换天气城市",
-    "default": true,
-    "hint": "开启后换城会改 weather_city 并立刻刷一次天气（每次真正换城才请求一次和风）；关掉则只改说话，天气还留在面板设的城市。"
-  },
   "city_travel_schedule": {
     "type": "bool",
     "description": "去别的城市时按「出行」改今天的日程",
@@ -183,12 +177,6 @@
     "type": "int",
     "description": "每次最多注入几条记忆",
     "default": 6
-  },
-  "memory_bridge_timeout_seconds": {
-    "type": "float",
-    "description": "外挂记忆插件检索超时（秒）",
-    "hint": "调用牢记等插件的检索接口时的上限；超时自动退回旧的库内检索，不会卡住回复。",
-    "default": 3
   },
   "chat_log_days": {
     "type": "int",
@@ -363,17 +351,6 @@
     "hint": "默认 3；能一句说清就不说第二句",
     "default": 3
   },
-  "blocked_words": {
-    "type": "string",
-    "description": "屏蔽词",
-    "hint": "逗号分隔，命中后显著降低插话分",
-    "default": ""
-  },
-  "debug_log": {
-    "type": "bool",
-    "description": "输出判定调试日志",
-    "default": false
-  },
   "loop_interval_seconds": {
     "type": "int",
     "description": "后台循环间隔（秒）",
@@ -384,320 +361,6 @@
     "type": "bool",
     "default": true,
     "hint": "启用后，机器人将智能判断群聊消息并主动回复"
-  },
-  "hf_judge_provider_name": {
-    "description": "【心流】判断模型提供商",
-    "type": "string",
-    "default": "",
-    "hint": "留空自动选择：优先挑便宜小模型判定（flash/mini/lite/turbo），避开主对话模型；也可下拉选择。面板设置里可直接下拉。",
-    "_special": "select_provider"
-  },
-  "hf_reply_threshold": {
-    "description": "【心流】基础回复阈值",
-    "type": "float",
-    "default": 0.55,
-    "slider": {
-      "min": 0,
-      "max": 1,
-      "step": 0.05
-    },
-    "hint": "综合评分达到此阈值才会主动回复（开启动态阈值后作为基准值）。调高更矜持，调低更爱插话。"
-  },
-  "hf_reply_weights": {
-    "description": "【心流】发言裁决权重（JSON，可空）",
-    "type": "string",
-    "default": "",
-    "hint": "五项：addressed 点名 / concrete 有无具体信息 / relation 关系 / feel 此刻心情 / timing 时机。例：{\"addressed\": 0.55, \"timing\": 0.3}"
-  },
-  "hf_rule_blend": {
-    "description": "【心流】规则分与模型分的混合比例（0=只看模型，1=只看规则）",
-    "type": "float",
-    "default": 0.55,
-    "slider": {
-      "min": 0,
-      "max": 1,
-      "step": 0.05
-    }
-  },
-  "hf_enable_dynamic_threshold": {
-    "description": "【心流】启用动态阈值",
-    "type": "bool",
-    "default": true,
-    "hint": "启用后，回复阈值会根据群聊活跃度自动调整。活跃时阈值升高（少说话），冷淡时阈值降低（多说话）"
-  },
-  "hf_dynamic_threshold_max": {
-    "description": "【心流】动态阈值上限",
-    "type": "float",
-    "default": 0.75,
-    "slider": {
-      "min": 0.1,
-      "max": 1,
-      "step": 0.05
-    },
-    "hint": "群聊非常活跃时阈值上限，越高等于越不想说话。0.75 保证热闹时也偶尔接一句"
-  },
-  "hf_dynamic_threshold_min": {
-    "description": "【心流】动态阈值下限",
-    "type": "float",
-    "default": 0.35,
-    "slider": {
-      "min": 0,
-      "max": 1,
-      "step": 0.05
-    },
-    "hint": "群聊冷清时阈值下限，越低等于越想说话。0.35 大约对应「十条里接两三条」"
-  },
-  "hf_dynamic_activity_window": {
-    "description": "【心流】活跃度计算窗口（秒）",
-    "type": "int",
-    "default": 300,
-    "slider": {
-      "min": 60,
-      "max": 600,
-      "step": 60
-    },
-    "hint": "计算群聊活跃度时统计最近多长时间的消息（建议 1~10 分钟）"
-  },
-  "hf_dynamic_activity_weights": {
-    "description": "【心流】活跃度计算权重",
-    "type": "string",
-    "default": "0.4,0.3,0.3",
-    "hint": "消息频率、消息间隔、参与人数的权重，用逗号分隔"
-  },
-  "hf_group_threshold_configs": {
-    "type": "template_list",
-    "description": "【心流】群聊独立阈值配置",
-    "hint": "为特定群聊配置独立的固定阈值和动态阈值上下限，优先级高于全局设置。chat_id 可填完整 unified_msg_origin 或纯群号",
-    "templates": {
-      "group_config": {
-        "name": "群聊阈值配置",
-        "display_item": "chat_id",
-        "items": {
-          "chat_id": {
-            "description": "群聊标识",
-            "type": "string",
-            "default": "",
-            "hint": "填写 unified_msg_origin 或纯群号"
-          },
-          "reply_threshold": {
-            "description": "基础回复阈值",
-            "type": "float",
-            "default": 0.6,
-            "slider": {
-              "min": 0,
-              "max": 1,
-              "step": 0.05
-            }
-          },
-          "dynamic_threshold_max": {
-            "description": "动态阈值上限",
-            "type": "float",
-            "default": 0.85,
-            "slider": {
-              "min": 0.1,
-              "max": 1,
-              "step": 0.05
-            }
-          },
-          "dynamic_threshold_min": {
-            "description": "动态阈值下限",
-            "type": "float",
-            "default": 0.35,
-            "slider": {
-              "min": 0,
-              "max": 1,
-              "step": 0.05
-            }
-          }
-        }
-      }
-    }
-  },
-  "hf_context_messages_count": {
-    "description": "【心流】对话流分析消息数",
-    "type": "int",
-    "default": 5,
-    "slider": {
-      "min": 1,
-      "max": 50,
-      "step": 1
-    },
-    "hint": "小模型分析对话流（话题提取、连续性判断）时读取的最近消息条数"
-  },
-  "hf_judge_context_count": {
-    "description": "【心流】判断模型上下文条数",
-    "type": "int",
-    "default": 10,
-    "slider": {
-      "min": 1,
-      "max": 50,
-      "step": 1
-    },
-    "hint": "传给小模型评分的历史对话条数"
-  },
-  "hf_judge_rules": {
-    "type": "template_list",
-    "description": "【心流】评分规则配置",
-    "hint": "分别为 5 个评分维度设置低分情况和高分情况的汉字描述，生成评判提示词时使用",
-    "default": [
-      {
-        "__template_key": "rule",
-        "dimension_name": "relevance",
-        "dimension_display": "内容相关度",
-        "weight": 0.25,
-        "low_desc": "表情包、语气词、哈哈、嗯、完全无关的私人话题、群内专属梗",
-        "high_desc": "涉及机器人能回答的话题、提问句、有信息价值"
-      },
-      {
-        "__template_key": "rule",
-        "dimension_name": "willingness",
-        "dimension_display": "回复意愿",
-        "weight": 0.2,
-        "low_desc": "负面情绪宣泄、两人私下对话、机器人刚回复过",
-        "high_desc": "消息有趣或有深度、求助类、机器人较久未回复"
-      },
-      {
-        "__template_key": "rule",
-        "dimension_name": "social",
-        "dimension_display": "社交适宜性",
-        "weight": 0.2,
-        "low_desc": "严肃讨论、管理员发言、两人正在对话强行插入",
-        "high_desc": "氛围活跃多人参与、对群体说的、能活跃气氛"
-      },
-      {
-        "__template_key": "rule",
-        "dimension_name": "timing",
-        "dimension_display": "时机恰当性",
-        "weight": 0.15,
-        "low_desc": "距上次回复不足1分钟、发送者可能还有后续、多人快速聊天",
-        "high_desc": "距上次已过3分钟以上、消息刚发出、长时间无人回复"
-      },
-      {
-        "__template_key": "rule",
-        "dimension_name": "continuity",
-        "dimension_display": "对话连贯性",
-        "weight": 0.2,
-        "low_desc": "突然转换话题、已收尾的对话、明显是对其他群友回复",
-        "high_desc": "对机器人回复的回应/追问/反驳、延续机器人话题、提及机器人说过的内容"
-      }
-    ],
-    "templates": {
-      "rule": {
-        "name": "评分规则",
-        "display_item": "dimension_display",
-        "items": {
-          "dimension_name": {
-            "description": "维度标识（英文）",
-            "type": "string",
-            "default": "",
-            "hint": "必填，与代码中逻辑对应，一般不需修改",
-            "invisible": true
-          },
-          "dimension_display": {
-            "description": "维度中文名",
-            "type": "string",
-            "default": "",
-            "hint": "在提示词中显示的维度名称"
-          },
-          "weight": {
-            "description": "权重 (0-1)",
-            "type": "float",
-            "default": 0.2,
-            "slider": {
-              "min": 0,
-              "max": 1,
-              "step": 0.05
-            },
-            "hint": "此维度在综合评分中的占比"
-          },
-          "low_desc": {
-            "description": "低分情况描述",
-            "type": "text",
-            "default": "",
-            "hint": "描述哪些情况应该给低分（输入汉字，如：表情包、语气词）"
-          },
-          "high_desc": {
-            "description": "高分情况描述",
-            "type": "text",
-            "default": "",
-            "hint": "描述哪些情况应该给高分（输入汉字，如：提问句、有信息价值）"
-          }
-        }
-      }
-    }
-  },
-  "hf_judge_include_reasoning": {
-    "description": "【心流】返回判断理由",
-    "type": "bool",
-    "default": true,
-    "hint": "让判断模型返回详细理由，便于调试"
-  },
-  "hf_enable_detailed_log": {
-    "description": "【心流】启用详细日志",
-    "type": "bool",
-    "default": false,
-    "hint": "开启后输出每次小模型判断的完整日志"
-  },
-  "hf_judge_max_retries": {
-    "description": "【心流】JSON解析失败重试次数",
-    "type": "int",
-    "default": 3,
-    "slider": {
-      "min": 0,
-      "max": 5,
-      "step": 1
-    },
-    "hint": "当判断模型返回无效JSON时的重试次数（建议不超过5次，以免浪费API额度）"
-  },
-  "hf_immersive_mode_duration": {
-    "description": "【心流】沉浸模式持续时间",
-    "type": "int",
-    "default": 30,
-    "slider": {
-      "min": 0,
-      "max": 300,
-      "step": 10
-    },
-    "hint": "Bot回复后进入沉浸模式的持续时间（秒）。设为0禁用"
-  },
-  "hf_judgment_paused_timeout": {
-    "description": "【心流】判断暂停超时时间",
-    "type": "int",
-    "default": 60,
-    "slider": {
-      "min": 15,
-      "max": 300,
-      "step": 15
-    },
-    "hint": "Bot判定要回复后暂停小模型判断的超时时间，防止永久暂停"
-  },
-  "hf_enable_debounce": {
-    "description": "【心流】启用回复防抖延迟",
-    "type": "bool",
-    "default": true,
-    "hint": "启用后，Bot判定需要回复时会延迟N秒，防止用户话没说完就插嘴"
-  },
-  "hf_debounce_delay": {
-    "description": "【心流】基础防抖延迟（秒）",
-    "type": "float",
-    "default": 2,
-    "slider": {
-      "min": 0.5,
-      "max": 10,
-      "step": 0.5
-    },
-    "hint": "判定需要回复后，等待多少秒再实际触发"
-  },
-  "hf_max_debounce_wait": {
-    "description": "【心流】最大防抖等待（秒）",
-    "type": "float",
-    "default": 5,
-    "slider": {
-      "min": 1,
-      "max": 15,
-      "step": 0.5
-    },
-    "hint": "即使用户一直连续发消息，最多等待多少秒后也必须触发回复"
   },
   "disturb_reply_enabled": {
     "type": "bool",
@@ -991,12 +654,6 @@
     "default": true,
     "hint": "每天 10 点前后用昨天的聊天和日程小日记写一篇，保存成 txt。"
   },
-  "diary_dir": {
-    "type": "string",
-    "description": "日记保存文件夹（留空即可）",
-    "default": "",
-    "hint": "留空 = 插件数据目录下的 diary 子目录（data/plugin_data/Astrbot_Amo_forever/diary）。按 年/月/日 自动建子文件夹，文件名是「我的日记YYYY年MM月DD日.txt」。上架规范要求数据写在插件数据目录内，因此填相对路径会挂在该目录下，填目录外的绝对路径会被忽略并回退默认目录。"
-  },
   "diary_time": {
     "type": "string",
     "description": "日记时间",
@@ -1256,12 +913,6 @@
       "off"
     ],
     "hint": "at（默认）：群里必须真的 @ 她才画；any：群里任何人都能触发（慎用）；off：群聊一律不画。判定在终端本地完成，不叫模型。"
-  },
-  "photo_enable": {
-    "type": "bool",
-    "description": "照片引擎（按日程自己出图）",
-    "default": true,
-    "hint": "默认开：按日程在她吃饭、穿搭、逛街、旅游、周末时按概率出图；受每日张数、夜间静默、比例等限制。"
   },
   "photo_prompt_prefix": {
     "type": "string",

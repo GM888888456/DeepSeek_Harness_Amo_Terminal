@@ -335,7 +335,7 @@ class PersonaMixin:
                     )
                 except Exception as exc:
                     logger.warning("[amo] 景区知识库上传失败: %s" % exc)
-            logger.info("[amo] 景区知识库 %s 已同步，共 %d 个景区" % (name, len(lines)))
+            logger.debug("[amo] 景区知识库 %s 已同步，共 %d 个景区" % (name, len(lines)))
             return kb
         except Exception as exc:
             logger.warning("[amo] 景区知识库创建失败: %s" % exc)

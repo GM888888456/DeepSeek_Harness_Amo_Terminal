@@ -66,7 +66,7 @@ class Chain:
         if log is None:
             return
         try:
-            (log.info if ok else log.warning)(line)
+            (log.debug if ok else log.warning)(line)
         except Exception:
             pass
 

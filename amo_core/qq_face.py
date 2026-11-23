@@ -78,10 +78,14 @@ async def add_favorite(event, path: str, remote_path: str = "") -> bool:
         logger.warning("[amo] 收藏表情读文件失败 %s: %s" % (path, exc))
         return False
     md5 = hashlib.md5(data).hexdigest()
+    # 2026-11-23：base64:// 在 NapCat 里会被当成路径（ENAMETOOLONG: name too long），
+    # 原生 addFavEmoji 只认容器内文件路径；没有 remote_path 就不试了，别再刷日志。
     candidates = []
     if remote_path:
         candidates.append(remote_path)
-    candidates.append(_b64(data))
+    if not candidates:
+        logger.debug("[amo] 表情没有可用的容器内路径，跳过收藏：%s" % os.path.basename(path))
+        return False
     last = ""
     for cand in candidates:
         params = {
@@ -97,10 +101,10 @@ async def add_favorite(event, path: str, remote_path: str = "") -> bool:
             return True
         except Exception as exc:
             last = str(exc)[:200]
-            logger.info("[amo] add_custom_face 失败 file=%s → %s"
+            logger.debug("[amo] add_custom_face 失败 file=%s → %s"
                         % (cand[:48], last))
-    logger.warning("[amo] 表情进 QQ 收藏失败 %s：%s"
-                   % (os.path.basename(path), last))
+    logger.debug("[amo] 表情进 QQ 收藏失败 %s：%s"
+                 % (os.path.basename(path), last))
     return False
 
 

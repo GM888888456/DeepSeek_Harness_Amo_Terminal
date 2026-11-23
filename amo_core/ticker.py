@@ -117,7 +117,7 @@ class TickerMixin:
             return
         try:
             self.db.save_diary(day, start, diary)
-            logger.info("[amo] 聊天摘要已更新 %s %s 的日记" % (day, start))
+            logger.debug("[amo] 聊天摘要已更新 %s %s 的日记" % (day, start))
         except Exception as exc:
             logger.debug("[amo] 日记写入失败: %s" % exc)
 
@@ -184,7 +184,7 @@ class TickerMixin:
                     logger.debug("[amo] 自动吃饭失败: %s" % exc)
                     continue
                 if not result.get("ok"):
-                    logger.info("[amo] 自动吃饭没成：%s %s" % (
+                    logger.debug("[amo] 自动吃饭没成：%s %s" % (
                         result.get("code") or "?", result.get("reason") or ""))
                     continue
                 try:
@@ -198,7 +198,7 @@ class TickerMixin:
                 except Exception:
                     pass
                 self._sync_hunger_from_vitals()
-                logger.info("[amo] 饿到极点，自动吃了：%s" % dish)
+                logger.debug("[amo] 饿到极点，自动吃了：%s" % dish)
                 break
 
         if need_drink:
@@ -213,9 +213,9 @@ class TickerMixin:
                 except Exception:
                     pass
                 self._sync_hunger_from_vitals()
-                logger.info("[amo] 渴到极点，自动喝了：水")
+                logger.debug("[amo] 渴到极点，自动喝了：水")
             elif result:
-                logger.info("[amo] 自动喝水没成：%s %s" % (
+                logger.debug("[amo] 自动喝水没成：%s %s" % (
                     result.get("code") or "?", result.get("reason") or ""))
 
     async def _maybe_hunger_sick(self) -> None:
@@ -243,7 +243,7 @@ class TickerMixin:
         except Exception:
             pass
         if result.get("ok"):
-            logger.info("[amo] 饿到极限，她病了一场：%s" % result.get("name"))
+            logger.debug("[amo] 饿到极限，她病了一场：%s" % result.get("name"))
 
     async def _maybe_his_day_digest(self):
         """每天晚上把他今天干了什么写成一条记忆（7 天降权 / 14 天删除）。
@@ -319,7 +319,7 @@ class TickerMixin:
             return
         content = "【%s 他的今天】%s" % (day, summary[:400])
         written = await self._write_memory_checked(uid, content, kind="his_day", tier=0)
-        logger.info("[amo] 他的今日摘要%s: %s" % ("已写入" if written else "写入失败", content[:80]))
+        logger.debug("[amo] 他的今日摘要%s: %s" % ("已写入" if written else "写入失败", content[:80]))
         if written:
             try:
                 self.db.kv_set(guard, day)
@@ -418,7 +418,7 @@ class TickerMixin:
                 self.db.save_diary(day, now.strftime("%H:00"), text)
             except Exception:
                 pass
-            logger.info("[amo] 睡醒了：%s" % text)
+            logger.debug("[amo] 睡醒了：%s" % text)
             return
 
         reason = self.sleep.maybe_night_wake(now)
@@ -457,7 +457,7 @@ class TickerMixin:
                                    "半夜%s，躺了一会儿又睡过去了。" % text)
             except Exception:
                 pass
-            logger.info("[amo] 半夜醒来：%s" % text)
+            logger.debug("[amo] 半夜醒来：%s" % text)
             self.sleep.back_to_sleep(now)
 
     async def _maybe_user_move(self, event, text) -> bool:
@@ -510,6 +510,19 @@ class TickerMixin:
         key = _clock_now().date().isoformat()
         items = self.state.schedule.get(key) or self.db.get_schedule(key) or []
         if not items:
+            return False
+        allowed, why = True, ""
+        try:
+            try:
+                from ..schedule_change import hold_change
+            except Exception:
+                from schedule_change import hold_change  # type: ignore
+            allowed, why = hold_change(change, items, _clock_now())
+        except Exception as exc:
+            logger.debug("[amo] 判断上班时段失败（按允许处理）: %s" % exc)
+        if not allowed:
+            # 只当聊天：不挪地方，也不发「我这就过去」，交给正常回复
+            logger.debug("[amo] 没答应挪地方：%s（%s）" % (why, change.get("activity")))
             return False
         try:
             travel = self.cfg_int("move_transition_minutes", 30)
@@ -595,10 +608,10 @@ class TickerMixin:
         try:
             data = await self._image_bytes(prompt, "", "mirror", selfie=True, scene=scene)
         except Exception as exc:
-            logger.info("[amo] 照镜子出图异常: %s" % exc)
+            logger.debug("[amo] 照镜子出图异常: %s" % exc)
             return
         if not data:
-            logger.info("[amo] 照镜子没出图（额度或后端），下次换衣服再试")
+            logger.debug("[amo] 照镜子没出图（额度或后端），下次换衣服再试")
             return
         try:
             self.db.kv_set("mirror_count:" + day, count + 1)
@@ -621,7 +634,7 @@ class TickerMixin:
                 await self._write_memory_checked(uid, text, kind="event", tier=0)
         except Exception as exc:
             logger.debug("[amo] 照镜子记忆写入失败: %s" % exc)
-        logger.info("[amo] 照镜子完成（%s / %s），已进自我形象档案" % (look, place or "未定"))
+        logger.debug("[amo] 照镜子完成（%s / %s），已进自我形象档案" % (look, place or "未定"))
 
     async def _tick(self):
         if not self._ready or self.state is None:
@@ -679,6 +692,16 @@ class TickerMixin:
             self._bill_meals()
         except Exception as exc:
             logger.debug("[amo] 吃饭补扣失败: %s" % exc)
+        try:
+            self._maybe_shopping()
+        except Exception as exc:
+            logger.debug("[amo] 想买东西失败: %s" % exc)
+        try:
+            self._money_pressure_tick()
+            self._invest_tick()
+            self._earn_tick()
+        except Exception as exc:
+            logger.debug("[amo] 钱的节奏失败: %s" % exc)
         if now_ts() - to_float(getattr(self, "_last_auto_meal_check", 0), 0) > 600:
             self._last_auto_meal_check = now_ts()
             self._spawn(self._maybe_auto_meal())
@@ -750,7 +773,7 @@ class TickerMixin:
             except Exception as exc:
                 logger.warning("[amo] 日程续生成失败（umo=%r）: %s" % (umo, exc))
             else:
-                logger.info("[amo] 日程续生成走完：%d 格（umo=%r）"
+                logger.debug("[amo] 日程续生成走完：%d 格（umo=%r）"
                             % (len(self.state.schedule.get(today_str()) or []), umo))
         try:
             self.state.apply_schedule_events()
@@ -911,7 +934,7 @@ class TickerMixin:
                         self.db.kv_set("diary_last_day", day.isoformat())
                     except Exception:
                         pass
-                    logger.info("[amo] 日记已写: %s" % path)
+                    logger.debug("[amo] 日记已写: %s" % path)
                 except Exception as exc:
                     logger.warning("[amo] 写日记失败: %s" % exc)
                     try:
@@ -985,7 +1008,7 @@ class TickerMixin:
             self.db.kv_set(guard, day)
         except Exception:
             pass
-        logger.info("[amo] 夜间收尾完成：%d 条记录，备份 %s" %
+        logger.debug("[amo] 夜间收尾完成：%d 条记录，备份 %s" %
                     (len(lines), backed or "失败"))
 
     async def _maybe_daily_digest(self):
@@ -1071,7 +1094,7 @@ class TickerMixin:
                 continue
             content = "【" + (now - timedelta(days=1)).strftime("%Y-%m-%d") + "】" + summary[:400]
             written = await self._write_memory_checked(uid, content, "daily_digest", 2)
-            logger.info("[amo] 每日总结%s: %s" % ("已写入" if written else "写入失败", content[:80]))
+            logger.debug("[amo] 每日总结%s: %s" % ("已写入" if written else "写入失败", content[:80]))
             if written:
                 digest_written += 1
             else:
@@ -1151,7 +1174,7 @@ class TickerMixin:
                     continue
                 if self.WAKE_ASK_RE.search(text) and self._his_presence_line(uid, home_umo):
                     # 他已经醒着、刚在群里说过话，这条还在问「醒没」→ 这次不发。
-                    logger.info("[amo] 问候又要问他醒没，已丢弃: %s" % text[:40])
+                    logger.debug("[amo] 问候又要问他醒没，已丢弃: %s" % text[:40])
                     continue
                 sent_umo = ""
                 for candidate in targets:
@@ -1166,7 +1189,7 @@ class TickerMixin:
                 self._mark_greeting(uid, kind, sent_umo)
                 self.db.kv_set(daily_key, True)
                 self.db.log_proactive(uid, kind, text)
-                logger.info(
+                logger.debug(
                     "[amo] 每日问候(%s) -> %s [%s]: %s"
                     % (kind, name, str(sent_umo).split(":", 1)[0], text[:200])
                 )
@@ -1222,15 +1245,15 @@ class TickerMixin:
         )
         self.db.kv_set("weather_alert_checked", slot_key(today, slot))
         if not text:
-            logger.info("[amo] 天气提醒（%s）：明天天气正常，不提醒" % label)
+            logger.debug("[amo] 天气提醒（%s）：明天天气正常，不提醒" % label)
             return
         if slot == "morning":
             # 早上只判断，真正的预报晚上再发，一天一条不追发。
-            logger.info("[amo] 天气提醒（早上）：明天要变天，晚上 %s 再发给他" % target)
+            logger.debug("[amo] 天气提醒（早上）：明天要变天，晚上 %s 再发给他" % target)
             return
         umos = self._weather_alert_umos()
         if not umos:
-            logger.info("[amo] 天气提醒：没有可发送的会话")
+            logger.debug("[amo] 天气提醒：没有可发送的会话")
             return
         text = await self._weather_alert_text(umos[0], items[1], text)
         # 一个一个平台试：某个平台的会话失效时换下一个，而不是整天发不出去
@@ -1243,7 +1266,7 @@ class TickerMixin:
         if sent_umo:
             self.db.kv_set("weather_alert_sent", today)
             self.db.kv_set("weather_alert_open", today)
-            logger.info("[amo] 天气提醒已发送: %s -> %s" % (text, sent_umo))
+            logger.debug("[amo] 天气提醒已发送: %s -> %s" % (text, sent_umo))
         else:
             # 所有平台都失败：清掉 checked 让下一轮重试（原来也是每轮重试）。
             self.db.kv_set("weather_alert_checked", "")
@@ -1314,7 +1337,7 @@ class TickerMixin:
                 continue
             his_flags = self._his_state_flags(target_umo)
             if his_flags.get("asleep") and not guaranteed:
-                logger.info("[amo] 他说要睡了，这次不主动打扰：%s" % profile.get("name", ""))
+                logger.debug("[amo] 他说要睡了，这次不主动打扰：%s" % profile.get("name", ""))
                 continue
             kind = self._choose_proactive_kind(profile, snap, category)
             if his_flags.get("away") and kind in ("offwork", "commute"):
@@ -1326,7 +1349,7 @@ class TickerMixin:
                 continue
             if self.WAKE_ASK_RE.search(text) and self._his_presence_line(profile.get("uid"), target_umo):
                 # 他已经醒着，这条却还在问他醒没：这次不发，下一轮会带着事实重生成。
-                logger.info("[amo] 主动消息又要问他醒没，已丢弃: %s" % text[:40])
+                logger.debug("[amo] 主动消息又要问他醒没，已丢弃: %s" % text[:40])
                 continue
             sent_umo = ""
             for candidate in self._proactive_candidates(profile, target_umo):
@@ -1576,7 +1599,7 @@ class TickerMixin:
             pass
         trip["announced"] = True
         self.db.kv_set("wander_trip", trip)
-        logger.info("[amo] 旅游回来：%s" % city)
+        logger.debug("[amo] 旅游回来：%s" % city)
 
     async def _maybe_notify_repay(self) -> None:
         """她自动还了钱：在私聊里说一声，不要只在账本里静默扣。"""
@@ -1608,7 +1631,7 @@ class TickerMixin:
             logger.debug("[amo] 还款通知发送失败: %s" % exc)
             return
         self.db.kv_set("last_repay_notified_ts", ts or now_ts())
-        logger.info("[amo] 还款通知已发：%.0f（还欠 %.0f）" % (amount, remaining))
+        logger.debug("[amo] 还款通知已发：%.0f（还欠 %.0f）" % (amount, remaining))
 
     async def _maybe_push_salary(self) -> None:
         """把人格里的月薪同步给金融。
@@ -1641,7 +1664,7 @@ class TickerMixin:
             return
         if isinstance(result, dict) and result.get("skipped"):
             return
-        logger.info("[amo] 从人格读到月薪 %.0f，已交给金融" % gross)
+        logger.debug("[amo] 从人格读到月薪 %.0f，已交给金融" % gross)
 
     async def _maybe_push_assets(self) -> None:
         """把人格里的房/车同步给金融：她开奔驰，就不能被随机成比亚迪。"""
@@ -1682,7 +1705,7 @@ class TickerMixin:
             except Exception as exc:
                 logger.debug("[amo] 推送城市失败: %s" % exc)
         if isinstance(result, dict) and result.get("changed"):
-            logger.info("[amo] 从人格读到房车，已交给金融：%s｜%s" % (house or "-", car or "-"))
+            logger.debug("[amo] 从人格读到房车，已交给金融：%s｜%s" % (house or "-", car or "-"))
 
     async def _maybe_user_takes_her_to_doctor(self, event, text) -> bool:
         """他说要带她去医院，这才是她去看病的入口。
@@ -1717,11 +1740,11 @@ class TickerMixin:
         }
         self.db.kv_set("doctor_note", note)
         if result.get("ok"):
-            logger.info("[amo] 他带她去看了病：%s，自付 %.0f"
+            logger.debug("[amo] 他带她去看了病：%s，自付 %.0f"
                         % (note["name"], note["self_pay"]))
             self._sync_health_from_medical()
         else:
-            logger.info("[amo] 带她去医院没治成：%s"
+            logger.debug("[amo] 带她去医院没治成：%s"
                         % (note["reason"] or "余额不足"))
         return True
 
@@ -1755,7 +1778,7 @@ class TickerMixin:
             logger.debug("[amo] 这次没去看病：%s" % result.get("reason"))
             return
         if result.get("ok"):
-            logger.info("[amo] 去看了病：%s，自付 %.0f"
+            logger.debug("[amo] 去看了病：%s，自付 %.0f"
                         % (result.get("name"), float(result.get("self_pay") or 0)))
             # 状态交给医疗插件：它说「恢复中」就写恢复中
             self._sync_health_from_medical()
