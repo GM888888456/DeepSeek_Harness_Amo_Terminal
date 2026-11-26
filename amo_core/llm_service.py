@@ -35,6 +35,18 @@ __all__ = [
     "LLMService",
 ]
 
+# 辅助任务用免费小模型：key 是 kind，value 是按顺序尝试的 provider id
+AUX_ROUTES = {
+    "polish": ("智谱网站/GLM-4-flash", "硅基流动/Qwen/Qwen3-8B"),
+    "judge": ("硅基流动/Qwen/Qwen3-8B", "智谱网站/GLM-4-flash"),
+    "extract": ("智谱网站/GLM-4-flash", "硅基流动/Qwen/Qwen3-8B"),
+    "digest": ("智谱网站/GLM-4-flash", "硅基流动/Qwen/Qwen3-8B"),
+    "diary": ("智谱网站/GLM-4-flash", "硅基流动/Qwen/Qwen3-8B"),
+    "proactive": ("智谱网站/GLM-4-flash", "硅基流动/Qwen/Qwen3-8B"),
+    "world": ("智谱网站/GLM-4-flash", "硅基流动/Qwen/Qwen3-8B"),
+}
+
+
 class LLMService:
     def __init__(self, plugin):
         self.p = plugin
@@ -88,8 +100,40 @@ class LLMService:
             logger.warning("[amo] 获取对话模型失败: %s" % exc)
             return None
 
+    async def _provider_by_id(self, provider_id):
+        getter = getattr(self.context, "get_provider_by_id", None)
+        if not callable(getter):
+            return None
+        try:
+            result = getter(str(provider_id))
+            if hasattr(result, "__await__"):
+                result = await result
+            return result
+        except Exception as exc:
+            logger.debug("[amo] 取模型 %s 失败: %s" % (provider_id, exc))
+            return None
+
+    async def _aux_provider(self, kind):
+        """按用途挑小模型：先看 aux_provider_<kind> 配置，再用内置免费链。"""
+        chain = []
+        try:
+            conf = str(self.p.cfg_str("aux_provider_" + str(kind), "") or "").strip()
+            if conf:
+                chain.extend([x.strip() for x in conf.replace("，", ",").split(",") if x.strip()])
+        except Exception:
+            pass
+        chain.extend(AUX_ROUTES.get(str(kind), ()))
+        for pid in chain:
+            provider = await self._provider_by_id(pid)
+            if provider is not None:
+                return provider
+        return None
+
     async def chat_raw(self, umo, system, prompt, contexts=None, kind="other"):
-        provider = await self.provider(umo)
+        provider = await self._aux_provider(kind)
+        using_aux = provider is not None
+        if provider is None:
+            provider = await self.provider(umo)
         if provider is None:
             return ""
         try:
@@ -102,7 +146,23 @@ class LLMService:
             )
         except Exception as exc:
             logger.error("[amo] LLM 调用失败: %s" % exc)
-            return ""
+            if not using_aux:
+                return ""
+            fallback = await self.provider(umo)
+            if fallback is None or fallback is provider:
+                return ""
+            try:
+                response = await fallback.text_chat(
+                    request_max_retries=2,
+                    prompt=prompt,
+                    system_prompt=system,
+                    contexts=contexts or [],
+                )
+                logger.info("[amo] 小模型失败，回退主模型（kind=%s）" % kind)
+                provider = fallback
+            except Exception as exc2:
+                logger.error("[amo] 回退主模型也失败: %s" % exc2)
+                return ""
         self.p._record_tokens(kind, provider, response)
         return str(getattr(response, "completion_text", "") or "").strip()
 
