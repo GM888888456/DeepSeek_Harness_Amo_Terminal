@@ -1429,22 +1429,29 @@
     let worldPhotoTapCount = 0;
     let worldPhotoBusy = false;
 
+    // 单击 = 拍一张；双击 = 打开「眼下」弹层；三击 = 清掉照片。
+    // 要区分单击和双击，只能等一小会儿看有没有第二次点击。
     function bindWorldPhotoTap(photo) {
       if (!photo || photo.dataset.bound === "1") return;
       photo.dataset.bound = "1";
       photo.addEventListener("click", () => {
-        if (worldPhotoBusy) return;
         worldPhotoTapCount += 1;
         if (worldPhotoTapTimer) clearTimeout(worldPhotoTapTimer);
         worldPhotoTapTimer = setTimeout(() => {
           const count = worldPhotoTapCount;
           worldPhotoTapCount = 0;
           worldPhotoTapTimer = null;
-          if (count >= 3) clearWorldPhoto();
-          else if (count === 2) openIdPhotoDialog();
-        }, 420);
+          if (count >= 3) {
+            clearWorldPhoto();
+          } else if (count === 2) {
+            openWorldOverlay();
+          } else if (count === 1) {
+            if (worldPhotoBusy) return;
+            requestWorldPhoto("self", "");
+          }
+        }, 300);
       });
-      photo.title = "双击：生成证件照；三击：取消";
+      photo.title = "单击：拍一张；双击：看眼下；三击：清掉";
     }
 
     // 刷新/重开面板后取回服务端存的那张图（iframe 里 localStorage 不可靠）
@@ -1668,16 +1675,10 @@
       const box = document.getElementById("worldOverlay");
       if (box) box.hidden = true;
     }
-    document.addEventListener("dblclick", function (ev) {
-      const target = ev.target;
-      if (target && target.id === "worldPhotoImg") {
-        ev.preventDefault();
-        openWorldOverlay();
-      }
-    });
     document.addEventListener("click", function (ev) {
       const target = ev.target;
       if (!target) return;
+      if (target.id === "worldIdPhoto") { closeWorldOverlay(); openIdPhotoDialog(); return; }
       if (target.id === "worldOverlayClose") { closeWorldOverlay(); return; }
       if (target.id === "worldOverlay") { closeWorldOverlay(); }
     });
@@ -3116,7 +3117,10 @@
         <div class="label">眼下</div>
         <div class="sub" id="worldDay">—</div>
       </div>
-      <button type="button" id="worldOverlayClose">关闭</button>
+      <div style="display:flex;gap:8px">
+        <button type="button" id="worldIdPhoto">证件照</button>
+        <button type="button" id="worldOverlayClose">关闭</button>
+      </div>
     </div>
     <div class="sub" style="margin-top:6px">今天外面发生的事，和她跟各方的观感（0~100，越低越难办事）。</div>
     <div id="worldToday" class="sub" style="margin-top:10px">加载中…</div>
