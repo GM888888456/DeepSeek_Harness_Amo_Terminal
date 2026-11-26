@@ -1229,6 +1229,28 @@ class WebApiMixin:
         worldview = await self.state.ensure_worldview(self._last_umo, force=True)
         return {"code": 0, "data": worldview}
 
+    async def api_world(self):
+        """世界状态：今日事件、五方观感、声望、最近动静（面板「世界」页用）。"""
+        await self._ensure_ready()
+        try:
+            try:
+                from ..world import events as _we
+            except Exception:
+                from world import events as _we  # type: ignore
+            from datetime import datetime, timedelta, timezone
+            today = datetime.now(timezone(timedelta(hours=8))).date().isoformat()
+            state, _changed = _we.ensure_today(today)
+            return {"code": 0, "data": {
+                "day": state.get("day") or today,
+                "today": state.get("today") or [],
+                "factions": state.get("factions") or {},
+                "reputation": state.get("reputation") or 0,
+                "weak": _we.weak_factions(state),
+                "recent": _we.recent(state, 8),
+            }}
+        except Exception as exc:
+            return {"code": 1, "message": str(exc)}
+
     async def api_say(self):
         """面板「代她说一句」。只允许发到已知会话，参数只认 body。"""
         await self._ensure_ready()
@@ -1356,6 +1378,7 @@ class WebApiMixin:
             ("/photo/last", self.api_photo_last, ["GET", "POST"]),
             ("/photo/clear", self.api_photo_clear, ["GET", "POST"]),
             ("/worldview", self.api_worldview, ["GET"]),
+            ("/world", self.api_world, ["GET"]),
             ("/worldview/regen", self.api_worldview_regen, ["GET", "POST"]),
             ("/worldview_regen", self.api_worldview_regen, ["GET", "POST"]),
             ("/say", self.api_say, ["GET", "POST"]),

@@ -687,6 +687,11 @@ class TickerMixin:
             self._heartflow_tick()
         except Exception as exc:
             logger.debug("[amo] 心流衰减失败: %s" % exc)
+
+        try:
+            self._world_tick()
+        except Exception as exc:
+            logger.debug("[amo] 世界推进失败: %s" % exc)
         try:
             self._period_feel_tick()
         except Exception as exc:

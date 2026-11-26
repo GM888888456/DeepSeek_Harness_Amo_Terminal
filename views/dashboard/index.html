@@ -501,6 +501,18 @@
       <section class="card">
         <div class="row between">
           <div>
+            <div class="label">眼下</div>
+            <div class="sub">今天外面发生的事，和她跟各方的观感（0~100，越低越难办事）。</div>
+          </div>
+          <div class="sub" id="worldDay">—</div>
+        </div>
+        <div id="worldToday" class="sub">加载中…</div>
+        <div id="worldFactions" class="sub" style="margin-top:10px"></div>
+        <div id="worldHistory" class="sub" style="margin-top:10px"></div>
+      </section>
+      <section class="card">
+        <div class="row between">
+          <div>
             <div class="label">世界文档</div>
             <div class="sub">她的生活设定、城市、工作、性格与边界。</div>
           </div>
@@ -1597,6 +1609,47 @@
     // 设置页只放「双击陪伴 / 双击天气」里没有的开关；那两处保持原样不动。
     // 2026-11-23（用户口径）：开关全部搬到设置页，不再靠双击弹窗才能看到
     const SWITCH_SKIP_GROUPS = new Set([]);
+
+    // 世界状态（今日事件 / 势力观感 / 最近动静）：60 秒刷一次
+    async function loadWorldLive() {
+      const today = document.getElementById("worldToday");
+      if (!today) return;
+      try {
+        const res = await bridgeCall("world");
+        const data = (res && (res.data || res)) || {};
+        const rows = data.today || [];
+        const day = document.getElementById("worldDay");
+        if (day) day.textContent = data.day || "—";
+        today.innerHTML = "";
+        if (!rows.length) {
+          today.textContent = "今天没什么特别的动静。";
+        } else {
+          rows.forEach(function (row) {
+            const line = document.createElement("div");
+            line.textContent = "· " + (row.text || "");
+            today.appendChild(line);
+          });
+        }
+        const fac = document.getElementById("worldFactions");
+        if (fac) {
+          const list = ["省里", "军方", "金融", "商界", "媒体"];
+          const weak = data.weak || [];
+          fac.textContent = "观感：" + list.map(function (n) {
+            const v = (data.factions || {})[n];
+            return n + " " + (v == null ? "—" : v) + (weak.indexOf(n) >= 0 ? "（吃紧）" : "");
+          }).join("　") + "　｜ 声望 " + (data.reputation == null ? "—" : data.reputation);
+        }
+        const hist = document.getElementById("worldHistory");
+        if (hist) {
+          const recent = (data.recent || []).slice(-4).reverse();
+          hist.textContent = recent.length ? "最近：" + recent.join("；") : "";
+        }
+      } catch (error) {
+        today.textContent = "读取失败：" + (error.message || error);
+      }
+    }
+    loadWorldLive();
+    setInterval(loadWorldLive, 60000);
 
     async function loadSwitches() {
       const box = document.getElementById("switchList");

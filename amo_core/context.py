@@ -239,20 +239,44 @@ class ContextMixin:
             return ""
 
     def _world_line(self, event) -> str:
-        """世界观词条（world/entries/*.json）：按触发词注入，预算 1100 字符。
+        """世界状态 + 词条库：今日事件给一两句，问到关系/局面时给五方观感，再给命中的设定。
 
-        行业标准做法（lorebook）：只在相关时才注入，绝不整库塞进提示词。
-        改词条只改 JSON，改完不用重启（按 mtime 热加载）。
+        数据源：world/events.py（state 落盘在 plugin_data）与 world/entries/*.json。
+        预算仍由 world.scan 的字符上限兜着；这里只加几十字的世界线。
         """
         try:
             text = str(getattr(event, "message_str", "") or "")
             if not text:
                 return ""
+            blocks = []
             try:
-                from ..world import scan as _world_scan
+                try:
+                    from ..world import events as _we
+                except Exception:
+                    from world import events as _we  # type: ignore
+                from datetime import datetime, timedelta, timezone
+                today = datetime.now(timezone(timedelta(hours=8))).date().isoformat()
+                state, _changed = _we.ensure_today(today)
+                line = _we.today_block(state)
+                if line:
+                    blocks.append("【今日世界】" + line)
+                if any(w in text for w in ("关系", "局面", "势力", "面子", "省里",
+                                           "银行", "媒体", "风声", "背景", "上面")):
+                    blocks.append("【各方对你的观感（0~100，越低越难办事）】"
+                                  + _we.faction_block(state))
             except Exception:
-                from world import scan as _world_scan  # type: ignore
-            return _world_scan(text) or ""
+                pass
+            try:
+                try:
+                    from ..world import scan as _world_scan
+                except Exception:
+                    from world import scan as _world_scan  # type: ignore
+                block = _world_scan(text)
+                if block:
+                    blocks.append(block)
+            except Exception:
+                pass
+            return "\n".join(blocks)
         except Exception:
             return ""
 

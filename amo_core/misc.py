@@ -553,6 +553,44 @@ class MiscMixin:
             logger.debug("[amo] 事件 %s 处理失败: %s" % (name, exc))
             return {}
 
+    def _world_tick(self) -> None:
+        """心跳：跨天了就推进世界（抽事件、改五方势力、写一条记忆）。"""
+        try:
+            try:
+                from ..world import events as _we
+            except Exception:
+                from world import events as _we  # type: ignore
+            from datetime import datetime, timedelta, timezone
+            today = datetime.now(timezone(timedelta(hours=8))).date().isoformat()
+            state, changed = _we.ensure_today(today)
+            if not changed:
+                return
+            line = _we.today_block(state)
+            logger.info("[amo] 世界推进 %s：%s" % (today, line[:60]))
+            weak = _we.weak_factions(state)
+            if weak:
+                logger.info("[amo] 关系吃紧：%s" % "、".join(weak))
+
+            async def _remember():
+                try:
+                    uid = self._primary_uid()
+                except Exception:
+                    uid = ""
+                if not uid:
+                    return
+                try:
+                    await self._write_memory_checked(
+                        uid, "今天外面的动静：%s" % line, kind="event", tier=0)
+                except Exception:
+                    pass
+
+            try:
+                self._spawn(_remember())
+            except Exception:
+                pass
+        except Exception as exc:
+            logger.debug("[amo] 世界推进失败: %s" % exc)
+
     def feel(self, event, extra=None) -> None:
         """挂载/终端把「发生了什么」丢进来；加减表在 heartflow.py 里，这里不写业务判断。"""
         if getattr(self, "feelings", None) is None:
