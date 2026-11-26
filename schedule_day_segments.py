@@ -46,7 +46,7 @@ def workday_segments(ctx, seg, overtime=False):
             seg("18:30", "19:30", "出岔子了，留在办公室处理", office, "office", "work"),
             seg("19:30", "20:30", "让人送了两份便当上来", office, "office", "meal"),
             seg("20:30", "21:30", "事情压下去了，收尾签字", office, "office", "work"),
-            seg("21:30", "22:00", "开车回去", "路上", "road", "commute", **drive("夜里路空，开得快")),
+            seg("21:30", "22:00", "老周开车送她回去", "路上", "road", "commute", **drive("夜里路空，老周开得稳")),
             seg("22:00", "23:00", "到家先冲个澡", home, "home", "life"),
             seg("23:00", "24:00", "睡觉", home, "home", "sleep"),
         ]
@@ -55,14 +55,14 @@ def workday_segments(ctx, seg, overtime=False):
             seg("18:30", "20:30", "在饭局上应酬，敬酒、听人讲话、点头",
                 "观山湖的酒楼", "restaurant", "work"),
             seg("20:30", "21:30", "散场，把两个客人送上车", "门口", "road", "work"),
-            seg("21:30", "22:00", "开车回家", "路上", "road", "commute", **drive("喝了酒就叫代驾")),
+            seg("21:30", "22:00", "老周开车送她回家", "路上", "road", "commute", **drive("老周开车，她靠在后排眯一会儿")),
             seg("22:00", "23:00", "回家卸妆、换掉一身烟味", home, "home", "life"),
             seg("23:00", "24:00", "睡觉", home, "home", "sleep"),
         ]
     else:
         evening = [
             seg("18:30", "19:00", "收拾桌面，最后回一遍邮件", office, "office", "work"),
-            seg("19:00", "19:30", "开车回家", "路上", "road", "commute", **drive("错峰，路上不堵")),
+            seg("19:00", "19:30", "老周开车送她回家", "路上", "road", "commute", **drive("错峰，路上不堵")),
             seg("19:30", "20:30", "在家里吃晚饭", home, "home", "meal"),
             seg("20:30", "22:00", "窝在沙发上，不想再动脑子", home, "home", "rest"),
             seg("22:00", "23:00", "洗澡、敷面膜", home, "home", "life"),
@@ -96,7 +96,7 @@ def workday_segments(ctx, seg, overtime=False):
     can_play = (yard_done + play_min + 10) <= (18 * 60 + 40 - back_min)
     visit = [
         seg(hhmm(leave), hhmm(arrive), "出门去贵安看机房，园区外环在修路",
-            "路上", "road", "commute", **drive("自己开，路上约 %d 分钟" % out_min)),
+            "路上", "road", "commute", **drive("老周开车，路上约 %d 分钟" % out_min)),
         seg(hhmm(arrive), hhmm(check_done), "在贵安机房蹲下来查线缆，一排排看过去",
             site_place, "office", "work"),
         seg(hhmm(check_done), hhmm(yard_done), "顺路到隔壁园区工地转一圈，风把头发吹乱",
@@ -108,7 +108,7 @@ def workday_segments(ctx, seg, overtime=False):
                          "贵安园区", "park", "rest"))
         yard_done += play_min
     visit.append(seg(hhmm(yard_done), hhmm(yard_done + back_min),
-                     "开车回办公室，赶在晚高峰前走", "路上", "road", "commute",
+                     "老周开车回办公室，赶在晚高峰前走", "路上", "road", "commute",
                      **drive("路上约 %d 分钟" % back_min)))
     visit.append(seg(hhmm(yard_done + back_min), "18:30",
                      "回到办公室，把今天的字签完", office, "office", "work"))
@@ -174,14 +174,14 @@ def indoor_rest_segments(ctx, seg, place_of):
         seg("00:00", "08:00", "睡觉", home, "home", "sleep"),
         seg("08:00", "09:00", "起床吃早餐", home, "home", "meal"),
         seg("09:00", "10:00", "收拾屋子、洗衣服", home, "home", "life"),
-        seg("10:00", "11:00", "开车去" + name, "路上", "road", "commute",
+        seg("10:00", "11:00", "老周开车带她去" + name, "路上", "road", "commute",
             transit="drive", vehicle=car, detail="下雨天路滑，开得慢"),
         seg("11:00", "13:00", "逛" + name, place,
             "mall" if not spot.get("indoor") else "scenic", "play", vehicle=car, spot=name),
         seg("13:00", "14:00", "吃午饭", place + "·餐厅", "restaurant", "meal"),
         seg("14:00", "16:00", "继续逛、找地方坐着", place, "mall", "play"),
         seg("16:00", "17:00", "喝杯热饮", place + "·咖啡店", "restaurant", "rest"),
-        seg("17:00", "18:00", "开车回家", "路上", "road", "commute",
+        seg("17:00", "18:00", "老周开车送她回家", "路上", "road", "commute",
             transit="drive", vehicle=car),
         seg("18:00", "19:00", "到家缓一会儿", home, "home", "rest"),
         seg("19:00", "20:00", "吃晚饭", home, "home", "meal"),

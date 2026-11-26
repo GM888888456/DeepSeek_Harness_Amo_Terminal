@@ -398,9 +398,9 @@ COMMUTE_BANK = [
 ]
 #: 自己有车时的通勤（黑色奔驰 C 级）
 DRIVE_COMMUTE_BANK = [
-    "开车去公司，高架上堵了一段", "自己开车，绕开了最堵那条路",
-    "开车到公司楼下，找了两圈车位", "在车里听完一首歌才下车",
-    "开车路上被加塞，按了两下喇叭", "把车停好，走到电梯口",
+    "老周开车送她去公司，高架上堵了一段", "老周绕开了最堵那条路",
+    "老周在楼下找了两圈车位", "在车里听完一首歌才下车",
+    "路上被加塞，老周按了两下喇叭", "车停好后她走到电梯口",
 ]
 LUNCH_BANK = [
     "下楼吃牛肉粉", "和同事拼饭", "点外卖", "吃碗牛肉面",
@@ -440,7 +440,7 @@ SWIM_DETAILS = (
     "被晒得有点晕，赶紧补防晒", "人比想象中多，等了好久才轮到",
 )
 ROAD_BANK = [
-    "开车去景区", "堵在路上", "找停车位", "导航绕路", "等红绿灯",
+    "老周开车去景区", "堵在路上", "找停车位", "导航绕路", "等红绿灯",
 ]
 TAXI_BANK = [
     "打车", "在网约车后排刷手机", "看着窗外的街景", "催司机快一点",
@@ -664,7 +664,7 @@ class ScheduleEngine:
             _note_swallowed("schedule_engine.ScheduleEngine.resolve_profile", _amo_exc)
         profile = dict(base)
         # 2026-11-25（用户口径：从人格提取）：人格里写着「有台黑色奔驰」，
-        # 那就按有车排日程（通勤自己开），不再因为「没送过车」就天天挤地铁。
+        # 那就按有车排日程（通勤有司机老周开），不再因为「没送过车」就天天挤地铁。
         profile["has_gift_car"] = bool(str(profile.get("car") or "").strip())
         profile["has_gift_home"] = False
         try:
@@ -1415,7 +1415,7 @@ class ScheduleEngine:
     def _travel_item(self, start, end, origin, dest, minutes, km, ctx):
         """一格车程。"""
         driving = bool(ctx.get("has_gift_car"))
-        text = ("开车去%s" if driving else "打车去%s") % dest
+        text = ("老周开车带她去%s" if driving else "打车去%s") % dest
         tail = "路上约 %d 分钟" % int(minutes)
         if km:
             tail += "，%.0f 公里" % km
@@ -1587,7 +1587,7 @@ class ScheduleEngine:
             elif transit == "train":
                 return "坐高铁去" + str((ctx.get("event") or {}).get("city") or "外地")
             elif transit == "subway":
-                # 2026-11-25（用户口径）：她有车，通勤主要是自己开；限行/堵车才地铁。
+                # 2026-11-26（用户口径）：她是大小姐，通勤是老周开车、她坐后排；限行才地铁。
                 # 把 transit 也改成 drive，出门这张照片才会是车里/路面，不是车厢。
                 bank = COMMUTE_BANK
                 bank = COMMUTE_BANK
@@ -1929,7 +1929,7 @@ class ScheduleEngine:
                 if not first.get("vehicle"):
                     first["vehicle"] = ctx.get("car") or ""
                 if "停车" not in str(first.get("detail") or ""):
-                    first["detail"] = (str(first.get("detail") or "") + "；自己开车来的，停车位找了很久").strip("；")
+                    first["detail"] = (str(first.get("detail") or "") + "；老周开车来的，停车位找了很久").strip("；")
         return items
 
     #: 文案里出现这些词 = 人在路上，区域必须是 road
@@ -1982,7 +1982,7 @@ class ScheduleEngine:
                         and not any(w in act for w in ("回家", "到家", "路上", "地铁", "公交", "开车", "打车", "走", "车厢", "等车"))):
                     transit = str(item.get("transit") or "")
                     item["activity"] = {
-                        "subway": "挤地铁去公司", "drive": "开车去公司",
+                        "subway": "挤地铁去公司", "drive": "老周开车送她去公司",
                         "bus": "坐公交去公司", "walk": "走路去公司",
                         "taxi": "打车去公司",
                     }.get(transit) or "赶路去公司"
@@ -2065,7 +2065,7 @@ class ScheduleEngine:
             "输出要求：\n"
             "1. 顺序对应，正好 24 个字符串；\n"
             "2. 时间、地点、类别按骨架原样保留；睡觉就写睡觉，在路上就写在路上；\n"
-            "3. 在景区要写具体项目；开车要体现堵车/找停车位；\n"
+            "3. 在景区要写具体项目；写清是老周开车（她坐后排），路上堵车/找停车位；\n"
             "4. 相邻两小时用不同的句子；写生活本身，不写“日程”“AI”“模型”这些词；\n"
             "%s"
             "6. 只输出 JSON 数组，例如 [\"...\",\"...\"]。"
@@ -2384,7 +2384,7 @@ class ScheduleEngine:
             "%s\n"
             "请写一段 120-260 字的第一人称小日记，要求：\n"
             "1. 只写这一小时；\n"
-            "2. 写清交通方式（开车/打车/地铁/走路）、具体干了什么、吃了什么、遇到什么趣事；\n"
+            "2. 写清交通方式（老周开车/打车/地铁/走路）、具体干了什么、吃了什么、遇到什么趣事；\n"
             "3. 情绪从上一小时自然延续（郁闷/生气不会无缘无故变成开心/兴奋）；\n"
             "4. 如果是周末开车出去玩，要提到车、堵车、停车位；\n"
             "5. 口语化、生动，像真人发朋友圈，不写旁白，也不提日程/AI/模型；\n"
