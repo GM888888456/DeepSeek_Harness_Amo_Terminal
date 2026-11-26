@@ -925,6 +925,11 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                     await self._sync_with_data_plugin()
             except Exception as exc:
                 logger.debug("[amo] 加载完成补同步失败: %s" % exc)
+            # 多模联动自检：辅助模型（智谱/硅基）到底在不在，日志里直接看得到
+            try:
+                await self.llm.probe_all()
+            except Exception as exc:
+                logger.debug("[amo] 模型可用性探测失败: %s" % exc)
             # 金融第一次发薪会等 20 秒，这里先把人格里的月薪推过去，别让它按城市平均先发一遍
             try:
                 await self._maybe_push_salary()

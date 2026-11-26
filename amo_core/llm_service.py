@@ -36,6 +36,18 @@ __all__ = [
 ]
 
 # 辅助任务用免费小模型：key 是 kind，value 是按顺序尝试的 provider id
+
+#: kind 别名：主流程里各种具体用途归到同一类「辅助任务」
+AUX_ALIASES = {
+    "morning": "proactive", "slack": "proactive", "offwork": "proactive",
+    "commute": "proactive", "anniversary": "proactive", "greet": "proactive",
+    "checkin": "proactive", "night": "proactive", "miss": "proactive",
+    "daily_digest": "digest", "his_day": "digest", "summary": "digest",
+    "diary": "diary", "fact": "extract", "facts": "extract",
+    "worldview": "world", "enrich": "world", "schedule": "world",
+    "rewrite": "polish", "humanize": "polish", "voice": "polish",
+}
+
 AUX_ROUTES = {
     "polish": ("智谱网站/GLM-4-flash", "硅基流动/Qwen/Qwen3-8B"),
     "judge": ("硅基流动/Qwen/Qwen3-8B", "智谱网站/GLM-4-flash"),
@@ -122,15 +134,46 @@ class LLMService:
                 chain.extend([x.strip() for x in conf.replace("，", ",").split(",") if x.strip()])
         except Exception:
             pass
-        chain.extend(AUX_ROUTES.get(str(kind), ()))
+        chain.extend(AUX_ROUTES.get(AUX_ALIASES.get(str(kind), str(kind)), ()))
         for pid in chain:
             provider = await self._provider_by_id(pid)
             if provider is not None:
                 return provider
         return None
 
+    async def probe_all(self):
+        """启动时探一遍辅助模型是否可用（缺了就在日志里说，不用等触发）。"""
+        results = {}
+        for kind, ids in AUX_ROUTES.items():
+            for pid in ids:
+                if pid in results:
+                    continue
+                provider = await self._provider_by_id(pid)
+                results[pid] = provider is not None
+        for pid, ok in sorted(results.items()):
+            logger.info("[amo] 模型可用性 %-30s %s" % (pid, "OK" if ok else "缺失"))
+        return results
+
+    async def _probe_aux_once(self, kind):
+        """第一次用到某个辅助用途时，把候选模型逐个探一遍，日志里能立刻看出缺谁。"""
+        if getattr(self, "_aux_probed", None) is None:
+            self._aux_probed = set()
+        if kind in self._aux_probed:
+            return
+        self._aux_probed.add(kind)
+        for pid in AUX_ROUTES.get(str(kind), ()):
+            provider = await self._provider_by_id(pid)
+            logger.info("[amo] 辅助模型 %s（%s）-> %s" % (
+                pid, kind, "OK" if provider is not None else "缺失"))
+
     async def chat_raw(self, umo, system, prompt, contexts=None, kind="other"):
-        provider = await self._aux_provider(kind)
+        route = AUX_ALIASES.get(str(kind), str(kind))
+        if route in AUX_ROUTES:
+            try:
+                await self._probe_aux_once(route)
+            except Exception:
+                pass
+        provider = await self._aux_provider(route)
         using_aux = provider is not None
         if provider is None:
             provider = await self.provider(umo)
@@ -180,7 +223,7 @@ class LLMService:
                 logger.debug("[amo] Decision 判断不可用: %s" % exc)
         answer = await self.chat(
             umo, "你是一个判断器，只输出 yes 或 no。",
-            question + "\n只输出 yes 或 no。", limit=8,
+            question + "\n只输出 yes 或 no。", limit=8, kind="judge",
         )
         if not answer:
             return None
