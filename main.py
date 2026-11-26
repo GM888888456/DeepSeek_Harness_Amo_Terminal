@@ -1671,27 +1671,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             except Exception as _st_exc:
                 logger.debug("[amo] 表情包判定失败: %s" % _st_exc)
             # GROUP_PREFILTER 2026-11-26：省 token——群聊里没信息量的短消息不进主模型。
-            # 进模型的四类：叫她的名字/@她/带问号或感叹/够长（≥12 字）。
-            # 其余按 1/5 抽样放进去，既省钱又不至于变哑巴。
-            try:
-                if (not event.is_private_chat()) and self.cfg_bool("group_prefilter", True):
-                    _t = raw_text or ""
-                    _named = False
-                    try:
-                        _self_names, _ = self._taunt_names()
-                        _named = any(w and w in _t for w in (_self_names or ()))
-                    except Exception:
-                        _named = False
-                    _at = bool(getattr(event, "is_at_or_wake_command", False))
-                    _q = any(c in _t for c in "？?！!")
-                    if not (_named or _at or _q or len(_t) >= 12):
-                        _cnt = getattr(self, "_prefilter_cnt", 0) + 1
-                        self._prefilter_cnt = _cnt
-                        if _cnt % 5 != 0:
-                            logger.debug("[amo] 群聊预筛：跳过短消息 %s" % _t[:16])
-                            return
-            except Exception as _pf_exc:
-                logger.debug("[amo] 群聊预筛失败: %s" % _pf_exc)
             # 2026-11-23：日志只留「来了什么 / 回不回 / 回了什么」三行
             try:
                 if raw_text:

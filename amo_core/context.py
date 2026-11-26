@@ -206,6 +206,38 @@ class ContextMixin:
         except Exception:
             return ""
 
+    def _family_line(self, event) -> str:
+        """家里人：他问起就说清楚（谁、做什么的），不主动炫耀、不拿这个压人。
+
+        只在消息提到家人时注入，不进常驻人格（族谱是「库存」，不是每轮都要付 token 的文本）。
+        """
+        try:
+            text = str(getattr(event, "message_str", "") or "")
+            words = ("爸", "妈", "爷", "奶", "姑", "姨", "叔", "舅", "家里人",
+                     "家里", "族谱", "亲戚", "长辈", "外公", "外婆", "老家")
+            if not any(w in text for w in words):
+                return ""
+            fam = self.db.kv_get("family_tree", {}) or {}
+            core = fam.get("core") or []
+            if not core:
+                return ""
+            lines = ["【家里人】他问起谁，你就说清楚：叫什么、做什么的。"
+                     "说清楚就行——不主动炫耀、不拿家里的名头压人、也别一口气报一串头衔。"]
+            for person in core[:8]:
+                rel = str((person or {}).get("relation") or "")
+                name = str((person or {}).get("name") or "")
+                title = str((person or {}).get("title") or "")
+                note = str((person or {}).get("note") or "")
+                if not rel or not name:
+                    continue
+                lines.append("- %s：%s，%s%s" % (rel, name, title, ("；" + note) if note else ""))
+            memo = str(fam.get("motto") or "")
+            if memo:
+                lines.append("家训：" + memo)
+            return "\n".join(lines)
+        except Exception:
+            return ""
+
     def _route_lines(self, snap=None, limit=2):
         """今天要开的每一段路多少分钟——只给事实，她算时间才有依据。
 
@@ -828,6 +860,12 @@ class ContextMixin:
             _desk = self._desk_line(event)
             if _desk:
                 parts.append(_desk)
+        except Exception:
+            pass
+        try:
+            _fam = self._family_line(event)
+            if _fam:
+                parts.append(_fam)
         except Exception:
             pass
         parts = self._lean_parts(parts)
