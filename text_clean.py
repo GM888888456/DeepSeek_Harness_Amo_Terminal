@@ -157,6 +157,21 @@ _META_BRACKET_TAIL_RE = re.compile(r"[（(]\s*([^（）()]{1,20})[）)]\s*[。�
 #: 清理后只剩一句被引号包着的台词 → 把引号也摘掉，真人说话不带引号
 _QUOTE_WRAP_RE = re.compile(r"^[“\"「『]([^”\"」』\n]{1,60})[”\"」』]$")
 
+#: 演算句里带引号台词（2026-11-26 21:09 实发）：
+#:   他说的故障我只能回一句「我这边正常」，至于我问谁，就不关他的事
+#: 只保留引号里那句，其余全是她自己的推演。
+_META_PLAN_QUOTE_RE = re.compile(
+    r"(?:我只能|我就|只能|就该|应该|可以|只会|就|想|我)(?:回|说|答)(?:他|她)?"
+    r"(?:一?句)?[：:，,\s]*[「“\"]([^」”\"\n]{1,120})[」”\"]")
+#: 整行都是演算、又没写引号（「他说的故障我只能回一句我这边正常」）→ 整行丢
+_META_PLAN_ONLY_RE = re.compile(
+    r"^(?:他|她|对方|群友|他们|这人|那人)[^。！？\n]{0,40}?"
+    r"(?:我只能|我就|只能|就该|应该|只会)(?:回|说|答)")
+#: 句尾推理尾巴：至于我问谁，就不关他的事 / 反正与我无关
+_META_REASON_TAIL_RE = re.compile(
+    r"[，,；;、]?\s*(?:至于|反正|不过)[^。！？\n]{0,40}?"
+    r"(?:不关[^。！？\n]{0,8}事|与我无关|跟我没关系|和我没关系)[。]?\s*$")
+
 
 def _bracket_is_meta(inner):
     core = str(inner or "").strip()
@@ -185,6 +200,23 @@ def strip_meta_monologue(text):
         if _META_SELF_TALK_RE.search(s):
             hits.append("内心独白")
             continue
+        # 2026-11-26：演算句「我只能回一句「…」」→ 只留台词
+        _plan = _META_PLAN_QUOTE_RE.search(s)
+        if _plan:
+            hits.append("演算台词")
+            s = _plan.group(1).strip()
+            if not s:
+                continue
+        elif _META_PLAN_ONLY_RE.match(s):
+            hits.append("演算句")
+            continue
+        # 句尾推理尾巴：「至于我问谁，就不关他的事」
+        _tail = _META_REASON_TAIL_RE.sub("", s).strip()
+        if _tail != s:
+            hits.append("推理尾巴")
+            s = _tail
+            if not s:
+                continue
         if _META_REHEARSAL_RE.match(s):
             hits.append("排练句")
             continue

@@ -95,6 +95,43 @@ EVENT_POOL = [
      "effects": {"商界": +4, "媒体": +3, "金融": +1}},
 ]
 
+
+# ---------------- 季度主线（每季第一天额外抽一条） ----------------
+QUARTER_POOL = {
+    1: [
+        {"id": "q1_open", "tag": "季度·开局", "weight": 5,
+         "text": "开年第一会：集团把今年的营收目标定在 11 亿，比去年翻一成半。",
+         "effects": {"商界": +2, "金融": +1}},
+        {"id": "q1_hiring", "tag": "季度·开局", "weight": 4,
+         "text": "开年招人：研发院要扩 200 个编制，人力部说预算吃紧。",
+         "effects": {"金融": -2, "商界": +1}},
+    ],
+    2: [
+        {"id": "q2_chip", "tag": "季度·算力", "weight": 5,
+         "text": "二季度卡荒：上游交期整体后移，她把三期上架计划压到下季。",
+         "effects": {"商界": -3, "金融": -2}},
+        {"id": "q2_customer", "tag": "季度·算力", "weight": 4,
+         "text": "二季度大客户集体验收，推理单价被压了一轮，但用量涨了三成。",
+         "effects": {"商界": +3, "金融": +1}},
+    ],
+    3: [
+        {"id": "q3_reg", "tag": "季度·合规", "weight": 5,
+         "text": "三季度监管加压：数据出境与算力出口管制同时收紧，法务部连开三天会。",
+         "effects": {"省里": -3, "金融": -2}},
+        {"id": "q3_market", "tag": "季度·合规", "weight": 4,
+         "text": "三季度行业洗牌：两家小厂出局，客户往头部集中，她的单子反而多了。",
+         "effects": {"商界": +4, "媒体": +1}},
+    ],
+    4: [
+        {"id": "q4_close", "tag": "季度·收官", "weight": 5,
+         "text": "四季度收官：集团全年营收差 3000 万没达标，她在年会上没提这件事。",
+         "effects": {"商界": -2, "金融": -1}},
+        {"id": "q4_bonus", "tag": "季度·收官", "weight": 4,
+         "text": "四季度分红方案：她拍板给核心团队发三个月奖金，自己那份减半。",
+         "effects": {"商界": +3, "军方": +1}},
+    ],
+}
+
 HISTORY_KEEP = 80
 
 
@@ -166,6 +203,19 @@ def rollover(state, today, rng=None):
         choice = rng.choices(pool, weights=weights, k=1)[0]
         pool.remove(choice)
         picked.append(choice)
+    # 季度主线：每季头三天额外推进一条（和日常事件叠加，不进日常池）
+    try:
+        month = int(str(today)[5:7])
+        day = int(str(today)[8:10])
+    except Exception:
+        month, day = 0, 0
+    quarter = (month - 1) // 3 + 1 if month else 0   # 1/4/7/10 月 = 第 1/2/3/4 季
+    if quarter in QUARTER_POOL and 1 <= day <= 3:
+        options = QUARTER_POOL[quarter]
+        quarter_pick = rng.choices(options, weights=[max(1, int(e.get("weight") or 1))
+                                                     for e in options], k=1)[0]
+        picked.append(quarter_pick)
+
     state["day"] = today
     state["today"] = [{"id": e["id"], "text": e["text"], "tag": e.get("tag", ""),
                        "effects": e.get("effects") or {}} for e in picked]

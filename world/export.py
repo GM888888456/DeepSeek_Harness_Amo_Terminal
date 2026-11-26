@@ -97,6 +97,17 @@ def build():
                                           int(e.get("weight") or 0)))
         w("\n")
 
+        # 季度主线
+        quarter = getattr(ev, "QUARTER_POOL", None) or {}
+        if quarter:
+            w("### 季度主线（每季头三天额外推进一条）\n\n")
+            w("| 季度 | 事件 | 影响 |\n|---|---|---|\n")
+            for q, items in sorted(quarter.items()):
+                for e in items:
+                    eff = "、".join("%s %+d" % (k, v) for k, v in (e.get("effects") or {}).items()) or "—"
+                    w("| Q%d | %s | %s |\n" % (q, e.get("text", ""), eff))
+            w("\n")
+
     # ---- 族谱与宅邸 ----
     try:
         try:
