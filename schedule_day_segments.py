@@ -3,6 +3,21 @@
 from __future__ import annotations
 
 
+def _estate_out(home, prefix="estate"):
+    """庄园里的休息活动：按天轮换，别每天都躺卧室。"""
+    import random as _random
+    import time as _time
+    rng = _random.Random("%s:%d" % (prefix, _time.localtime().tm_yday))
+    return rng.choice([
+        ("在泳池边坐着，两只脚泡在水里，看院子里的灯", home + "·泳池边", "pool"),
+        ("在影音室挑了一部老片，看到一半就开始打瞌睡", home + "·影音室", "home"),
+        ("在院子里慢慢走两圈，闻见茶园那边的味", home + "·院子", "yard"),
+        ("在茶室煮了一壶茶，翻了两页书就发呆", home + "·茶室", "home"),
+        ("去果园转了一圈，摘了几个李子边走边吃", home + "·果园", "estate"),
+        ("在主楼二楼的露台上吹风，什么都不想干", home + "·露台", "home"),
+    ])
+
+
 def workday_segments(ctx, seg, overtime=False):
     """总裁的工作日：会议、批红、见人、偶尔应酬。不再是朝九晚五的工位。
 
@@ -41,6 +56,8 @@ def workday_segments(ctx, seg, overtime=False):
         work_morning = seg("09:20", "10:30", "强撑着开完高管例会，声音都哑了",
                            "%s会议室" % office, "office", "work")
 
+    _ev_text, _ev_place, _ev_zone = _estate_out(home, "workday-evening")
+
     if overtime:
         evening = [
             seg("18:30", "19:30", "出岔子了，留在办公室处理", office, "office", "work"),
@@ -64,7 +81,7 @@ def workday_segments(ctx, seg, overtime=False):
             seg("18:30", "19:00", "收拾桌面，最后回一遍邮件", office, "office", "work"),
             seg("19:00", "19:30", "老周开车送她回家", "路上", "road", "commute", **drive("错峰，路上不堵")),
             seg("19:30", "20:30", "在家里吃晚饭", home, "home", "meal"),
-            seg("20:30", "22:00", "窝在沙发上，不想再动脑子", home, "home", "rest"),
+            seg("20:30", "22:00", _ev_text, _ev_place, _ev_zone, "rest"),
             seg("22:00", "23:00", "洗澡、敷面膜", home, "home", "life"),
             seg("23:00", "24:00", "睡觉", home, "home", "sleep"),
         ]

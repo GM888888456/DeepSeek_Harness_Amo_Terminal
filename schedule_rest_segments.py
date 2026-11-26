@@ -3,6 +3,21 @@
 from __future__ import annotations
 
 
+def _estate_out(home, prefix="estate"):
+    """庄园里的休息活动：按天轮换，别每天都躺卧室。"""
+    import random as _random
+    import time as _time
+    rng = _random.Random("%s:%d" % (prefix, _time.localtime().tm_yday))
+    return rng.choice([
+        ("在泳池边坐着，两只脚泡在水里，看院子里的灯", home + "·泳池边", "pool"),
+        ("在影音室挑了一部老片，看到一半就开始打瞌睡", home + "·影音室", "home"),
+        ("在院子里慢慢走两圈，闻见茶园那边的味", home + "·院子", "yard"),
+        ("在茶室煮了一壶茶，翻了两页书就发呆", home + "·茶室", "home"),
+        ("去果园转了一圈，摘了几个李子边走边吃", home + "·果园", "estate"),
+        ("在主楼二楼的露台上吹风，什么都不想干", home + "·露台", "home"),
+    ])
+
+
 def business_trip_segments(ctx, seg, with_city):
     home = ctx["home"]
     event = ctx.get("event") or {}
@@ -48,7 +63,7 @@ def sick_rest_segments(ctx, seg):
                 seg("14:00", "17:00", "卧床休息、捂汗", home, "home", "rest"),
                 seg("17:00", "18:00", "吃药、量体温", home, "home", "life"),
                 seg("18:00", "19:00", "喝点粥当晚饭", home, "home", "meal"),
-                seg("19:00", "22:00", "早早躺着刷手机", home, "home", "rest"),
+                seg("19:00", "22:00", _estate_out(home, "rest")[0], _estate_out(home, "rest")[1], _estate_out(home, "rest")[2], "rest"),
                 seg("22:00", "23:00", "洗漱", home, "home", "life"),
                 seg("23:00", "24:00", "睡觉", home, "home", "sleep"),
             ]
@@ -60,9 +75,9 @@ def sick_rest_segments(ctx, seg):
             seg("12:00", "13:00", "回家吃午饭", home, "home", "meal"),
             seg("13:00", "16:00", "卧床休息、捂汗", home, "home", "rest"),
             seg("16:00", "17:00", "吃药、量体温", home, "home", "life"),
-            seg("17:00", "18:00", "靠在沙发上发呆", home, "home", "rest"),
+            seg("17:00", "18:00", _estate_out(home, "rest")[0], _estate_out(home, "rest")[1], _estate_out(home, "rest")[2], "rest"),
             seg("18:00", "19:00", "喝点粥当晚饭", home, "home", "meal"),
-            seg("19:00", "22:00", "早早躺着刷手机", home, "home", "rest"),
+            seg("19:00", "22:00", _estate_out(home, "rest")[0], _estate_out(home, "rest")[1], _estate_out(home, "rest")[2], "rest"),
             seg("22:00", "23:00", "洗漱", home, "home", "life"),
             seg("23:00", "24:00", "睡觉", home, "home", "sleep"),
         ]
@@ -74,9 +89,9 @@ def sick_rest_segments(ctx, seg):
         seg("12:00", "13:00", "简单吃点午饭", home, "home", "meal"),
         seg("13:00", "16:00", "睡午觉、捂汗", home, "home", "rest"),
         seg("16:00", "17:00", "起来喝水、吃药", home, "home", "life"),
-        seg("17:00", "18:00", "靠在沙发上发呆", home, "home", "rest"),
+        seg("17:00", "18:00", _estate_out(home, "rest")[0], _estate_out(home, "rest")[1], _estate_out(home, "rest")[2], "rest"),
         seg("18:00", "19:00", "喝点粥当晚饭", home, "home", "meal"),
-        seg("19:00", "22:00", "早早躺着刷手机", home, "home", "rest"),
+        seg("19:00", "22:00", _estate_out(home, "rest")[0], _estate_out(home, "rest")[1], _estate_out(home, "rest")[2], "rest"),
         seg("22:00", "23:00", "洗漱", home, "home", "life"),
         seg("23:00", "24:00", "睡觉", home, "home", "sleep"),
     ]
@@ -93,9 +108,9 @@ def period_rest_segments(ctx, seg):
         seg("12:00", "13:00", "简单吃点午饭", home, "home", "meal"),
         seg("13:00", "16:00", "疼得没力气，继续躺着", home, "home", "rest"),
         seg("16:00", "17:00", "煮点热乎的，暖暖肚子", home, "home", "life"),
-        seg("17:00", "18:00", "靠在沙发上发会儿呆", home, "home", "rest"),
+        seg("17:00", "18:00", _estate_out(home, "rest")[0], _estate_out(home, "rest")[1], _estate_out(home, "rest")[2], "rest"),
         seg("18:00", "19:00", "喝点粥当晚饭", home, "home", "meal"),
-        seg("19:00", "22:00", "早早躺下刷手机", home, "home", "rest"),
+        seg("19:00", "22:00", _estate_out(home, "rest")[0], _estate_out(home, "rest")[1], _estate_out(home, "rest")[2], "rest"),
         seg("22:00", "23:00", "洗漱", home, "home", "life"),
         seg("23:00", "24:00", "睡觉", home, "home", "sleep"),
     ]
@@ -109,7 +124,7 @@ def overtime_segments(ctx, seg):
     return [
         seg("00:00", "08:00", "睡觉", home, "home", "sleep"),
         seg("08:00", "09:00", "起床吃早餐", home, "home", "meal"),
-        seg("09:00", "10:00", "本来打算在家躺一天", home, "home", "rest"),
+        seg("09:00", "10:00", _estate_out(home, "rest")[0], _estate_out(home, "rest")[1], _estate_out(home, "rest")[2], "rest"),
         seg("10:00", "11:00", "接到电话，" + str(event.get("task") or "处理点急事"), home, "home", "work",
             event="overtime", effects=event.get("effects") or {}),
         seg("11:00", "12:00", "开车赶去公司", "路上", "road", "commute",
