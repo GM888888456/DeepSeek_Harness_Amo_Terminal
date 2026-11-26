@@ -1654,6 +1654,15 @@
             return n + " " + (v == null ? "—" : v) + (weak.indexOf(n) >= 0 ? "（吃紧）" : "");
           }).join("　") + "　｜ 声望 " + (data.reputation == null ? "—" : data.reputation);
         }
+        const drv = document.getElementById("worldDrives");
+        if (drv) {
+          const dv = (data.drives && data.drives.values) || {};
+          const names = [["boredom","无聊"],["curiosity","好奇"],["social","想他"],
+                         ["control","掌控"],["valued","被在意"]];
+          drv.textContent = "内驱：" + names.map(function (n) {
+            return n[1] + " " + (dv[n[0]] == null ? "—" : Math.round(dv[n[0]]));
+          }).join("　");
+        }
         const hist = document.getElementById("worldHistory");
         if (hist) {
           const recent = (data.recent || []).slice(-4).reverse();
@@ -3124,6 +3133,7 @@
     <div id="worldToday" class="sub" style="margin-top:10px">加载中…</div>
     <div id="worldFactions" class="sub" style="margin-top:10px"></div>
     <div id="worldHistory" class="sub" style="margin-top:10px"></div>
+    <div id="worldDrives" class="sub" style="margin-top:10px"></div>
   </div>
 </div>
 

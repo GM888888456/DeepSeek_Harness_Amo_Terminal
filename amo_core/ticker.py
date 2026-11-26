@@ -692,6 +692,16 @@ class TickerMixin:
             self._world_tick()
         except Exception as exc:
             logger.debug("[amo] 世界推进失败: %s" % exc)
+
+        try:
+            self._drives_tick()
+        except Exception as exc:
+            logger.debug("[amo] 驱动推进失败: %s" % exc)
+
+        try:
+            await self._intent_tick()
+        except Exception as exc:
+            logger.debug("[amo] 意图检查失败: %s" % exc)
         try:
             self._period_feel_tick()
         except Exception as exc:

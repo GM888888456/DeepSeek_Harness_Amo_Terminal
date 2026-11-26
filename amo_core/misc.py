@@ -553,6 +553,244 @@ class MiscMixin:
             logger.debug("[amo] 事件 %s 处理失败: %s" % (name, exc))
             return {}
 
+    # ---------- 驱动 / 意图（2026-11-26：让她像人一样有内驱） ----------
+    def _drv(self):
+        """拿世界驱动模块（包内/文件两种加载方式都试）。"""
+        try:
+            from ..world import drives as _d, intents as _i
+        except Exception:
+            from world import drives as _d, intents as _i  # type: ignore
+        return _d, _i
+
+    def _is_sleeping_hour(self):
+        try:
+            return 23 <= __import__("datetime").datetime.now().hour or \
+                __import__("datetime").datetime.now().hour < 7
+        except Exception:
+            return False
+
+    def _drives_state(self, now=None):
+        d, _i = self._drv()
+        state = d.load()
+        d.advance(state, now, sleeping=self._is_sleeping_hour())
+        return state
+
+    def _drives_line(self):
+        """给上下文的一行【此刻】；都低于阈值就返回空串。"""
+        try:
+            d, _i = self._drv()
+            return d.line(self._drives_state())
+        except Exception:
+            return ""
+
+    def _drives_on_message(self, text=""):
+        """他说话了：社交欲掉、被在意感涨。"""
+        try:
+            d, _i = self._drv()
+            state = self._drives_state()
+            praised = any(w in str(text or "") for w in ("好看", "真乖", "厉害", "想你", "喜欢", "乖"))
+            d.on_his_message(state, praised=praised)
+            d.save(state)
+        except Exception as exc:
+            logger.info("[amo] 驱动更新失败: %s" % exc)
+
+    def _drives_tick(self):
+        """心跳：推进数值；我主动说过、他半天没回 → 算被晾着。"""
+        try:
+            d, _i = self._drv()
+            now = __import__("time").time()
+            state = d.load()
+            d.advance(state, now, sleeping=self._is_sleeping_hour())
+            try:
+                pending = self._pending_ts if hasattr(self, "_pending_ts") else 0
+            except Exception:
+                pending = 0
+            # 他上次说话到现在
+            try:
+                last_his = float(self.db.kv_get("last_his_msg_ts", 0) or 0)
+            except Exception:
+                last_his = 0.0
+            if last_his and now - last_his > 3600 and not self._is_sleeping_hour():
+                d.on_ignored(state, (now - last_his) / 60.0)
+            d.save(state)
+        except Exception as exc:
+            logger.info("[amo] 驱动推进失败: %s" % exc)
+
+    async def _intent_tick(self):
+        """每 5 分钟看一次：她有没有想做的事。"""
+        try:
+            d, it = self._drv()
+        except Exception as exc:
+            logger.info("[amo] 意图模块加载失败: %s" % exc)
+            return
+        logger.debug("[amo] 意图检查开始")
+        now = __import__("time").time()
+        if now - float(getattr(self, "_intent_last", 0) or 0) < 300:
+            return
+        self._intent_last = now
+        # 测试开关：kv intent_force_once=true 时，跳过睡眠时段跑一次（用完即删）
+        force = False
+        try:
+            force = bool(self.db.kv_get("intent_force_once", False))
+        except Exception:
+            force = False
+        if self._is_sleeping_hour() and not force:
+            return
+        if force:
+            try:
+                self.db.kv_set("intent_force_once", False)
+            except Exception:
+                pass
+            logger.info("[amo] 意图强制执行（测试开关）")
+        state = self._drives_state(now)
+        intent = it.pick(state, now=now)
+        if not intent:
+            d.save(state)
+            return
+        logger.info("[amo] 她想做点什么：%s" % it.explain(intent, state))
+        ok = False
+        try:
+            ok = await self._intent_execute(intent)
+        except Exception as exc:
+            logger.info("[amo] 意图执行失败(%s): %s" % (intent.get("id"), exc))
+        logger.info("[amo] 意图执行结果 %s -> %s" % (intent.get("id"), ok))
+        if ok:
+            it.mark(state, intent.get("id"), now)
+            d.on_acted(state, intent.get("id"))
+            logger.info("[amo] 她自己动了：%s" % it.explain(intent, state))
+        d.save(state)
+
+    async def _intent_execute(self, intent):
+        iid = str(intent.get("id") or "")
+        if iid == "look_online":
+            return await self._intent_look_online()
+        if iid == "go_outside":
+            return await self._intent_go_outside()
+        if iid == "push_company":
+            return await self._intent_push_company()
+        # talk_to_him / send_photo 都走「跟他说一句」
+        return await self._intent_say(intent)
+
+    async def _intent_profile(self):
+        try:
+            profiles = self.db.proactive_profiles(limit=20)
+        except Exception:
+            return None, ""
+        lovers = [p for p in profiles if str(p.get("relation") or "") == "相恋"]
+        profile = (lovers or profiles or [None])[0]
+        if not profile:
+            return None, ""
+        try:
+            umo = self._pick_proactive_umo(profile) or ""
+        except Exception:
+            umo = ""
+        return profile, umo
+
+    async def _intent_send(self, profile, umo, text, kind="intent"):
+        text = str(text or "").strip()
+        if not text or not profile or not umo:
+            logger.info("[amo] 意图发送跳过：text=%s profile=%s umo=%s"
+                        % (bool(text), bool(profile), bool(umo)))
+            return False
+        for candidate in self._proactive_candidates(profile, umo):
+            try:
+                ok = await self._send_to_umo(candidate, text)
+            except Exception:
+                ok = False
+            if not ok:
+                continue
+            try:
+                self._set_proactive_pending(profile.get("uid"), kind, text, umo=candidate)
+            except Exception:
+                pass
+            try:
+                uid = self._primary_uid()
+                if uid:
+                    await self._write_memory_checked(
+                        uid, "我主动跟他说：%s" % text, kind="event", tier=0)
+            except Exception:
+                pass
+            return True
+        return False
+
+    async def _intent_say(self, intent):
+        profile, umo = await self._intent_profile()
+        if not profile or not umo:
+            return False
+        d, _i = self._drv()
+        state = self._drives_state()
+        desc = d.describe(state)
+        try:
+            act = str((self.state.current_activity() or {}).get("activity") or "")
+        except Exception:
+            act = ""
+        sys_p = "你在给他发消息。短句、口语，一两句，不解释你在想什么，不要问他在不在。"
+        ask = ("你现在最想要的是：%s。你正在：%s。\n"
+               "用你自己的口吻发一条消息给他。" % (desc, act or "待着"))
+        try:
+            text = await self.llm.chat(umo, sys_p, ask, limit=40, kind="proactive")
+        except Exception as exc:
+            logger.debug("[amo] 意图说话生成失败: %s" % exc)
+            return False
+        return await self._intent_send(profile, umo, text, kind=str(intent.get("id") or "intent"))
+
+    async def _intent_look_online(self):
+        try:
+            from ..world import trends as _tr
+        except Exception:
+            from world import trends as _tr  # type: ignore
+        try:
+            import asyncio as _aio
+            await _aio.to_thread(_tr.refresh, True)
+        except Exception:
+            pass
+        block = ""
+        try:
+            block = _tr.block(2) or ""
+        except Exception:
+            block = ""
+        if not block:
+            return False
+        lines = [l.strip() for l in block.splitlines() if l.strip().startswith("-")]
+        title = lines[0].lstrip("- ").split("·")[0].strip() if lines else ""
+        profile, umo = await self._intent_profile()
+        logger.info("[amo] 看热榜：title=%s profile=%s umo=%s"
+                    % (bool(title), bool(profile), bool(umo)))
+        if not title or not profile:
+            return False
+        return await self._intent_send(
+            profile, umo, "刚刷到一个：%s（我就看了个标题）" % title, kind="look_online")
+
+    async def _intent_go_outside(self):
+        """在庄园里走两圈：写进记忆，不打扰他。"""
+        try:
+            uid = self._primary_uid()
+        except Exception:
+            uid = ""
+        if not uid:
+            return False
+        try:
+            await self._write_memory_checked(
+                uid, "闷得慌，去庄园院子里走了两圈，看见茶园那边起雾", kind="event", tier=0)
+        except Exception:
+            return False
+        return True
+
+    async def _intent_push_company(self):
+        """心里压着事：催一下，写进记忆（不硬发消息）。"""
+        try:
+            uid = self._primary_uid()
+        except Exception:
+            uid = ""
+        if not uid:
+            return False
+        try:
+            await self._write_memory_checked(
+                uid, "压着几件事没定，把标和授信的事又过了一遍", kind="event", tier=0)
+        except Exception:
+            return False
+        return True
+
     def _world_tick(self) -> None:
         """心跳：跨天了就推进世界（抽事件、改五方势力、写一条记忆）。"""
         try:

@@ -249,6 +249,13 @@ class ContextMixin:
             if not text:
                 return ""
             blocks = []
+            # 2026-11-26：她此刻最想要什么（都在阈值下就不给）
+            try:
+                _drive_hint = self._drives_line()
+                if _drive_hint:
+                    blocks.append(_drive_hint)
+            except Exception:
+                pass
             # 纪念日：当天给一行，她自己会带出来
             try:
                 try:

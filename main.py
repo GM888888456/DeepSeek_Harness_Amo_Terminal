@@ -1698,6 +1698,15 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             except Exception as exc:
                 event.amo_sender_is_lover = False
                 logger.debug("[amo] 认人失败: %s" % exc)
+            # 2026-11-26：他说话了 → 社交欲掉、被在意感涨
+            try:
+                self._drives_on_message(raw_text)
+                try:
+                    self.db.kv_set("last_his_msg_ts", __import__("time").time())
+                except Exception:
+                    pass
+            except Exception as _drv_exc:
+                logger.debug("[amo] 驱动更新失败: %s" % _drv_exc)
             # AGENT_DECIDES 2026-11-24（用户口径：删除心流，完全交给 Agent）：
             # 不再由心流判定要不要回——每条群消息都进主模型，由她自己写 SPEAK 1/0。
             # 这里只负责把「该唤醒了」这个事实告诉框架，不做任何打分。

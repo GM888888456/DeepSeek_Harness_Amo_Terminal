@@ -1229,6 +1229,17 @@ class WebApiMixin:
         worldview = await self.state.ensure_worldview(self._last_umo, force=True)
         return {"code": 0, "data": worldview}
 
+    def _drives_snapshot(self):
+        try:
+            try:
+                from ..world import drives as _d
+            except Exception:
+                from world import drives as _d  # type: ignore
+            state = _d.load()
+            return {"values": state.get("values") or {}, "top": _d.top(state, 3)}
+        except Exception:
+            return {}
+
     async def api_world(self):
         """世界状态：今日事件、五方观感、声望、最近动静（面板「世界」页用）。"""
         await self._ensure_ready()
@@ -1246,6 +1257,7 @@ class WebApiMixin:
                 "factions": state.get("factions") or {},
                 "reputation": state.get("reputation") or 0,
                 "weak": _we.weak_factions(state),
+                "drives": _drives_snapshot(),
                 "recent": _we.recent(state, 8),
             }}
         except Exception as exc:
