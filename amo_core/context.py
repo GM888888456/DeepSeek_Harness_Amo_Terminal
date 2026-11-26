@@ -238,6 +238,24 @@ class ContextMixin:
         except Exception:
             return ""
 
+    def _world_line(self, event) -> str:
+        """世界观词条（world/entries/*.json）：按触发词注入，预算 1100 字符。
+
+        行业标准做法（lorebook）：只在相关时才注入，绝不整库塞进提示词。
+        改词条只改 JSON，改完不用重启（按 mtime 热加载）。
+        """
+        try:
+            text = str(getattr(event, "message_str", "") or "")
+            if not text:
+                return ""
+            try:
+                from ..world import scan as _world_scan
+            except Exception:
+                from world import scan as _world_scan  # type: ignore
+            return _world_scan(text) or ""
+        except Exception:
+            return ""
+
     def _route_lines(self, snap=None, limit=2):
         """今天要开的每一段路多少分钟——只给事实，她算时间才有依据。
 
@@ -866,6 +884,12 @@ class ContextMixin:
             _fam = self._family_line(event)
             if _fam:
                 parts.append(_fam)
+        except Exception:
+            pass
+        try:
+            _world = self._world_line(event)
+            if _world:
+                parts.append(_world)
         except Exception:
             pass
         parts = self._lean_parts(parts)
