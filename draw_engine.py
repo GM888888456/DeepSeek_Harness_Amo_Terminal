@@ -387,17 +387,26 @@ class DrawEngine:
         except Exception as _amo_exc:
             _note_swallowed("draw_engine.DrawEngine._driving_word", _amo_exc)
             return ""
-        text = "%s %s" % (activity.get("place") or "", activity.get("activity") or "")
-        for word in ("开车", "驾车", "驾驶", "路上", "通勤", "堵车", "赶路",
-                     "在车里", "等红灯", "高速", "导航"):
-            if word in text:
-                return word
+        text = "%s %s %s" % (activity.get("place") or "", activity.get("activity") or "",
+                             activity.get("detail") or "")
+        # 2026-11-26（用户口径）：她是大小姐，坐 A8 后排，路上照样能自拍、拍窗外；
+        # 只有「她自己握方向盘」才需要拦——文案里有 开车/驾车/驾驶 且没出现司机。
+        if any(w in text for w in ("开车", "驾车", "驾驶")) and not any(
+                w in text for w in ("老周", "小马", "司机", "代驾")):
+            return "驾驶"
         return ""
 
     def _place_text(self):
         try:
             activity = self.plugin.state.current_activity() or {}
-            return "%s %s" % (activity.get("place") or "", activity.get("activity") or "")
+            text = "%s %s" % (activity.get("place") or "", activity.get("activity") or "")
+            # 坐车时按「车内」取景：她是乘客，可以自拍、可以拍窗外
+            zone = str(activity.get("zone") or "")
+            transit = str(activity.get("transit") or "")
+            if zone == "road" or transit == "drive":
+                if activity.get("vehicle") or "车" in text or "路上" in text:
+                    return "车上（后排） " + text
+            return text
         except Exception as _amo_exc:
             _note_swallowed("draw_engine.DrawEngine._place_text", _amo_exc)
             return ""
