@@ -251,6 +251,24 @@ _SPEAK_LINE_RE = re.compile(
 )
 
 
+#: 第三人称旁白：她把自己写成「她换掉一身烟味…」
+#: 只在整条只有一个「她」、且没提到「他」时才改（避免把别的女生的话改成她自己）
+_THIRD_SELF_RE = re.compile(
+    r'(^|[。！？!?…\n]\s*)她(?=(?:换|洗|卸|穿|脱|坐|躺|站|靠|走|进|出|看|笑|说|把|'
+    r'已经|才|刚|不|没|又|还|正|伸手|低头|抬头|慢慢|懒懒))'
+)
+
+
+def fix_first_person(text):
+    """把「她＋动作」的旁白改成「我」，别让第三人称叙述流出去。"""
+    raw = str(text or "")
+    if not raw.strip() or "她" not in raw:
+        return raw
+    if "他" in raw or raw.count("她") != 1:
+        return raw
+    return _THIRD_SELF_RE.sub(lambda m: m.group(1) + "我", raw, count=1)
+
+
 def strip_speak_protocol(text):
     """剥掉模型写的 SPEAK 1 / SPEAK 0 协议行。
 

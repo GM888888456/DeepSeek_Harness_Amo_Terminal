@@ -765,6 +765,15 @@ class MiscMixin:
             text = _humanize(text)
         except Exception as _hz_exc:
             logger.debug("[amo] 口语化失败: %s" % _hz_exc)
+        # 2026-11-26：第三人称旁白（「她换掉一身烟味…」）改成第一人称
+        try:
+            try:
+                from ..text_clean import fix_first_person as _ffp
+            except Exception:
+                from text_clean import fix_first_person as _ffp  # type: ignore
+            text = _ffp(text)
+        except Exception as _ffp_exc:
+            logger.debug("[amo] 旁白修正失败: %s" % _ffp_exc)
         value = self._strip_place_marks(str(text or "").strip())
         limit = max(1, self.cfg_int("reply_max_sentences", 3))
         parts = [item for item in re.split(r"(?<=[。！？!?~～])", value) if item.strip()]
