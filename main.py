@@ -352,7 +352,9 @@ _PAIRS = {
     "《": "》", "〈": "〉", "“": "”", "‘": "’", "「": "」", "『": "』",
     "（": "）", "(": ")", "【": "】", "〔": "〕", "[": "]", "{": "}",
 }
-_STRONG = "。！？!?…\n"
+# 2026-11-26（用户口径）：破折号也是断句点——「……再给你拍——也就你有这个面子」
+# 该切成两条发，而不是憋在一个气泡里。
+_STRONG = "。！？!?…\n—–"
 _WEAK = "，,、；;：:~～"
 _TRIM = " \t\r\n。！？!?…，,、；;：:~～"
 
@@ -517,6 +519,8 @@ def segment_text(text, keep_punc=True, min_len=6, max_len=42, max_segments=4,
     segments = []
     for part in pieces:
         seg = part.strip()
+        # 破折号当断句点时，气泡首尾不该留着「——」
+        seg = seg.strip("—–").strip()
         if not keep_punc:
             seg = seg.strip(_TRIM)
         if seg:
