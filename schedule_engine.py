@@ -627,8 +627,8 @@ class ScheduleEngine:
         if not workplace:
             workplace = self._extract_work(text)
         if not workplace:
-            # 世界观里的单位常写成「智脑科技（贵阳），观山湖区」：地点只留公司名那一段，
-            # 否则日程和自拍提示词都会变成「在智脑科技（贵阳），观山湖区」。
+            # 世界观里的单位常写成「中国计算智脑集团（贵阳），观山湖区」：地点只留公司名那一段，
+            # 否则日程和自拍提示词都会变成「在中国计算智脑集团（贵阳），观山湖区」。
             world_work = str(world.get("workplace") or "").strip()
             world_work = re.split(r"[，,、;；/|]", world_work)[0].strip() if world_work else ""
             if world_work and world_work not in ("公司", "单位", "工作地点", "上班"):
@@ -1404,7 +1404,7 @@ class ScheduleEngine:
             return True
         if x == y or x in y or y in x:
             return True
-        # 同名前缀够长（比如「贵阳观山湖智脑集团总部」和「…总部会议室」）
+        # 同名前缀够长（比如「贵阳观山湖中国计算智脑集团总部」和「…总部会议室」）
         n = 0
         for c1, c2 in zip(x, y):
             if c1 != c2:

@@ -1307,7 +1307,7 @@ class HumanState:
             logger.debug("[amo] 按话改日程失败: %s" % exc)
 
     def _work_place_name(self) -> str:
-        """世界观里的单位短名：智脑科技（贵阳）有限公司 → 智脑科技·公司。"""
+        """世界观里的单位短名：中国计算智脑集团（贵阳） → 中国计算智脑集团·公司。"""
         try:
             raw = str((self.worldview or {}).get("workplace") or "")
         except Exception:

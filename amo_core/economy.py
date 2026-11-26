@@ -447,12 +447,14 @@ class EconomyMixin:
             picks = [rnd.choice(rows) for _ in range(3)]
             cost = round(sum(min(self._market_price(row), 30.0) for row in picks), 1)
             dish = rnd.choice(self.HOME_DISHES)
-            return dish, max(8.0, cost or 22.0), "菜场", reason
+            return dish, max(15.0, cost or 22.0), "菜场", reason
         if kind == "dining":
             feast = any(word in activity for word in ("请", "聚", "火锅", "烤鱼", "生日", "庆祝"))
             cap = 260.0 if feast else 60.0
+            # 地板价：允许随便挑便宜小份，就会出「火锅 2.47 元」这种账
+            floor = 80.0 if feast else 18.0
             pool = [row for row in rows
-                    if self._market_price(row) <= cap
+                    if floor <= (self._market_price(row) or 0) <= cap
                     and "双人" not in str(row.get("name") or "")]
             if pool:
                 rows = pool
@@ -466,6 +468,8 @@ class EconomyMixin:
         row = rnd.choice(rows)
         dish = str(row.get("name") or "") or "一顿饭"
         cost = self._market_price(row) or 30.0
+        # 外卖/堂食再兜一道地板，避免目录里的极小份被当正餐
+        cost = max(float(cost or 0), 25.0 if kind == "takeout" else 18.0)
         shop = str(row.get("shop") or "").strip()
         if shop:
             payee = shop
@@ -656,6 +660,51 @@ class EconomyMixin:
         cheap = [sym for price, sym in pool if price <= 60][:6]
         return random.choice(cheap or [sym for _, sym in pool[:3]])
 
+    def _leverage_self_tick(self, plugin) -> None:
+        """她自己定杠杆（1~50）：贪欲/心情/缺钱往上加，当天亏钱往回收。一天只定一次。"""
+        day = _clock_now().date().isoformat()
+        try:
+            if str(self.db.kv_get("leverage_self_day", "")) == day:
+                return
+        except Exception:
+            pass
+        moods = {}
+        try:
+            moods = self.feelings.values() if getattr(self, "feelings", None) else {}
+        except Exception:
+            moods = {}
+        greed = 0.0
+        for key, value in (moods or {}).items():
+            if str(key).startswith("desire_"):
+                try:
+                    greed = max(greed, float(value or 0))
+                except Exception:
+                    continue
+        try:
+            joy = float((moods or {}).get("joy") or 0)
+        except Exception:
+            joy = 0.0
+        pressure = self._money_pressure()
+        try:
+            inv = getattr(self.state, "invest", None) or {}
+            pnl = float((inv.get("day") or {}).get("pnl_pct") or 0)
+        except Exception:
+            pnl = 0.0
+        score = 6.0 + greed * 0.30 + joy * 0.15 + pressure * 0.25 + max(0.0, pnl) * 2.5
+        if pnl < 0:
+            score -= min(20.0, abs(pnl) * 4.0)
+        times = int(max(1, min(50, round(score))))
+        try:
+            plugin.set_leverage(times)
+        except Exception as exc:
+            logger.debug("[amo] 定杠杆失败: %s" % exc)
+            return
+        try:
+            self.db.kv_set("leverage_self_day", day)
+        except Exception:
+            pass
+        logger.info("[amo] 她今天给自己的杠杆：%d 倍" % times)
+
     def _invest_tick(self) -> None:
         """她会真的下单：浮亏 + 缺钱 → 割肉；浮盈 + 手上有钱 → 加仓。
 
@@ -680,6 +729,7 @@ class EconomyMixin:
         plugin = self._finance()
         if plugin is None:
             return
+        self._leverage_self_tick(plugin)
         try:
             summary = plugin.invest_summary()
         except Exception as exc:
@@ -722,6 +772,26 @@ class EconomyMixin:
             if symbol and cash >= 800:
                 self._spawn(self._do_invest(plugin, symbol, "open", 0.0, cash))
             return
+        # 模拟盘：也会开新仓（不只加已有的四只），每天最多 3 笔
+        try:
+            day_key = "invest_trades:" + _clock_now().date().isoformat()
+            trades = int(self.db.kv_get(day_key, 0) or 0)
+        except Exception:
+            day_key, trades = "", 0
+        if day_key and trades < 3 and random.random() < 0.35:
+            held = {str(sym).lower() for sym, _pos in items if sym}
+            fresh = self._invest_pick_symbol()
+            if fresh and str(fresh).lower() not in held:
+                try:
+                    self.db.kv_set(day_key, trades + 1)
+                except Exception:
+                    pass
+                try:
+                    self.db.kv_set("invest_action_ts", now_ts())
+                except Exception:
+                    pass
+                self._spawn(self._do_invest(plugin, fresh, "open", 0.0, cash))
+                return
         # 仓位真的会动：最赚的落袋，最亏的认赔，手上有钱就追涨杀跌
         scored = []
         for symbol, pos in items:
@@ -772,12 +842,13 @@ class EconomyMixin:
                 # 赚了卖掉叫落袋为安，亏了才是割肉——别把她赚钱的单子说成认赔
                 verb = "落袋为安" if pnl_pct > 0 else "割肉清仓"
             elif action == "open":
-                budget = round(min(max(cash * 0.5, 800.0), 5000.0), 2)
+                # 四千万的本金下五千块的注 = 看不出在投资；按购买力 5% 走
+                budget = round(max(float(cash) * 0.05, 50000.0), 2)
                 result = await asyncio.to_thread(plugin.invest_buy, symbol, 0, budget)
                 verb = "建仓"
             else:
-                budget = round(min(max(cash * 0.3, 300.0), 3000.0), 2)
-                if budget < 300:
+                budget = round(max(float(cash) * 0.03, 30000.0), 2)
+                if budget < 30000:
                     return
                 result = await asyncio.to_thread(plugin.invest_buy, symbol, 0, budget)
                 verb = "加仓"
@@ -785,16 +856,26 @@ class EconomyMixin:
             logger.debug("[amo] 动手买卖失败: %s" % exc)
             return
         ok = isinstance(result, dict) and (result.get("ok") or result.get("code") in (0, "ok"))
-        logger.debug("[amo] 股票%s：%s（%+.1f%%）-> %s" % (verb, symbol, pnl_pct, ok))
+        logger.info("[amo] 股票%s：%s（%+.1f%%）-> %s" % (verb, symbol, pnl_pct, ok))
         if not ok or not uid:
             return
         try:
             self._sync_finance()
         except Exception:
             pass
-        line = "%s：%s %+.1f%%，我%s了" % (
+        amount = 0.0
+        if isinstance(result, dict):
+            for key in ("amount", "cost", "spent", "value"):
+                try:
+                    amount = float(result.get(key) or 0)
+                except Exception:
+                    amount = 0.0
+                if amount:
+                    break
+        money = ("，%.0f 块" % amount) if amount else ""
+        line = "%s：%s %+.1f%%，我%s了%s" % (
             "他问我钱够不够花" if self._money_pressure() >= 35 else "看盘",
-            symbol, pnl_pct, verb)
+            symbol, pnl_pct, verb, money)
         try:
             await self._write_memory_checked(uid, line, kind="event", tier=0)
         except Exception:
@@ -843,6 +924,108 @@ class EconomyMixin:
         except Exception:
             pass
 
+
+    # ---------- 宴请 / 应酬（2026-11-26：日程里有饭局，账上一分不扣）----------
+    BANQUET_WORDS = ("饭局", "应酬", "酒局", "宴请", "宴席", "吃请", "请客户", "接待",
+                     "陪客户", "见客户", "陪人吃饭", "商务宴")
+
+    @classmethod
+    def _banquet_slot(cls, item) -> bool:
+        """这一格是不是宴请/应酬：单独一档价位，不能按普通一顿饭算。"""
+        if not isinstance(item, dict):
+            return False
+        text = " ".join(str(item.get(k) or "") for k in ("activity", "detail", "place"))
+        if any(word in text for word in cls.BANQUET_WORDS):
+            return True
+        return "客户" in text and ("饭" in text or "酒" in text or "席" in text)
+
+    def _banquet_quote(self, day, start, item):
+        """人数与人均：同一天同一格固定。总裁级商务宴请，人均 600~1880。"""
+        rnd = random.Random("amo-banquet:%s:%s" % (day, start))
+        text = " ".join(str((item or {}).get(k) or "") for k in ("activity", "detail"))
+        people = 0
+        for word, num in (("十人", 10), ("九人", 9), ("八人", 8), ("七人", 7),
+                          ("六人", 6), ("五人", 5), ("四人", 4), ("双方", 6),
+                          ("团队", 8), ("高管", 7)):
+            if word in text:
+                people = num
+                break
+        if not people:
+            people = rnd.randint(5, 9)
+        per_head = rnd.choice((600.0, 800.0, 980.0, 1200.0, 1500.0, 1880.0))
+        payee = rnd.choice(("观山湖云顶酒楼", "贵山轩", "黔味府", "南明河畔私房菜", "茅台厅"))
+        return people, per_head, round(people * per_head, 2), payee
+
+    def _bill_banquets(self) -> None:
+        """日程里的饭局/应酬要真的花钱：同一格只扣一次，最近两格补扣。"""
+        if getattr(self, "state", None) is None:
+            return
+        now = _clock_now()
+        today = now.date().isoformat()
+        items = self.state.schedule.get(today) or []
+        current_minute = now.hour * 60 + now.minute
+        billing = getattr(self, "_banquet_billing", None)
+        if billing is None:
+            billing = set()
+            self._banquet_billing = billing
+        pending = []
+        for item in items:
+            start = _hhmm_minutes(item.get("start"))
+            if start > current_minute:
+                continue
+            if not self._banquet_slot(item):
+                continue
+            rid = "banquet:%s:%s" % (today, str(item.get("start") or ""))
+            if rid in billing:
+                continue
+            try:
+                if self.db.kv_get("banquet_billed:" + rid, False):
+                    continue
+                # 一天只扣一场：18:00 出门、19:00 开席是同一顿饭
+                if self.db.kv_get("banquet_day:" + today, False):
+                    continue
+            except Exception:
+                pass
+            pending.append((start, item, rid))
+        for start, item, rid in sorted(pending, key=lambda row: row[0])[-2:]:
+            people, per_head, total, payee = self._banquet_quote(
+                today, str(item.get("start") or ""), item)
+            billing.add(rid)
+
+            async def run(rid=rid, total=total, payee=payee, people=people,
+                          per_head=per_head, today=today):
+                try:
+                    result = await self.charge(
+                        total, reason="宴请 %d 人" % people, payee=payee,
+                        request_id=rid, source="banquet", detail=payee)
+                    if isinstance(result, dict) and result.get("ok"):
+                        try:
+                            self.db.kv_set("banquet_billed:" + rid, True)
+                            self.db.kv_set("banquet_day:" + today, True)
+                        except Exception:
+                            pass
+                        try:
+                            uid = self._primary_uid()
+                        except Exception:
+                            uid = ""
+                        if uid:
+                            try:
+                                await self._write_memory_checked(
+                                    uid,
+                                    "在%s宴请 %d 人，人均 %.0f，一共 %.0f" % (
+                                        payee, people, per_head, total),
+                                    kind="event", tier=0)
+                            except Exception:
+                                pass
+                finally:
+                    billing.discard(rid)
+
+            try:
+                self._spawn(run())
+            except Exception as exc:
+                billing.discard(rid)
+                logger.debug("[amo] 宴请扣款任务起不来: %s" % exc)
+
     def _bill_meals(self) -> None:
         """日程里吃饭却一直没扣钱：按活动补扣，同一天同一格只扣一次。
 
@@ -850,6 +1033,10 @@ class EconomyMixin:
         写成 rest；而且只在当前格检查，错过就永远不补。现在按活动词识别，
         并且把今天已经过去、还没扣过的吃饭格一起补上。
         """
+        try:
+            self._bill_banquets()
+        except Exception as exc:
+            logger.debug("[amo] 宴请补扣失败: %s" % exc)
         if getattr(self, "state", None) is None:
             return
         now = _clock_now()

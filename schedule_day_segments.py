@@ -6,12 +6,12 @@ from __future__ import annotations
 def workday_segments(ctx, seg, overtime=False):
     """总裁的工作日：会议、批红、见人、偶尔应酬。不再是朝九晚五的工位。
 
-    2026-11-25（用户口径）：她把职业改成智脑集团总裁，日程要跟着换。
+    2026-11-25（用户口径）：她把职业改成中国计算智脑集团总裁，日程要跟着换。
     """
     import time as _time
 
     home = ctx["home"]
-    office = ctx.get("workplace") or "智脑集团"
+    office = ctx.get("workplace") or "中国计算智脑集团"
     late = bool((ctx.get("yesterday") or {}).get("late_night"))
     sick = bool((ctx.get("health") or {}).get("sick"))
     sick_work = sick and str(ctx.get("sick_action") or "") == "go_to_work_sick"
