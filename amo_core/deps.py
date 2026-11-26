@@ -177,27 +177,6 @@ try:
 except Exception:
     TextPart = None
 try:
-    from ..heartflow_engine import HeartflowEngine
-except Exception:
-    try:
-        from heartflow_engine import HeartflowEngine
-    except Exception:
-        HeartflowEngine = None
-        try:
-            import importlib.util
-            _engine_dir = _PLUGIN_DIR
-            def _load_engine(module_name, class_name):
-                _spec = importlib.util.spec_from_file_location(
-                    "amo_" + module_name,
-                    os.path.join(_engine_dir, module_name + ".py"),
-                )
-                _module = importlib.util.module_from_spec(_spec)
-                _spec.loader.exec_module(_module)
-                return getattr(_module, class_name)
-            HeartflowEngine = _load_engine("heartflow_engine", "HeartflowEngine")
-        except Exception as _engine_exc:
-            logger.debug("[amo] 心流已删除，跳过加载: %s" % _engine_exc)
-try:
     from ..send_bookkeeping import after_external_send as _after_external_send
 except Exception:
     try:

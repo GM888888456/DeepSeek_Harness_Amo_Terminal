@@ -99,27 +99,6 @@ except ImportError:  # 非包方式加载时的回退
 
 
 
-try:
-    from .heartflow_engine import HeartflowEngine
-except Exception:
-    try:
-        from heartflow_engine import HeartflowEngine
-    except Exception:
-        HeartflowEngine = None
-        try:
-            import importlib.util
-            _engine_dir = os.path.dirname(os.path.abspath(__file__))
-            def _load_engine(module_name, class_name):
-                _spec = importlib.util.spec_from_file_location(
-                    "amo_" + module_name,
-                    os.path.join(_engine_dir, module_name + ".py"),
-                )
-                _module = importlib.util.module_from_spec(_spec)
-                _spec.loader.exec_module(_module)
-                return getattr(_module, class_name)
-            HeartflowEngine = _load_engine("heartflow_engine", "HeartflowEngine")
-        except Exception as _engine_exc:
-            logger.debug("[amo] 心流已删除，跳过加载: %s" % _engine_exc)
 
 
 
@@ -831,28 +810,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             except Exception as exc:
                 logger.debug("[amo] 承诺账本没启动: %s" % exc)
                 self.promises = None
-        self.heartflow = None
-        try:
-            if False:  # 心流已删除
-                hf_config = self._hf_config()
-                hf_config.setdefault("enable_heartflow", True)
-                hf_config.setdefault("enable_dynamic_threshold", True)
-                hf_config.setdefault("judge_provider_name", "")
-                self.heartflow = HeartflowEngine(self.context, hf_config)
-                try:
-                    self.heartflow.plugin = self
-                except Exception:
-                    pass
-                self.heartflow.set_identity(self.bot_name, self.bot_aliases)
-                try:
-                    # 重启后把已经学到的爱称补回引擎（不然要等他说下一句才认得）
-                    _store = self.db.kv_get("lover_pet_names", {}) or {}
-                    for _k, _v in dict(_store).items():
-                        self.heartflow.set_lover_names(_k, _v)
-                except Exception as _exc:
-                    logger.debug("[amo] 恢复爱称失败: %s" % _exc)
-        except Exception as exc:
-            logger.error("[amo] 心流引擎初始化失败: %s" % exc)
+        self.heartflow = None  # 心流引擎已删除（2b 连这行一起清）
         # 飞书适配器默认把每条回复都发成「引用回复」；私聊不该引用（群聊按概率）
         try:
             self._install_lark_quote_guard()
@@ -996,11 +954,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
 
     async def terminate(self):
         self._running = False
-        if self.heartflow is not None:
-            try:
-                await self.heartflow.terminate()
-            except Exception:
-                pass
         for task in list(self._tasks):
             try:
                 task.cancel()
@@ -1371,14 +1324,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 self.db.kv_set("lover_pet_names", store)
                 changed = True
                 logger.debug("[amo] 记住他叫你的爱称：%s（uid=%s）" % (candidate, uid))
-            if self.heartflow is not None:
-                self.heartflow.set_lover_names(uid, names)
-                try:
-                    raw_uid = str(event.get_sender_id() or "") if event is not None else ""
-                except Exception:
-                    raw_uid = ""
-                if raw_uid and raw_uid != str(uid):
-                    self.heartflow.set_lover_names(raw_uid, names)
             _ = changed
         except Exception as exc:
             logger.debug("[amo] 记爱称失败: %s" % exc)

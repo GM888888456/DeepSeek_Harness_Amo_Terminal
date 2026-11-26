@@ -289,26 +289,6 @@ class SyncMixin:
                 await self.state.refresh_weather(force=True)
             except Exception:
                 pass
-        if HeartflowEngine is not None:
-            old = self.heartflow
-            if old is not None:
-                try:
-                    await old.terminate()
-                except Exception:
-                    pass
-            try:
-                hf_config = self._hf_config()
-                hf_config.setdefault("enable_heartflow", True)
-                hf_config.setdefault("enable_dynamic_threshold", True)
-                hf_config.setdefault("judge_provider_name", "")
-                self.heartflow = HeartflowEngine(self.context, hf_config)
-                try:
-                    self.heartflow.plugin = self
-                except Exception:
-                    pass
-                self.heartflow.set_identity(self.bot_name, self.bot_aliases)
-            except Exception as exc:
-                logger.error("[amo] 应用心流配置失败: %s" % exc)
 
     async def _status_data(self):
         self._reload_config_if_changed()
