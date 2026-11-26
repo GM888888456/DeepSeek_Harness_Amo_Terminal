@@ -37,27 +37,23 @@ __all__ = [
 
 # 辅助任务用免费小模型：key 是 kind，value 是按顺序尝试的 provider id
 
-#: kind 别名：主流程里各种具体用途归到同一类「辅助任务」
-AUX_ALIASES = {
-    "morning": "proactive", "slack": "proactive", "offwork": "proactive",
-    "commute": "proactive", "anniversary": "proactive", "greet": "proactive",
-    "checkin": "proactive", "night": "proactive", "miss": "proactive",
-    "daily_digest": "digest", "his_day": "digest", "summary": "digest",
-    "diary": "diary", "fact": "extract", "facts": "extract",
-    "worldview": "world", "enrich": "world", "schedule": "world",
-    "rewrite": "polish", "humanize": "polish", "voice": "polish",
-}
-
+# 2026-11-26（用户口径）：**只有机械活交给免费小模型**——
+#   polish  八股重写（只改一句病句）
+#   judge   yes/no 判定
+#   extract 抽事实（JSON）
+# 写作类（日程文案 enrich、世界观 worldview、日记 diary、摘要 digest、主动消息 proactive）
+# 一律走主模型：每天也就调用一两次，省不出钱，但写出来会变平。
 AUX_ROUTES = {
     "polish": ("智谱网站/GLM-4-flash", "硅基流动/Qwen/Qwen3-8B"),
     "judge": ("硅基流动/Qwen/Qwen3-8B", "智谱网站/GLM-4-flash"),
     "extract": ("智谱网站/GLM-4-flash", "硅基流动/Qwen/Qwen3-8B"),
-    "digest": ("智谱网站/GLM-4-flash", "硅基流动/Qwen/Qwen3-8B"),
-    "diary": ("智谱网站/GLM-4-flash", "硅基流动/Qwen/Qwen3-8B"),
-    "proactive": ("智谱网站/GLM-4-flash", "硅基流动/Qwen/Qwen3-8B"),
-    "world": ("智谱网站/GLM-4-flash", "硅基流动/Qwen/Qwen3-8B"),
 }
 
+#: 只把「同一件事的不同叫法」归到上面三类，别把写作类也塞进来
+AUX_ALIASES = {
+    "rewrite": "polish", "humanize": "polish", "voice": "polish",
+    "fact": "extract", "facts": "extract",
+}
 
 class LLMService:
     def __init__(self, plugin):
