@@ -109,7 +109,9 @@ class EconomyMixin:
     )
 
     def _market_catalog(self):
-        """世态的商品表（纯数据）。拿不到就 None——绝不影响聊天和扣款。"""
+        """网络价商品行（np_rows.py）。拿不到就 None——绝不影响聊天和扣款。"""
+        # 2026-11-26 精简：不再读任何本地目录/网络价表，吃饭直接走下面的兜底价
+        return None
         if getattr(self, "_market_cat_loaded", False):
             return getattr(self, "_market_cat", None)
         self._market_cat_loaded = True
@@ -118,18 +120,43 @@ class EconomyMixin:
             import importlib.util
             import pathlib
             path = (pathlib.Path(__file__).resolve().parents[2]
-                    / "DeepSeek_Harness_Amo_Market" / "catalog.py")
-            spec = importlib.util.spec_from_file_location("amo_market_catalog_ro", str(path))
+                    / "DeepSeek_Harness_Amo_Market" / "np_rows.py")
+            spec = importlib.util.spec_from_file_location("amo_market_np_rows", str(path))
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)
             self._market_cat = mod
         except Exception as exc:
-            logger.debug("[amo] 读不到世态商品表: %s" % exc)
+            logger.debug("[amo] 读不到网络报价表: %s" % exc)
         return self._market_cat
 
+    def _market_place(self):
+        """她现在在哪（日程里的 place）。拿不到就空串——空串会走静态目录。"""
+        try:
+            act = self.p.state.current_activity() or {}
+            return str(act.get("place") or "").strip()
+        except Exception:
+            return ""
+
     def _market_rows(self, kind):
+        """取某品类的商品。
+
+        2026-11-24（用户口径）：世态「随所在地拉取」——旅行品类（酒店/打车/门票/
+        高铁/机票/风物）按她现在的地方现算价格；其它品类 catalog.rows_for 会回落静态表。
+        """
         cat = self._market_catalog()
-        rows = getattr(cat, "CATALOGS", {}).get(str(kind or "")) if cat is not None else None
+        if cat is None:
+            return []
+        key = str(kind or "")
+        place = self._market_place()
+        try:
+            fn = getattr(cat, "rows_for", None)
+            if fn is not None:
+                rows = fn(key, place)
+                if rows:
+                    return list(rows)
+        except Exception as exc:
+            logger.debug("[amo] 按地点取目录失败(%s): %s" % (key, exc))
+        rows = getattr(cat, "CATALOGS", {}).get(key)
         return list(rows or [])
 
     @staticmethod
@@ -212,11 +239,23 @@ class EconomyMixin:
         wants = []
         if ran_out:
             wants.append(("supermarket", {"names": tuple(ran_out)}, "用完了，得补货"))
+        # 生理用品：家里还够就别再买（2026-11-24 用户：别重复囤一堆卫生巾）
+        # market_stock 的数值是「还够用几天」，不是「买了几包」。
+        period_days = 0
+        try:
+            _stock = self._market_stock()
+            for _name, _days in (_stock or {}).items():
+                if any(w in str(_name) for w in ("卫生巾", "护垫", "棉条", "夜用", "日用", "迷你巾")):
+                    period_days += int(_days or 0)
+        except Exception:
+            period_days = 0
         try:
             period = self.state.period_info() or {}
             phase = str(period.get("phase") or "")
-            if phase and "非" not in phase:
-                wants.append(("supermarket", {"tags": ("例假",)}, "来例假了，得买卫生巾"))
+            if phase and "非" not in phase and period_days <= 10:
+                wants.append(("supermarket", {"tags": ("例假",)}, "来例假了，家里快用完了"))
+            elif phase and "非" not in phase:
+                logger.debug("[amo] 生理用品还够 %d 天，这轮不买" % period_days)
         except Exception:
             pass
         weather = getattr(self.state, "weather", {}) or {}
@@ -1379,6 +1418,14 @@ class EconomyMixin:
             chain.step("receipt", detail="已归档")
         if result.get("ok"):
             chain.done(amount=value, balance=result.get("balance"), source=source or "terminal")
+            # 2026-11-26：强制耦合——买过什么，账单里就有
+            try:
+                fin = self._finance() if hasattr(self, "_finance") else None
+                if fin is not None and hasattr(fin, "record_order"):
+                    note = "%s%s" % (reason or "消费", ("·" + payee) if payee else "")
+                    fin.record_order(note, value)
+            except Exception as exc:
+                logger.debug("[amo] 记账单失败: %s" % exc)
         else:
             chain.fail("result", str(result.get("reason") or "扣款失败"), amount=value)
         return dict(result, event_id=event_id)

@@ -312,6 +312,10 @@ class MediaMixin:
         if event is None:
             return None
         private = bool(event.is_private_chat())
+        # 2026-11-23（用户口径：额度 + 寝衣）：主动分享照片只在私聊发生。
+        # 群里一律不自发出图——省额度，也杜绝睡衣/私密衣服被自动发到公开场合。
+        if not private:
+            return None
         # 情绪闸：他这轮在说扛不住/想不开，她不该挑这个时候发一张自拍。
         # 病象（11-17 09:15）：他连着说「阿墨怕是扛不过这次了」，她主动发了一张自拍。
         try:

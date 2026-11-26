@@ -151,32 +151,34 @@
     .form-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; margin: 10px 0; min-width: 0; }
     .form-grid label, .block { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--muted); min-width: 0; }
     .block { margin: 10px 0; }
-    .schedule-groups { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+    .schedule-groups { --sc-gutter: 16px; --sc-time: 96px; display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
     .schedule-group { border: 1px solid var(--line); border-radius: 12px; background: var(--card); padding: 0 12px; }
-    .schedule-group > summary { display: flex; gap: 8px; align-items: baseline; padding: 11px 0; cursor: pointer; font-size: 13px; font-weight: 600; list-style: none; border-bottom: 1px solid var(--line); }
+    .schedule-group > summary { display: grid; grid-template-columns: var(--sc-gutter) var(--sc-time) minmax(0, 1fr) auto; gap: 8px; align-items: baseline; padding: 11px 0; cursor: pointer; font-size: 13px; font-weight: 600; list-style: none; border-bottom: 1px solid var(--line); }
     .schedule-group > summary::-webkit-details-marker { display: none; }
     .schedule-group > summary::before { content: "▸"; color: var(--muted); }
     .schedule-group[open] > summary::before { content: "▾"; }
-    .schedule-group > summary .time { color: var(--muted); font-weight: 500; min-width: 104px; font-variant-numeric: tabular-nums; }
-    .schedule-group > summary .title { flex: 0 0 auto; white-space: nowrap; }
-    .schedule-group > summary .place { flex: 1 1 auto; min-width: 0; color: var(--muted); font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .schedule-group > summary .time { color: var(--muted); font-weight: 500; font-variant-numeric: tabular-nums; }
+    .schedule-group > summary .title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .schedule-group > summary .place { color: var(--muted); font-weight: 400; max-width: 46vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .schedule-hour { margin: 0; border-top: 1px dashed var(--line); cursor: pointer; border-radius: 8px; transition: background .15s ease; }
     .schedule-hour:first-of-type { border-top: 0; }
     .schedule-hour:hover, .schedule-hour:focus-visible { background: rgba(232, 72, 154, 0.06); outline: none; }
     .schedule-hour.current .schedule-hour-row .a { color: var(--pink); font-weight: 600; }
-    .schedule-hour-row { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 8px 2px; }
-    .schedule-hour-row .time { color: var(--muted); min-width: 104px; font-size: 12px; font-variant-numeric: tabular-nums; }
+    .schedule-hour-row { display: grid; grid-template-columns: var(--sc-gutter) var(--sc-time) minmax(0, 1fr) auto; gap: 8px; align-items: center; min-height: 42px; padding: 7px 0; }
+    .schedule-hour-row .time { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
     .schedule-hour-row .a { flex: 1; min-width: 0; font-size: 12.5px; }
     .schedule-hour-row .meta { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 38%; }
     .schedule-hour-row .chev { color: var(--muted); font-size: 12px; transition: transform .15s ease; }
-    .schedule-hour-wear { color: var(--muted); font-size: 11.5px; padding: 0 2px 8px 114px; margin-top: -6px; }
-    .schedule-hour-slots { margin: 0 0 8px 114px; padding-left: 8px; border-left: 2px solid var(--line); }
-    .schedule-slot { display: flex; gap: 8px; font-size: 11.5px; line-height: 1.6; color: var(--muted); }
-    .schedule-slot .time { flex: 0 0 auto; min-width: 84px; font-variant-numeric: tabular-nums; opacity: .85; }
-    .schedule-slot .a { flex: 1; min-width: 0; }
+    .schedule-hour-wear { color: var(--muted); font-size: 11.5px; padding: 0 0 8px calc(var(--sc-gutter) + var(--sc-time) + 16px); margin-top: -6px; }
+    .schedule-hour-slots { display: none; margin: 0 0 8px; padding: 0; }
+    .schedule-hour.open .schedule-hour-slots { display: block; }
+    .schedule-slot { display: grid; grid-template-columns: var(--sc-gutter) var(--sc-time) minmax(0, 1fr); gap: 8px; font-size: 11.5px; line-height: 1.6; color: var(--muted); padding: 1px 0; }
+    .schedule-slot .time { font-variant-numeric: tabular-nums; opacity: .85; }
+    .schedule-slot .mark { color: var(--muted); opacity: .55; }
+    .schedule-slot .a { min-width: 0; }
     .schedule-hour.open .schedule-hour-row .chev { transform: rotate(90deg); color: var(--pink); }
     .schedule-event-tag { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 99px; font-size: 10px; color: var(--pink); border: 1px solid rgba(232, 72, 154, .28); background: rgba(232, 72, 154, .08); white-space: nowrap; }
-    .schedule-diary { display: none; padding: 2px 2px 14px 114px; }
+    .schedule-diary { display: none; padding: 2px 0 14px calc(var(--sc-gutter) + var(--sc-time) + 16px); }
     .schedule-hour.open .schedule-diary { display: block; }
     .schedule-diary .diary-meta { color: var(--muted); font-size: 11px; margin-bottom: 6px; }
     .schedule-diary .diary-text { font-size: 12.5px; line-height: 1.8; white-space: pre-wrap; word-break: break-word; color: var(--text); }
@@ -186,9 +188,9 @@
     @keyframes diary-dots { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
     @media (max-width: 520px) {
       .schedule-hour-row .meta { display: none; }
-      .schedule-hour-wear { padding-left: 102px; }
+      .schedule-hour-wear { padding-left: calc(var(--sc-gutter) + var(--sc-time) + 16px); }
       .schedule-diary { padding-left: 2px; }
-      .schedule-hour-row .time { min-width: 92px; }
+      .schedule-groups { --sc-time: 88px; }
     }
 
     .provider-row { display: flex; flex-direction: column; gap: 2px; padding: 8px 0; border-bottom: 1px dashed var(--line); font-size: 12px; }
@@ -393,6 +395,10 @@
       .tabs .tab { padding: 0 2px; font-size: 12px; }
       .clock { font-size: 11px; }
     }
+    /* 账单：金额字号收小一档，颜色保留（收入绿、支出红） */
+    #billsList .row { padding: 5px 0; }
+    #billsList .value { font-size: 11px; font-variant-numeric: tabular-nums; }
+    #billsList .sub { font-size: 10.5px; }
   </style>
 </head>
 <body>
@@ -411,7 +417,7 @@
       <button class="tab" data-tab="world">世界</button>
       <button class="tab" data-tab="schedule">日程</button>
       <button class="tab" data-tab="actions">操作</button>
-      <button class="tab" data-tab="profiles">用户</button>
+      <button class="tab" data-tab="bills">账单</button>
       <button class="tab" data-tab="usage">用量</button>
       <button class="tab" data-tab="switches">设置</button>
     </nav>
@@ -424,6 +430,26 @@
           <button class="tab" id="switchesSave" type="button">保存</button>
         </div>
         <div class="settings-list" id="switchList"><div class="sub">读取中…</div></div>
+        <div class="settings-list" id="ownedRows">
+          <div class="setting-row">
+            <div class="name">车子全款</div>
+            <div class="control">
+              <div class="toggle-switch" id="swCar" style="width:96px;height:30px">
+                <button type="button" class="off" data-v="off">按揭</button>
+                <button type="button" class="on" data-v="on">全款</button>
+              </div>
+            </div>
+          </div>
+          <div class="setting-row">
+            <div class="name">房子全款</div>
+            <div class="control">
+              <div class="toggle-switch" id="swHouse" style="width:96px;height:30px">
+                <button type="button" class="off" data-v="off">按揭</button>
+                <button type="button" class="on" data-v="on">全款</button>
+              </div>
+            </div>
+          </div>
+        </div>
       </section>
     </div>
 
@@ -490,6 +516,17 @@
         </div>
         <div class="sub" id="scheduleDay"></div>
         <div id="scheduleList" class="schedule-groups"><div class="sub">加载中…</div></div>
+      </section>
+    </div>
+
+    <div id="tab-bills" class="tab-panel" hidden>
+      <section class="card">
+        <div class="row between" style="align-items:center">
+          <div class="label">账单</div>
+          <div class="sub" id="billsCount">—</div>
+        </div>
+        <div class="sub">她买了什么、进账多少，都记在这里。</div>
+        <div id="billsList"></div>
       </section>
     </div>
 
@@ -574,7 +611,9 @@
           <div class="clock-track" id="clockBar"></div>
           <div class="clock-scale"><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></div>
         </div>
-        <div class="row between" style="margin-top:14px">
+        <!-- 2026-11-25：这块余额常显示「未配置 API Key」，而下面「模型用量/余额」已按供应商显示真实余额，
+             所以藏起来（保留节点，避免 JS 取空报错）。 -->
+        <div class="row between" style="margin-top:14px;display:none">
           <div>
             <div class="label">DeepSeek 余额</div>
             <div class="sub" id="balanceSub">—</div>
@@ -1046,7 +1085,8 @@
     }
 
     async function toggleHourDiary(row, hour) {
-      if (row.classList.contains("open") && row.dataset.loaded === "1") {
+      // 2026-11-26：点一下展开分钟格，再点一下收起（不论日记有没有加载完）
+      if (row.classList.contains("open")) {
         row.classList.remove("open");
         return;
       }
@@ -1166,10 +1206,10 @@
           const chev = document.createElement("span");
           chev.className = "chev";
           chev.textContent = "›";
+          line.appendChild(chev);
           line.appendChild(hourTime);
           line.appendChild(activity);
           line.appendChild(metaLine);
-          line.appendChild(chev);
           const wear = hour.outfit ? document.createElement("div") : null;
           if (wear) {
             wear.className = "schedule-hour-wear";
@@ -1180,19 +1220,23 @@
           diary.addEventListener("click", (event) => event.stopPropagation());
           hourBox.appendChild(line);
           if (wear) hourBox.appendChild(wear);
-          const slots = slotsForHour(hour);
+          const slots = Array.isArray(hour.slots) && hour.slots.length ? hour.slots : slotsForHour(hour);
           if (slots.length) {
             const slotBox = document.createElement("div");
             slotBox.className = "schedule-hour-slots";
             slots.forEach((slot) => {
               const row = document.createElement("div");
               row.className = "schedule-slot";
+              const mark = document.createElement("span");
+              mark.className = "mark";
+              mark.textContent = "·";
               const t = document.createElement("span");
               t.className = "time";
               t.textContent = (slot.start || "") + "-" + (slot.end || "");
               const a = document.createElement("span");
               a.className = "a";
               a.textContent = (slot.activity || "") + (slot.detail ? "｜" + slot.detail : "") + (slot.place ? "（" + slot.place + "）" : "");
+              row.appendChild(mark);
               row.appendChild(t);
               row.appendChild(a);
               slotBox.appendChild(row);
@@ -2895,5 +2939,88 @@
     setTimeout(() => boot(0), 400);
     setInterval(() => { load().catch(() => {}); }, 60000);
   </script>
+<script>
+(function () {
+  function bridge() {
+    var c = [];
+    try { c.push(window.AstrBotPluginView, window.AstrBotPluginPage); } catch (e) {}
+    try { c.push(window.parent.AstrBotPluginView, window.parent.AstrBotPluginPage); } catch (e) {}
+    return c.find(function (b) { return b && typeof b.apiGet === "function"; }) || null;
+  }
+  function unwrap(r) { var v = r; if (v && typeof v === "object" && "data" in v) v = v.data; return v; }
+  function load() {
+    var b = bridge(); if (!b) return;
+    Promise.resolve(b.apiGet("bills")).then(function (r) {
+      var d = unwrap(r) || {}, items = d.items || [];
+      var list = document.getElementById("billsList");
+      var cnt = document.getElementById("billsCount");
+      if (cnt) cnt.textContent = items.length + " 条";
+      if (!list) return;
+      list.textContent = "";
+      if (!items.length) {
+        var e = document.createElement("div"); e.className = "sub"; e.textContent = "还没有账单。";
+        list.appendChild(e); return;
+      }
+      items.forEach(function (x) {
+        var row = document.createElement("div");
+        row.className = "row between";
+        var l = document.createElement("div"); l.className = "sub"; l.textContent = x.note;
+        var v = document.createElement("div"); v.className = "value";
+        v.textContent = (x.sign || "-") + Math.abs(Number(x.amount || 0)).toFixed(2);
+        v.style.color = x.sign === "+" ? "var(--ok)" : "var(--pink2)";
+        row.appendChild(l); row.appendChild(v); list.appendChild(row);
+      });
+    }).catch(function () {});
+  }
+  document.addEventListener("click", function (e) {
+    var t = e.target && e.target.closest ? e.target.closest('[data-tab="bills"]') : null;
+    if (t) load();
+  });
+  setTimeout(load, 1200);
+})();
+</script>
+<script>
+(function () {
+  function bridge() {
+    var c = [];
+    try { c.push(window.AstrBotPluginView, window.AstrBotPluginPage); } catch (e) {}
+    try { c.push(window.parent.AstrBotPluginView, window.parent.AstrBotPluginPage); } catch (e) {}
+    return c.find(function (b) { return b && typeof b.apiGet === "function"; }) || null;
+  }
+  function unwrap(r) { var v = r; if (v && typeof v === "object" && "data" in v) v = v.data; return v; }
+  function load() {
+    var b = bridge(); if (!b) return;
+    Promise.resolve(b.apiGet("owned")).then(function (r) {
+      var d = unwrap(r) || {};
+      var car = document.getElementById("swCar"), house = document.getElementById("swHouse");
+      if (car) paint(car, !!d.car);
+      if (house) paint(house, !!d.house);
+    }).catch(function () {});
+  }
+  function paint(box, on) {
+    box.querySelectorAll("button").forEach(function (b) {
+      var v = b.getAttribute("data-v");
+      var active = (v === "on") === on;
+      b.className = v + (active ? " active" : "");
+    });
+  }
+  function bind(id, key) {
+    var box = document.getElementById(id);
+    if (!box) return;
+    box.querySelectorAll("button").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var on = btn.getAttribute("data-v") === "on";
+        paint(box, on);
+        var b = bridge(); if (!b) return;
+        var params = {}; params[key] = on ? "1" : "0";
+        var p = (typeof b.apiPost === "function") ? b.apiPost("owned", params) : b.apiGet("owned?" + key + "=" + params[key]);
+        Promise.resolve(p).catch(function () {});
+      });
+    });
+  }
+  bind("swCar", "car"); bind("swHouse", "house");
+  setTimeout(load, 1200);
+})();
+</script>
 </body>
 </html>

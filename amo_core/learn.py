@@ -162,7 +162,23 @@ class LearnMixin:
                 "哈哈", "笑死", "救命", "谢谢", "收到", "好的", "可以", "不行",
                 "快看", "快来", "过来", "上线", "打游戏", "起床", "睡觉", "上班", "下班",
             }
-            if 1 <= len(plain) <= 8 and plain not in common and not re.search(r"[，。！？!?、；;：:]", plain):
+            # 2026-11-24（用户口径）：爱称被污染成「老公；宝；阿墨；6；猜的嘛」——
+            # 以前只要 ≤8 字、没标点、@ 三次就当爱称。现在要求「像称呼」：
+            # 纯数字不要、带语气词（嘛/吗/呢/哦/啊/吧）不要、含疑问词的不要。
+            _junk = ("嘛", "吗", "呢", "哦", "啊", "吧", "的", "了", "啥", "怎么", "什么")
+            # 2026-11-24：爱称方向被污染（他叫你 → 被当成你叫他）。别的 bot 名、闲聊词、
+            # 指令句一律不许进 alias；长度收到 2~4 字，宁缺勿滥。
+            _deny = ("饭饭", "鲸鲸", "饭饭鲸", "Agent", "猜猜", "难绷", "天天", "八块钱",
+                     "喊老公", "呜呜", "老公", "老婆", "宝宝", "宝贝")
+            plain_has_digit = bool(re.search(r"[0-9]", plain))
+            _looks_like_name = (
+                2 <= len(plain) <= 4
+                and not plain_has_digit
+                and not any(word in plain for word in _deny)
+                and not re.search(r"[0-9]", plain)
+                and not any(word in plain for word in _junk)
+            )
+            if _looks_like_name and plain not in common and not re.search(r"[，。！？!?、；;：:]", plain):
                 seen_key = "alias_seen_" + target + "_" + plain
                 seen = to_int(self.db.kv_get(seen_key, 0), 0) + 1
                 self.db.kv_set(seen_key, seen)
@@ -327,7 +343,20 @@ class LearnMixin:
                     wait = WAIT_PLACE
                 else:
                     wait = WAIT_TIME
-            due_ts = now_ts() + 15 * 60 if wait == WAIT_TIME else 0
+            if wait == WAIT_TIME:
+                # 2026-11-26：他喊「拍个照看看」，她回「等我站直了给你拍」——
+                # 旧口径一律 +15 分钟，人就以为她不肯拍。短时借口按 2 分钟算，
+                # 只有「下班/回家/晚点」这种才等 15 分钟。
+                _long = ("下班", "回家", "到家", "晚点", "回头", "明天", "后天", "晚上", "睡醒")
+                _brief = ("这就", "马上", "一会儿", "一会", "等会", "等我", "稍等", "立刻", "缓一下")
+                if any(w in text for w in _long):
+                    due_ts = now_ts() + 15 * 60
+                elif any(w in text for w in _brief):
+                    due_ts = now_ts() + 2 * 60
+                else:
+                    due_ts = now_ts() + 15 * 60
+            else:
+                due_ts = 0
             # 方向：这条是她答应的（跟她答应的东西比，他这轮有没有亲口许她什么）。
             # 2026-11-15 10:12 她把「我答应穿 JK 拍给你看」说成了
             # 「你答应我的那事还没做」——账本里没有方向，注入时又统一写成

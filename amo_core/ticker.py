@@ -662,6 +662,9 @@ class TickerMixin:
         if now_ts() - to_float(getattr(self, "_last_night_close", 0), 0) > 180:
             self._last_night_close = now_ts()
             self._spawn(self._maybe_night_close())
+        if now_ts() - to_float(getattr(self, "_last_office_tick", 0), 0) > 600:
+            self._last_office_tick = now_ts()
+            self._spawn(self._auto_office_tick())
         if now_ts() - to_float(getattr(self, "_last_diary_check", 0), 0) > 300:
             self._last_diary_check = now_ts()
             self._spawn(self._maybe_daily_diary())
@@ -747,6 +750,45 @@ class TickerMixin:
         took = now_ts() - started_at
         if took > 10:
             logger.warning("[amo] 心跳这一轮用了 %.0f 秒（慢活儿已挪到后台）" % took)
+
+
+    async def _auto_office_tick(self):
+        """她自己处理公司的事：没人签的文件到点自己签/驳。"""
+        try:
+            mk = self._market_plugin()
+        except Exception:
+            mk = None
+        if mk is None or not hasattr(mk, "office"):
+            return
+        try:
+            import asyncio as _aio
+            await _aio.to_thread(self._auto_office_run, mk)
+        except Exception as exc:
+            logger.debug("[amo] 自律批文失败: %s" % exc)
+
+    def _auto_office_run(self, mk):
+        """规则：投资/合作、超大额 → 驳回；其余 → 签。一次最多三份。"""
+        try:
+            brief = (mk.office("brief") or {}).get("brief") or {}
+            docs = brief.get("docs") or []
+            strategy = str((brief.get("strategy") or {}).get("id") or "")
+            cash = 0.0
+            try:
+                cash = float(((brief.get("money") or {}).get("cash")) or 0)
+            except Exception:
+                cash = 0.0
+            try:
+                from .office_rules import decide as _decide
+            except Exception:
+                from amo_core.office_rules import decide as _decide  # type: ignore
+            for d in docs[:3]:
+                act, why = _decide(d, strategy=strategy, cash=cash)
+                res = mk.office(act, str(d.get("id") or ""), why)
+                logger.info("[amo] 她自己%s「%s」——%s"
+                            % ("签了" if act == "approve" else "驳了",
+                               str(d.get("title") or "")[:18], why))
+        except Exception as exc:
+            logger.debug("[amo] 自律批文规则失败: %s" % exc)
 
     async def _tick_slow(self) -> None:
         """心跳里所有会等网络 / LLM / 发消息的活儿。跑在后台任务里，不占心跳的 30 秒。

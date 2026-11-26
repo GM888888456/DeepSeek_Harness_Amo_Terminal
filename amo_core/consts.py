@@ -40,7 +40,7 @@ __all__ = [
 ]
 
 PLUGIN_NAME = "Astrbot_Amo_forever"
-SCHEDULE_VERSION = "backbone-v7"
+SCHEDULE_VERSION = "backbone-v13"
 OUTFIT_VERSION = "outfit-v11"  # 穿搭规则变了就改这里，旧日程会自动重配
 DIARY_WARM_VERSION = "diary-v3"  # 小日记规则变了就改这里，会重新预生成
 SICK_STATUSES = ("轻微不适", "感冒", "低烧", "发烧", "不舒服", "生病", "拉肚子")

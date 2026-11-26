@@ -396,6 +396,12 @@ COMMUTE_BANK = [
     "挤地铁去公司", "在车上听歌", "等红灯", "换乘", "堵在路上",
     "刷手机看路况", "快步往公司走",
 ]
+#: 自己有车时的通勤（黑色奔驰 C 级）
+DRIVE_COMMUTE_BANK = [
+    "开车去公司，高架上堵了一段", "自己开车，绕开了最堵那条路",
+    "开车到公司楼下，找了两圈车位", "在车里听完一首歌才下车",
+    "开车路上被加塞，按了两下喇叭", "把车停好，走到电梯口",
+]
 LUNCH_BANK = [
     "下楼吃牛肉粉", "和同事拼饭", "点外卖", "吃碗牛肉面",
     "去便利店随便对付一口", "边吃边刷手机",
@@ -657,7 +663,9 @@ class ScheduleEngine:
         except Exception as _amo_exc:
             _note_swallowed("schedule_engine.ScheduleEngine.resolve_profile", _amo_exc)
         profile = dict(base)
-        profile["has_gift_car"] = False
+        # 2026-11-25（用户口径：从人格提取）：人格里写着「有台黑色奔驰」，
+        # 那就按有车排日程（通勤自己开），不再因为「没送过车」就天天挤地铁。
+        profile["has_gift_car"] = bool(str(profile.get("car") or "").strip())
         profile["has_gift_home"] = False
         try:
             gift = getattr(self.p, "gift", None)
@@ -1291,6 +1299,7 @@ class ScheduleEngine:
         items = self._fill_activities(items, ctx)
         items = self._smooth_moods(items, ctx)
         items = self._apply_gift_effects(items, ctx)
+        items = self._apply_travel(items, ctx)
         items = self._validate(items, ctx)
         return items
 
@@ -1369,10 +1378,121 @@ class ScheduleEngine:
     # ------------------------------------------------------------------
     # 3. 展开成 24 个整点
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # 3.5 时间因果：地点一变就必须有车程（2026-11-26）
+    # ------------------------------------------------------------------
+    #: 这些地名尾巴不改变「人在同一处」的判断（会议室/门口/附近…）
+    _SPOT_TAIL = ("会议室", "会客室", "门口", "附近", "楼下", "工位", "前台", "食堂",
+                  "走廊", "洗手间", "车库", "停车场", "小区门口", "路边")
+
+    @classmethod
+    def _same_spot(cls, a, b):
+        """两个地点写法是不是同一个地方：公司 vs 公司会议室、家门口 vs 家。"""
+        x = str(a or "").strip()
+        y = str(b or "").strip()
+        if not x or not y:
+            return True
+        if x == y or x in y or y in x:
+            return True
+        for tail in cls._SPOT_TAIL:
+            if x.endswith(tail):
+                x = x[:-len(tail)]
+            if y.endswith(tail):
+                y = y[:-len(tail)]
+        x, y = x.strip("·/ "), y.strip("·/ ")
+        if not x or not y:
+            return True
+        if x == y or x in y or y in x:
+            return True
+        # 同名前缀够长（比如「贵阳观山湖智脑集团总部」和「…总部会议室」）
+        n = 0
+        for c1, c2 in zip(x, y):
+            if c1 != c2:
+                break
+            n += 1
+        return n >= 8
+
+    def _travel_item(self, start, end, origin, dest, minutes, km, ctx):
+        """一格车程。"""
+        driving = bool(ctx.get("has_gift_car"))
+        text = ("开车去%s" if driving else "打车去%s") % dest
+        tail = "路上约 %d 分钟" % int(minutes)
+        if km:
+            tail += "，%.0f 公里" % km
+        return {
+            "start": fmt_hhmm(start), "end": fmt_hhmm(end),
+            "activity": text, "place": "路上", "zone": "road",
+            "category": "commute",
+            "transit": "drive" if driving else "taxi",
+            "vehicle": str(ctx.get("car") or "") if driving else "",
+            "detail": "%s → %s，%s" % (origin, dest, tail),
+            "spot": "", "swim": False, "soothe": False, "event": "",
+            "mood": "平静", "mood_valence": 50.0, "effects": {},
+        }
+
+    def _apply_travel(self, items, ctx):
+        """相邻两格地点变了却没车程 → 按真实车程插一格（从出发格尾部切）。
+
+        2026-11-26 用户口径：「从 A 去 B 视察要花 X，从 B 回 A 又要多久——要有时间因果」。
+        车程一律来自 ``route_time.drive_minutes``（内置表/缓存/估算，不阻塞）。
+        """
+        try:
+            from .route_time import drive_minutes
+        except ImportError:
+            try:
+                from route_time import drive_minutes
+            except Exception:
+                return items
+        city = str(ctx.get("city") or "")
+        out = [dict(i) for i in items]
+        index = 1
+        guard = 0
+        while index < len(out) and guard < 40:
+            guard += 1
+            prev, cur = out[index - 1], out[index]
+            if str(prev.get("zone") or "") == "road" or str(cur.get("zone") or "") == "road":
+                index += 1
+                continue
+            a = str(prev.get("place") or "").strip()
+            b = str(cur.get("place") or "").strip()
+            if self._same_spot(a, b):
+                index += 1
+                continue
+            minutes, km = drive_minutes(a, b, city=city)
+            minutes = int(round(minutes or 0))
+            if minutes < 15:            # 同一个片区，走两步就到，不占一格
+                index += 1
+                continue
+            p_start, p_end = parse_hhmm(prev.get("start")), parse_hhmm(prev.get("end"))
+            c_start, c_end = parse_hhmm(cur.get("start")), parse_hhmm(cur.get("end"))
+            if p_end - p_start > minutes + 15:
+                trip = self._travel_item(p_end - minutes, p_end, a, b, minutes, km, ctx)
+                prev["end"] = fmt_hhmm(p_end - minutes)
+                out.insert(index, trip)
+            elif c_end - c_start > minutes + 15:
+                trip = self._travel_item(p_end, p_end + minutes, a, b, minutes, km, ctx)
+                cur["start"] = fmt_hhmm(p_end + minutes)
+                out.insert(index, trip)
+            else:
+                # 两格都挤不出车程：这一格直接就是在路上，下一格再到位
+                trip = self._travel_item(c_start, c_end, a, b, minutes, km, ctx)
+                trip["activity"] = "在路上（%s → %s）" % (a, b)
+                cur.clear()
+                cur.update(trip)
+                index += 1
+                continue
+            logger.debug("[amo] 补车程：%s → %s %d 分钟" % (a, b, minutes))
+            index += 2
+        return out
+
     def _expand(self, segments, ctx):
-        # 整点一格（24 格）：她自己的日程口径，每格带活动/地点/穿搭/细节。
-        SLOT = 60
-        items = []
+        """按段的真实起止时间铺格子。
+
+        2026-11-26（用户口径：任何事都要有时间逻辑）：不再强制整点 24 格——
+        车程、视察这种按分钟占位（15:57-16:42），回程才算得出来。
+        重叠的段以前面的为准（裁掉已过去的部分），空档按夜里睡觉/白天歇着补。
+        """
+        slots = []
         for seg in segments:
             start = parse_hhmm(seg.get("start"), 0)
             end = parse_hhmm(seg.get("end"), start + 60)
@@ -1380,47 +1500,55 @@ class ScheduleEngine:
                 end = start + 60
             start = max(0, min(24 * 60, start))
             end = max(start, min(24 * 60, end))
-            first_slot = (start // SLOT) * SLOT
-            slot = first_slot
-            while slot < end and slot < 24 * 60:
-                slot_end = min(end, slot + SLOT)
-                item = {
-                    "start": fmt_hhmm(slot),
-                    "end": fmt_hhmm(slot_end),
-                    "activity": str(seg.get("activity") or "休息"),
-                    "place": str(seg.get("place") or ctx["home"]),
-                    "zone": str(seg.get("zone") or "home"),
-                    "category": str(seg.get("category") or "rest"),
-                    "transit": str(seg.get("transit") or ""),
-                    "vehicle": str(seg.get("vehicle") or ""),
-                    "detail": str(seg.get("detail") or "") if slot == first_slot else "",
-                    "spot": str(seg.get("spot") or ""),
-                    "swim": bool(seg.get("swim")),
-                    "soothe": bool(seg.get("soothe")),
-                    "event": str(seg.get("event") or "") if slot == first_slot else "",
-                    "effects": dict(seg.get("effects") or {}) if slot == first_slot else {},
-                }
-                items.append(item)
-                slot += SLOT
-        # 补洞：极端情况下骨架没有覆盖完整 24 小时。
-        by_start = {}
-        for item in items:
-            by_start[parse_hhmm(item.get("start"))] = item
+            slots.append({
+                "start": fmt_hhmm(start),
+                "end": fmt_hhmm(end),
+                "activity": str(seg.get("activity") or "休息"),
+                "place": str(seg.get("place") or ctx["home"]),
+                "zone": str(seg.get("zone") or "home"),
+                "category": str(seg.get("category") or "rest"),
+                "transit": str(seg.get("transit") or ""),
+                "vehicle": str(seg.get("vehicle") or ""),
+                "detail": str(seg.get("detail") or ""),
+                "spot": str(seg.get("spot") or ""),
+                "swim": bool(seg.get("swim")),
+                "soothe": bool(seg.get("soothe")),
+                "event": str(seg.get("event") or ""),
+                "effects": dict(seg.get("effects") or {}),
+            })
+        slots.sort(key=lambda it: parse_hhmm(it.get("start")))
         result = []
-        for slot in range(0, 24 * 60, SLOT):
-            item: Any = by_start.get(slot)
-            if item is None:
-                item = {
-                    "start": fmt_hhmm(slot), "end": fmt_hhmm(slot + SLOT),
-                    "activity": "睡觉" if slot < 7 * 60 or slot >= 23 * 60 else "休息",
-                    "place": ctx["home"], "zone": "home",
-                    "category": "sleep" if slot < 7 * 60 or slot >= 23 * 60 else "rest",
-                    "transit": "", "vehicle": "", "detail": "", "spot": "",
-                    "swim": False, "soothe": False, "event": "", "effects": {},
-                }
-            item["end"] = fmt_hhmm(min(24 * 60, slot + SLOT))
+        cursor = 0
+        for item in slots:
+            start = parse_hhmm(item.get("start"))
+            end = parse_hhmm(item.get("end"))
+            if start < cursor:
+                start = cursor
+            if end <= start:
+                continue
+            if start > cursor:
+                result.append(self._filler_item(cursor, start, ctx))
+            item["start"] = fmt_hhmm(start)
+            item["end"] = fmt_hhmm(end)
             result.append(item)
+            cursor = end
+        if cursor < 24 * 60:
+            result.append(self._filler_item(cursor, 24 * 60, ctx))
         return result
+
+    @staticmethod
+    def _filler_item(start, end, ctx):
+        """空档：夜里算睡觉，白天算歇着。"""
+        hour = int(start) // 60
+        sleep = hour < 7 or hour >= 23
+        return {
+            "start": fmt_hhmm(start), "end": fmt_hhmm(end),
+            "activity": "睡觉" if sleep else "歇着，没安排事",
+            "place": ctx["home"], "zone": "home",
+            "category": "sleep" if sleep else "rest",
+            "transit": "", "vehicle": "", "detail": "", "spot": "",
+            "swim": False, "soothe": False, "event": "", "effects": {},
+        }
 
     # ------------------------------------------------------------------
     # 4. 活动文案（LLM 不可用时的真人化兜底）
@@ -1459,6 +1587,9 @@ class ScheduleEngine:
             elif transit == "train":
                 return "坐高铁去" + str((ctx.get("event") or {}).get("city") or "外地")
             elif transit == "subway":
+                # 2026-11-25（用户口径）：她有车，通勤主要是自己开；限行/堵车才地铁。
+                # 把 transit 也改成 drive，出门这张照片才会是车里/路面，不是车厢。
+                bank = COMMUTE_BANK
                 bank = COMMUTE_BANK
             else:
                 bank = ["在路上"]
@@ -1710,6 +1841,22 @@ class ScheduleEngine:
                 continue
             if (prev_zone, zone) in direct_ok:
                 continue
+            # 2026-11-26：两处其实在同一片区（机房 → 隔壁工地），就别硬改成「在路上」，
+            # 车程由 _apply_travel 按真实分钟补；只有真的隔了一段路才拦。
+            try:
+                if self._same_spot(prev.get("place"), cur.get("place")):
+                    continue
+                try:
+                    from .route_time import drive_minutes as _drive_minutes
+                except ImportError:
+                    from route_time import drive_minutes as _drive_minutes
+                _mins = _drive_minutes(str(prev.get("place") or ""),
+                                      str(cur.get("place") or ""),
+                                      city=str(ctx.get("city") or ""))[0]
+                if _mins < 15:
+                    continue
+            except Exception:
+                pass
             # 兜底修复：把当前小时改成“在路上”，下一小时再到达。
             original_place = str(cur.get("place") or "")
             cur["activity"] = "从%s赶去%s" % (prev.get("place") or "上一个地方", original_place)
@@ -1827,6 +1974,7 @@ class ScheduleEngine:
                     item["place"] = "路上"
                 if not item.get("transit"):
                     item["transit"] = cls._guess_transit(act)
+
                 # 文案写“在工位/在家/沙发/看电视”但区域是路上：改成真正的通勤文案。
                 # “下班回家/到家/路上”这类本来就是路上，不误伤。
                 if (str(item.get("category") or "") == "commute"

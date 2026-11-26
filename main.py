@@ -119,7 +119,7 @@ except Exception:
                 return getattr(_module, class_name)
             HeartflowEngine = _load_engine("heartflow_engine", "HeartflowEngine")
         except Exception as _engine_exc:
-            logger.error("[amo] 内置心流模块加载失败: %s" % _engine_exc)
+            logger.debug("[amo] 心流已删除，跳过加载: %s" % _engine_exc)
 
 
 
@@ -707,7 +707,13 @@ def typing_delay_ms(text, base=700, per_char=400, cap=20000):
 # 以前守卫按「methods 里有没有 GET」判断，而写接口全被注册成 GET+POST，于是守卫一次都没执行过。
 
 
-class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, ReplyMixin, SyncMixin, LearnMixin, EconomyMixin, WeatherMixin, OutfitMixin, PresenceMixin, RelationsMixin, MediaMixin, MemoryOpsMixin, VitalsMixin, InfraMixin, ConfigMixin, PersonaMixin, DataBridgeMixin, UsageMixin, ProactiveMixin, SocialMixin, CircleMixin, MiscMixin, Star):
+try:
+    from .amo_core.tools_ext import ExtToolsMixin
+except Exception:
+    from amo_core.tools_ext import ExtToolsMixin  # type: ignore
+
+
+class HumanCorePlugin(ExtToolsMixin, WebApiMixin, ContextMixin, CommandMixin, TickerMixin, ReplyMixin, SyncMixin, LearnMixin, EconomyMixin, WeatherMixin, OutfitMixin, PresenceMixin, RelationsMixin, MediaMixin, MemoryOpsMixin, VitalsMixin, InfraMixin, ConfigMixin, PersonaMixin, DataBridgeMixin, UsageMixin, ProactiveMixin, SocialMixin, CircleMixin, MiscMixin, Star):
     def __init__(self, context: Context, config: dict = None):
         super().__init__(context)
         self.config = config or {}
@@ -831,7 +837,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 self.promises = None
         self.heartflow = None
         try:
-            if HeartflowEngine is not None:
+            if False:  # 心流已删除
                 hf_config = self._hf_config()
                 hf_config.setdefault("enable_heartflow", True)
                 hf_config.setdefault("enable_dynamic_threshold", True)
@@ -932,82 +938,47 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
 
 
     @filter.llm_tool(name="amo_buy")
-    async def amo_buy(self, event, item: str = "", kind: str = "outfits") -> str:
-        """给自己买东西：衣服、首饰、菜、药、外卖。查市场价 → 扣钱 → 衣服首饰进衣柜。
+    async def amo_buy(self, event, item: str = "", kind: str = "") -> str:
+        """给自己买东西：网上查价 → 扣钱。
+
+        不再翻本地目录。衣服、首饰、菜、药、外卖、日用、数码、门票、酒店、机票、打车都能买，
+        价格是网上查到的到手价（含配送费/券），下单后就从账上扣。
 
         Args:
-            item(string): 商品名，比如 白色衬衫 / 珍珠发圈 / 番茄。
-            kind(string): outfits 衣服 / jewelry 首饰 / groceries 菜 / drugs 药 / takeout 外卖。
+            item(string): 要买什么，比如 白色衬衫 / 珍珠发圈 / 番茄 / 酸菜鱼 / 感冒药。
+            kind(string): 可留空。想指定品类就填 cloth/sport/beauty/food/drink/fruit/daily/digital/medical/taxi。
         """
-        plugin = self._market_plugin()
-        if plugin is None:
-            return "市场没开，买不了。"
         word = str(item or "").strip()
         if not word:
             return "没说要买什么。"
-        order = [str(kind or "outfits")] + [k for k in ("outfits", "jewelry", "groceries", "drugs", "takeout")
-                                            if k != str(kind or "outfits")]
-        row = None
-        found_kind = ""
-        for k in order:
-            try:
-                rows = plugin.items(k) or []
-            except Exception:
-                rows = []
-            for candidate in rows:
-                name = str(candidate.get("name") or "")
-                if word in name or name in word:
-                    row, found_kind = candidate, k
-                    break
-            if row is not None:
-                break
-        if row is None:
-            return "市场没有「%s」。" % word
-        if found_kind == "groceries":
-            checker = getattr(plugin, "groceries_open", None)
-            if callable(checker):
-                try:
-                    if not checker():
-                        return "菜市场这个点关门了，只能点外卖。"
-                except Exception:
-                    pass
-        name = str(row.get("name") or word)
-        price = round(float(row.get("price") or 0), 2)
+        quote = self._net_quote()
+        if quote is None:
+            return "现在没有报价表了：要买什么，直接按你看到的价报个数（金额），我记账。"
+        q = quote(word, kind=str(kind or ""))
+        if not q:
+            return "网上没搜到「%s」的价钱。" % word
+        name = str(q.get("name") or word)
+        price = round(float(q.get("total") or 0), 2)
+        platform = str(q.get("platform") or "网上")
         scene = "private" if event.is_private_chat() else "group"
         result = await self._approved_charge(
-            price, reason="买%s" % name, payee="市场", source="market", scene=scene)
+            price, reason="买%s" % name, payee=platform, source="net", scene=scene)
         if not result.get("ok"):
             return "没买成：%s" % (result.get("reason") or "钱不够")
         tail = ""
-        if found_kind in ("outfits", "jewelry") and getattr(self, "wardrobe", None) is not None:
+        if str(q.get("kind") or "") in ("cloth", "sport") and getattr(self, "wardrobe", None) is not None:
             try:
-                pieces = row.get("pieces") or []
-                if pieces:
-                    # 整套（2026-11-21）：按「套名｜件名」展开写库，
-                    # compose_set 靠套名前缀归组，这样买回来就是能穿的一整套。
-                    set_name = str(name).replace("（整套）", "").strip()
-                    scenes = market_set_scenes(row.get("style") or name)
-                    added = 0
-                    for piece in pieces:
-                        if isinstance(piece, (list, tuple)):
-                            piece_name = str(piece[0] if piece else "").strip()
-                            piece_slot = str(piece[1] if len(piece) > 1 else "").strip()
-                        else:
-                            continue
-                        if not piece_name:
-                            continue
-                        await self.wardrobe.add("%s｜%s" % (set_name, piece_name),
-                                                scenes=scenes, note="市场买", slot=piece_slot)
-                        added += 1
-                    tail = "，整套 %d 件已经放进衣柜" % added if added else ""
-                else:
-                    await self.wardrobe.add(name, scenes=["casual", "out"], note="市场买",
-                                            slot=str(row.get("slot") or ""))
-                    tail = "，已经放进衣柜"
+                await self.wardrobe.add(name, scenes=market_set_scenes(name), note="网上买")
+                tail = "，已经放进衣柜"
             except Exception as exc:
                 logger.debug("[amo] 买完放衣柜失败: %s" % exc)
-        return "买了%s，%.2f¥（余额 %.2f¥）%s。" % (
-            name, price, float(result.get("balance") or 0), tail)
+        alt = ""
+        others = q.get("alternatives") or []
+        if others:
+            alt = "%s那边 %.2f¥，" % (others[0].get("platform") or "别家",
+                                    float(others[0].get("total") or 0))
+        return "买了%s，%.2f¥（%s下单，%s余额 %.2f¥）%s。" % (
+            name, price, platform, alt, float(result.get("balance") or 0), tail)
 
     #: 他要她换衣服的说法：只用来给事实（在外面/在家、衣柜里有什么），换不换她自己定
     OUTFIT_REQUEST_RE = re.compile(
@@ -1667,6 +1638,117 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         logger.debug("[amo] 已向恋人告状（%s %s）发的是「%s」；原话只在日志里：%s"
                     % (lover_uid, lover_name, msg[:40], spoken[:30]))
 
+    def _scrub_conversation_speak(self, umo):
+        """把该会话里 assistant 文本中的 SPEAK 协议行擦掉（只改文本，不动别的字段）。"""
+        import json as _json
+        import re as _re
+        import sqlite3 as _sq
+        db_path = "/AstrBot/data/data_v4.db"
+        if not os.path.exists(db_path):
+            db_path = "/data/astrbot/data_v4.db"
+        pat = _re.compile(r"^\s*(?:\*\*)?SPEAK\s*[：:]?\s*[01](?:\*\*)?\s*$", _re.I)
+        con = _sq.connect(db_path, timeout=5)
+        try:
+            cur = con.cursor()
+            row = cur.execute(
+                "select inner_conversation_id, content from conversations where user_id=?",
+                (str(umo or ""),),
+            ).fetchone()
+            if not row:
+                return
+            cid, content = row
+            msgs = _json.loads(content)
+            changed = False
+            for m in msgs:
+                if m.get("role") != "assistant":
+                    continue
+                c = m.get("content")
+                if isinstance(c, str):
+                    new = "\n".join(l for l in c.split("\n") if not pat.match(l.strip())).strip()
+                    if new != c:
+                        m["content"] = new
+                        changed = True
+                elif isinstance(c, list):
+                    for part in c:
+                        if not isinstance(part, dict) or part.get("type") != "text":
+                            continue
+                        old = part.get("text") or ""
+                        new = "\n".join(l for l in old.split("\n") if not pat.match(l.strip())).strip()
+                        if new != old:
+                            part["text"] = new
+                            changed = True
+            if changed:
+                cur.execute("update conversations set content=? where inner_conversation_id=?",
+                            (_json.dumps(msgs, ensure_ascii=False), cid))
+                con.commit()
+                logger.debug("[amo] 会话历史已擦 SPEAK：%s" % str(umo)[-22:])
+        finally:
+            con.close()
+
+    # ── 连发合并（MERGE_BURST 2026-11-25）────────────────────────────────
+    async def _merge_burst(self, event, text):
+        """同一个人在同一个群里连着发的几条，合成一轮再送主模型。
+
+        返回合并后的文本；返回 None 表示「这条已经被并进正在等的那一轮」，
+        本事件直接不回复（否则她会一条一条地答）。
+        """
+        if not self.cfg_bool("merge_burst_enabled", True):
+            return text
+        try:
+            umo = event.unified_msg_origin
+            key = "%s|%s" % (umo, event.get_sender_id())
+        except Exception:
+            return text
+        window = max(0.5, min(8.0, self.cfg_float("merge_burst_window", 2.0)))
+        max_wait = max(window, min(15.0, self.cfg_float("merge_burst_max_wait", 6.0)))
+        buf = getattr(self, "_burst_buffers", None)
+        if buf is None:
+            buf = {}
+            self._burst_buffers = buf
+        text = (text or "").strip()
+        now = time.time()
+        cur = buf.get(key)
+        if cur is not None:
+            if text:
+                cur["texts"].append(text)
+            cur["deadline"] = min(cur["start"] + max_wait, now + window)
+            try:
+                event.should_call_llm(True)   # 这一条不单独回
+            except Exception:
+                pass
+            logger.debug("[amo] 并入连发缓冲（%d 条）" % len(cur["texts"]))
+            return None
+        if not text:
+            return text
+        cur = {"texts": [text], "start": now, "deadline": now + window}
+        buf[key] = cur
+        import asyncio as _asyncio
+        try:
+            while True:
+                left = min(cur["deadline"], cur["start"] + max_wait) - time.time()
+                if left <= 0:
+                    break
+                await _asyncio.sleep(min(left, 0.25))
+        finally:
+            buf.pop(key, None)
+        texts = [t for t in cur["texts"] if t]
+        if len(texts) <= 1:
+            return text
+        merged = "\n".join(texts)
+        # 合并出来的这一轮仍是最新一条，重新登记闸门，免得被 amo_gate 当旧消息丢掉
+        try:
+            tok = "%.6f" % time.time()
+            event.set_extra("amo_msg_token", tok)
+            try:
+                from .amo_core import amo_gate as _rgate
+            except Exception:
+                from amo_core import amo_gate as _rgate  # type: ignore
+            _rgate.note_message(event.unified_msg_origin, tok)
+        except Exception:
+            pass
+        logger.info("[amo] 连发合并 %d 条 → 一轮：%s" % (len(texts), merged[:60]))
+        return merged
+
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
         try:
@@ -1697,10 +1779,67 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             # 以前这里先用后赋值，抛 NameError 被 except 吞掉，结果
             # amo_sender_is_lover 恒为 False —— 她压根不知道谁是恋人。
             raw_text = (event.message_str or "").strip()
+            # 2026-11-26：同一条消息只处理一次（群聊带表情时偶尔会来两次事件）
+            try:
+                _mid = ""
+                _mo = getattr(event, "message_obj", None)
+                for _attr in ("message_id", "id"):
+                    _v = getattr(_mo, _attr, None) if _mo is not None else None
+                    if _v:
+                        _mid = str(_v)
+                        break
+                if _mid:
+                    _key = "%s|%s" % (event.unified_msg_origin, _mid)
+                    _seen = getattr(self, "_seen_msg_ids", None)
+                    if _seen is None:
+                        _seen = {}
+                        self._seen_msg_ids = _seen
+                    _now = time.time()
+                    for _k in [k for k, v in _seen.items() if _now - v > 120]:
+                        _seen.pop(_k, None)
+                    if _key in _seen:
+                        logger.debug("[amo] 重复事件，已忽略：%s" % _mid)
+                        return
+                    _seen[_key] = _now
+            except Exception as _dup_exc:
+                logger.debug("[amo] 去重检查失败: %s" % _dup_exc)
+            # STICKER_SKIP 2026-11-26（用户口径）：别人发的表情包不用读、不用回。
+            # 只有「除了表情/图片之外一个字都没有」才算；带字的消息照常处理。
+            try:
+                if not event.is_private_chat():
+                    _no_text = __import__("re").sub(
+                        r"\[[^\]]{1,14}\]|<image_caption>.*?</image_caption>", "", raw_text or "").strip()
+                    if (not _no_text) and __import__("re").search(r"\[表情|\[图片|<image_caption>", raw_text or ""):
+                        logger.debug("[amo] 纯表情包，不回：%s" % (raw_text or "")[:30])
+                        return
+            except Exception as _st_exc:
+                logger.debug("[amo] 表情包判定失败: %s" % _st_exc)
+            # GROUP_PREFILTER 2026-11-26：省 token——群聊里没信息量的短消息不进主模型。
+            # 进模型的四类：叫她的名字/@她/带问号或感叹/够长（≥12 字）。
+            # 其余按 1/5 抽样放进去，既省钱又不至于变哑巴。
+            try:
+                if (not event.is_private_chat()) and self.cfg_bool("group_prefilter", True):
+                    _t = raw_text or ""
+                    _named = False
+                    try:
+                        _self_names, _ = self._taunt_names()
+                        _named = any(w and w in _t for w in (_self_names or ()))
+                    except Exception:
+                        _named = False
+                    _at = bool(getattr(event, "is_at_or_wake_command", False))
+                    _q = any(c in _t for c in "？?！!")
+                    if not (_named or _at or _q or len(_t) >= 12):
+                        _cnt = getattr(self, "_prefilter_cnt", 0) + 1
+                        self._prefilter_cnt = _cnt
+                        if _cnt % 5 != 0:
+                            logger.debug("[amo] 群聊预筛：跳过短消息 %s" % _t[:16])
+                            return
+            except Exception as _pf_exc:
+                logger.debug("[amo] 群聊预筛失败: %s" % _pf_exc)
             # 2026-11-23：日志只留「来了什么 / 回不回 / 回了什么」三行
             try:
                 if raw_text:
-                    logger.info("[来] %s：%s" % (event.get_sender_name() or "?", raw_text[:80]))
+                    logger.debug("[来] %s：%s" % (event.get_sender_name() or "?", raw_text[:80]))
             except Exception:
                 pass
             # 先认人：这条是谁说的、跟你什么关系。心流裁决 / 群聊语气都要用。
@@ -1715,6 +1854,40 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             except Exception as exc:
                 event.amo_sender_is_lover = False
                 logger.debug("[amo] 认人失败: %s" % exc)
+            # AGENT_DECIDES 2026-11-24（用户口径：删除心流，完全交给 Agent）：
+            # 不再由心流判定要不要回——每条群消息都进主模型，由她自己写 SPEAK 1/0。
+            # 这里只负责把「该唤醒了」这个事实告诉框架，不做任何打分。
+            if self.cfg_bool("facts_only_decide", True) and not event.is_private_chat():
+                # MERGE_BURST 2026-11-25：同一人连发的多条先合并成一轮再送主模型。
+                try:
+                    _merged = await self._merge_burst(event, raw_text)
+                except Exception as _mb_exc:
+                    logger.debug("[amo] 连发合并异常，按原样处理: %s" % _mb_exc)
+                    _merged = raw_text
+                if _merged is None:
+                    return
+                if _merged != raw_text:
+                    raw_text = _merged
+                    try:
+                        event.message_str = _merged
+                    except Exception:
+                        pass
+                try:
+                    event.is_at_or_wake_command = True
+                    # 2026-11-25 修正：框架语义是**反的**。ProcessStage 只在
+                    # `is_at_or_wake_command and not event.call_llm` 时才走默认 LLM 链
+                    # （astrbot/core/pipeline/process_stage/stage.py）。之前这里写 True
+                    # 等于把默认 LLM 关掉 → 群聊从此零调用、一句话都不回。
+                    try:
+                        event.should_call_llm(False)
+                    except Exception:
+                        pass
+                    event.set_extra("amo_speak_ask", True)
+                    setattr(event, "heartflow_target", "unknown")
+                    setattr(event, "heartflow_target_certain", False)
+                    setattr(event, "heartflow_mode_hint", "auto")
+                except Exception as _ad_exc:
+                    logger.debug("[amo] 交主模型自决标记失败: %s" % _ad_exc)
             # 2026-11-21：她压根不会骂人。被骂、被开黄腔、有人贬低阿墨时，
             # 在这里判一个敌意等级，给她「这轮可以凶」的授权（level>=2 强制回一条）。
             try:
@@ -2381,7 +2554,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         设 amo_context_keep_rounds=0 关闭；4 表示保留最近 4 轮（8 条）。
         """
         try:
-            keep = keep_rounds if keep_rounds is not None else self.cfg_int("amo_context_keep_rounds", 30)
+            keep = keep_rounds if keep_rounds is not None else self.cfg_int("amo_context_keep_rounds", 10)
             keep = int(keep)
             if keep <= 0:
                 return
@@ -2402,6 +2575,45 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         except Exception as exc:
             logger.debug("[amo] 上下文收权失败: %s" % exc)
 
+    def _scrub_speak_contexts(self, req):
+        """把 req.contexts 里 assistant 文本的 SPEAK 协议行洗掉（只读不出库）。"""
+        try:
+            try:
+                from .text_clean import strip_speak_protocol as _sst
+            except Exception:
+                from text_clean import strip_speak_protocol as _sst  # type: ignore
+        except Exception:
+            return
+        hits = 0
+        try:
+            ctxs = getattr(req, "contexts", None) or []
+            for m in ctxs:
+                if not isinstance(m, dict):
+                    continue
+                c = m.get("content")
+                if isinstance(c, str):
+                    if "speak" in c.lower():
+                        body, _dec = _sst(c)
+                        if body != c:
+                            m["content"] = body
+                            hits += 1
+                elif isinstance(c, list):
+                    for part in c:
+                        if not isinstance(part, dict) or part.get("type") != "text":
+                            continue
+                        old = part.get("text") or ""
+                        if "speak" not in old.lower():
+                            continue
+                        body, _dec = _sst(old)
+                        if body != old:
+                            part["text"] = body
+                            hits += 1
+        except Exception as exc:
+            logger.debug("[amo] 上下文 SPEAK 清洗失败: %s" % exc)
+            return
+        if hits:
+            logger.info("[amo] 🧽 送模型前洗掉 %d 段 SPEAK 协议行" % hits)
+
     @filter.on_llm_request()
     async def on_llm_request(self, event: AstrMessageEvent, req):
         try:
@@ -2412,6 +2624,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 return
             await self._caption_images(event, req)
             self._trim_contexts(req)
+            self._scrub_speak_contexts(req)
             context_text = await self._dynamic_context(event)
             # 只走官方推荐的 extra_user_content_parts（临时 part）注入。
             # 绝不能改 req.system_prompt：那里放每轮都变的内容会打散系统提示词前缀，
@@ -2570,6 +2783,141 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
 
     @filter.on_llm_response()
     async def on_llm_response(self, event: AstrMessageEvent, resp):
+        # SPEAK 协议就地抹掉：这是存库前最后一个钩子。不清掉的话，
+        # 「SPEAK 1」会跟着 assistant 消息进历史，她下一轮照着学，越学越脏。
+        _speak_dec = ""
+        try:
+            try:
+                from .text_clean import strip_speak_protocol as _sst
+            except Exception:
+                from text_clean import strip_speak_protocol as _sst  # type: ignore
+            _raw = ""
+            for _attr in ("completion_text", "text", "content"):
+                _v = getattr(resp, _attr, None)
+                if isinstance(_v, str) and _v.strip():
+                    _raw = _v
+                    break
+            if _raw:
+                _body, _speak_dec = _sst(_raw)
+                if _body != _raw:
+                    for _attr in ("completion_text", "text", "content"):
+                        if isinstance(getattr(resp, _attr, None), str):
+                            setattr(resp, _attr, _body)
+                    _res = getattr(resp, "result", None)
+                    if _res is not None and hasattr(_res, "chain"):
+                        try:
+                            _res.chain = [Comp.Plain(_body)] if _body else []
+                        except Exception:
+                            pass
+                    logger.debug("[amo] resp 已剥 SPEAK：%s" % (str(_speak_dec) or "-"))
+        except Exception as _sp_exc:
+            logger.debug("[amo] resp SPEAK 清洗失败: %s" % _sp_exc)
+        # 一行指令协议（框架里工具调用没通，靠解析她的回复办事）
+        #   DECIDE approve|reject 编号 / DIRECTION 方向 / POLICY bonus|cut / TRADE buy|sell 股票名 股数
+        # 执行全放后台线程，不卡她的回复。
+        try:
+            import re as _re_d
+            import asyncio as _aio
+            _raw2 = ""
+            for _attr in ("completion_text", "text", "content"):
+                _v2 = getattr(resp, _attr, None)
+                if isinstance(_v2, str) and _v2.strip():
+                    _raw2 = _v2
+                    break
+            if _raw2:
+                _jobs, _trades = [], []
+                for _m in _re_d.finditer(
+                        r"(?m)^\s*\**\s*(DECIDE|DIRECTION|POLICY)\s*\**\s*[:：]?\s*"
+                        r"(approve|reject|签|驳|[\u4e00-\u9fff]{2,6}|bonus|cut)\s*([0-9A-Za-z\-]*)",
+                        _raw2):
+                    _kind, _arg = _m.group(1).upper(), _m.group(2).strip()
+                    _extra = (_m.group(3) or "").strip()
+                    if _kind == "DECIDE":
+                        _jobs.append(("approve" if _arg in ("approve", "签") else "reject",
+                                      _extra or _arg))
+                    elif _kind == "DIRECTION":
+                        _jobs.append(("direction", _arg))
+                    else:
+                        _jobs.append(("policy", _arg))
+                for _tm in _re_d.finditer(
+                        r"(?m)^\s*\**\s*TRADE\s*\**\s*[:：]?\s*(buy|sell|买|卖)\s*"
+                        r"([\u4e00-\u9fffA-Za-z]{1,8})\s*(\d{1,6})?", _raw2):
+                    _trades.append(("buy" if _tm.group(1) in ("buy", "买") else "sell",
+                                    _tm.group(2), int(_tm.group(3) or 100)))
+                _spends = []
+                for _sm in _re_d.finditer(
+                        r"(?m)^\s*\**\s*SPEND\s*\**\s*[:：]?\s*([0-9]{1,7}(?:\.[0-9]{1,2})?)\s*(.*)$",
+                        _raw2):
+                    try:
+                        _amt = float(_sm.group(1))
+                    except Exception:
+                        continue
+                    _desc = (_sm.group(2) or "").strip() or "消费"
+                    try:
+                        from .amo_core.spend_check import check as _spend_check
+                    except Exception:
+                        try:
+                            from amo_core.spend_check import check as _spend_check  # type: ignore
+                        except Exception:
+                            _spend_check = None
+                    _chk = _spend_check(_desc, _amt) if _spend_check else {"ok": True}
+                    if _chk.get("ok"):
+                        _spends.append((round(_amt, 2), _desc))
+                    else:
+                        logger.info("[amo] 报价不合理，没扣：%s" % _chk.get("reason"))
+                if _jobs or _trades or _spends:
+                    _body2 = _re_d.sub(
+                        r"(?m)^\s*\**\s*(DECIDE|DIRECTION|POLICY|TRADE)\s*\**.*$", "", _raw2).strip()
+                    for _attr in ("completion_text", "text", "content"):
+                        if isinstance(getattr(resp, _attr, None), str):
+                            setattr(resp, _attr, _body2)
+                    _res2 = getattr(resp, "result", None)
+                    if _res2 is not None and hasattr(_res2, "chain"):
+                        try:
+                            _res2.chain = [Comp.Plain(_body2)] if _body2 else []
+                        except Exception:
+                            pass
+                    _mk = self._market_plugin() if hasattr(self, "_market_plugin") else None
+                    _fin = self._finance() if hasattr(self, "_finance") else None
+
+                    def _run(_pairs, _trade_list, _spend_list):
+                        for _a, _t in _pairs:
+                            try:
+                                _r = _mk.office(_a, _t) or {}
+                                logger.info("[amo] 按她的意思办了：%s %s → %s"
+                                            % (_a, _t, _r.get("msg") or "ok"))
+                            except Exception as _e:
+                                logger.debug("[amo] 办事失败 %s %s: %s" % (_a, _t, _e))
+                        for _amt, _desc in _spend_list:
+                            try:
+                                if _fin is None:
+                                    continue
+                                _r4 = _fin.charge(_amt, reason=_desc)
+                                logger.info("[amo] 记账扣款：%s ¥%.2f → %s"
+                                            % (_desc, _amt, "成功" if (_r4 or {}).get("ok") else (_r4 or {}).get("reason") or "失败"))
+                            except Exception as _e4:
+                                logger.debug("[amo] 扣款失败 %s: %s" % (_desc, _e4))
+                        for _side, _name, _qty in _trade_list:
+                            try:
+                                if _fin is None:
+                                    continue
+                                _r3 = _fin._trade(_name, _qty, _side) or {}
+                                logger.info("[amo] 股票成交：%s %s %d 股 → %s"
+                                            % (_side, _name, _qty, _r3.get("msg") or "ok"))
+                            except Exception as _e3:
+                                logger.debug("[amo] 股票下单失败 %s: %s" % (_name, _e3))
+
+                    if (_jobs and _mk is not None) or _trades or _spends:
+                        try:
+                            _aio.get_running_loop().create_task(
+                                _aio.to_thread(_run, list(_jobs), list(_trades), list(_spends)))
+                        except Exception:
+                            _run(list(_jobs), list(_trades), list(_spends))
+        except Exception as _dc_exc:
+            logger.debug("[amo] 指令解析失败: %s" % _dc_exc)
+
+        if _speak_dec == "0":
+            return
         if self.heartflow is None:
             return
         try:
@@ -2583,16 +2931,22 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             self._last_reply_at[event.unified_msg_origin] = now_ts()
         except Exception:
             pass
+        try:
+            self._scrub_conversation_speak(event.unified_msg_origin)
+        except Exception as _sd_exc:
+            logger.debug("[amo] 历史擦 SPEAK 失败: %s" % _sd_exc)
+        # 主动分享照片：必须放在心流判断之前。心流已关（enable_heartflow=False），
+        # 放后面就等于永远不分享。它内部只做判断、出图丢后台任务，不卡回复链路。
+        try:
+            await self._maybe_share_image(event)
+        except Exception as exc:
+            logger.debug("[amo] 主动分享入口异常: %s" % exc)
         if self.heartflow is None:
             return
         try:
             await self.heartflow.on_after_message_sent(event)
         except Exception as exc:
             logger.debug("[amo] 心流发送后状态更新失败: %s" % exc)
-        try:
-            await self._maybe_share_image(event)
-        except Exception as exc:
-            logger.debug("[amo] 主动分享入口异常: %s" % exc)
 
     @filter.llm_tool(name="amo_eat")
     async def amo_eat(self, event, dish: str = "", method: str = "auto") -> str:
@@ -3015,8 +3369,19 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 if _first_wait is not None:
                     if idx == 0:
                         wait = _first_wait(seg, inbound, hour, elapsed, cap=budget)
+                        # TYPING_FLOOR 2026-11-24：生成本身已经 8~12 秒，目标延迟被吃光，
+                        # first_wait 返回 0 → 秒回。给一个下限，保证看得出「在打字」。
+                        wait = max(wait, random.uniform(1.2, 2.8))
                     else:
-                        wait = _seg_gap(idx)
+                        # 每段延迟 = 这一段自己的「打字时间」，在上一段发出之后才算。
+                        # 秒发会被企鹅识别成机器人，固定间隔也不像人。
+                        try:
+                            _seg_typing = float(typing_seconds(self, seg) or 0.0) if typing_seconds else 0.0
+                        except Exception:
+                            _seg_typing = 0.0
+                        wait = (random.uniform(0.5, 1.2) + max(0.0, _seg_typing))
+                        wait *= random.uniform(0.85, 1.25)
+                        wait = max(0.9, wait)
                 else:
                     base = random.uniform(0.8, 2.2) if idx else random.uniform(0.3, 0.9)
                     typing_time = typing_seconds(self, seg) if typing_seconds else 0.0
@@ -3079,7 +3444,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 _cost = " %.1fs" % (time.time() - _t0) if _t0 else ""
             except Exception:
                 _cost = ""
-            logger.info("[回] %s" % "｜".join(p[:40] for p in parts))
+            logger.debug("[回] %s" % "｜".join(p[:40] for p in parts))
             return parts[-1]
         except Exception as exc:
             logger.warning("[amo] 分段失败，整条发: %s" % exc)
@@ -3324,6 +3689,25 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 logger.warning("[amo] 整条都是思维外泄，这条不发")
                 result.chain = []
                 return
+            # 2026-11-23（用户口径）：表情包只是情绪，不许读图。图片触发的回复里
+            # 只要提到图片内容（这只/这张/图/表情/又是这只猫…），把那句删掉。
+            try:
+                _raw_in = str(getattr(event, "message_str", "") or "")
+                if any(k in _raw_in for k in ("[图片]", "<image_caption>", "[表情]", "[动画表情]", "[GIF]")):
+                    # 2026-11-24：只拦“描述画面”的句子。以前连「猫/狗/坏笑/啥意思」
+                    # 都算，于是她想怼「天天发这个死猫」也会被整句删掉，只剩一个问号。
+                    _face_pat = re.compile(
+                        r"(这只猫|这只狗|这张图|这图片|图里|画面里|画面上|这张表情|"
+                        r"这个表情是|表情包里|表情包是|图片上是|又是这只|"
+                        r"这个颜文字|这些符号|这串符号|字符画|表情符号)")
+                    _segs_split = r"(?<=[。！？!?，,~])"
+                    _segs = re.split(_segs_split, str(text or ""))
+                    _kept = [x for x in _segs if x.strip() and not _face_pat.search(x)]
+                    if len(_kept) != len([x for x in _segs if x.strip()]):
+                        text = "".join(_kept).strip() or "？"
+                        logger.info("[amo] 表情包不读图：删掉描述图片的那句 → %s" % text[:30])
+            except Exception as _fl_exc:
+                logger.debug("[amo] 图片回复过滤失败: %s" % _fl_exc)
             # SPEAK_SELF_DECIDE 2026-11-23：解析她自己写的「这轮开不开口」
             try:
                 import re as _re_speak

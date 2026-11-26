@@ -44,50 +44,161 @@ IDLE_STREAK = 10          # 连续多少条没带表情算「冷场」
 _EXTS = {b"\xff\xd8\xff": "jpg", b"\x89PNG": "png", b"GIF8": "gif", b"RIFF": "webp"}
 
 
-# EMOJI_MAX_CAP 2026-11-23：QQ 收藏表情上限 500，照它的规矩来，别无限收。
-MAX_ITEMS = 500
+# EMOJI_MAX_CAP 2026-11-24：用户口径 —— 总库 50 张，每种情绪 5 张，收满了就不再收新的。
+# （2026-11-23 那版是 500，按 QQ 收藏面板的硬上限；现在按她的要求收窄。）
+MAX_ITEMS = 50
+PER_TAG_CAP = 5
+
+
+def _entry_tags(entry: dict) -> list:
+    tags = (entry or {}).get("tags") or []
+    if isinstance(tags, str):
+        tags = [tags]
+    return [t for t in tags if t in ALL_TAGS]
+
+
+def _counters(index: dict) -> tuple:
+    """(总数, {标签: 张数})"""
+    counts = {t: 0 for t in ALL_TAGS}
+    for entry in index.values():
+        if not isinstance(entry, dict):
+            continue
+        for tag in _entry_tags(entry):
+            counts[tag] = counts.get(tag, 0) + 1
+    return len(index), counts
+
+
+def is_saturated(root: str) -> bool:
+    """是不是已经收满了：总数到 MAX_ITEMS，或者每种情绪都有 PER_TAG_CAP 张。"""
+    total, counts = _counters(load_index(root))
+    if total >= MAX_ITEMS:
+        return True
+    return all(counts.get(tag, 0) >= PER_TAG_CAP for tag in ALL_TAGS)
+
+
+def _blocked(index: dict, tags=()) -> tuple:
+    """这张还能不能收：(能不能, 原因)。总库满了、或它带的情绪槽都满了，就不再收。"""
+    total, counts = _counters(index)
+    tags = [t for t in (tags or []) if t in ALL_TAGS]
+    if total >= MAX_ITEMS:
+        return True, "total"
+    for tag in tags:
+        if counts.get(tag, 0) >= PER_TAG_CAP:
+            return True, "tag:" + tag
+    return False, ""
+
+
+def _drop(root: str, index: dict, key: str) -> bool:
+    entry = index.get(key)
+    if not isinstance(entry, dict):
+        return False
+    try:
+        rel = entry.get("file") or ""
+        path = os.path.join(root, rel)
+        if rel and os.path.exists(path):
+            os.remove(path)
+    except Exception:
+        pass
+    index.pop(key, None)
+    return True
+
+
+def _evict_one(root: str, index: dict, tag: str = "") -> bool:
+    """删一张，返回删没删。
+
+    顺序：先删没标签的，再删没收藏的，再删用得最少的，再删最久没发的，最后才动加得最早的。
+    """
+    pool = [(key, entry) for key, entry in index.items() if isinstance(entry, dict)]
+    if tag:
+        pool = [(k, e) for k, e in pool if tag in _entry_tags(e)]
+    if not pool:
+        return False
+    pool.sort(key=lambda item: (
+        bool(_entry_tags(item[1])),
+        bool(item[1].get("fav")),
+        int(item[1].get("uses") or 0),
+        int(item[1].get("last") or 0),
+        int(item[1].get("added") or 0),
+    ))
+    return _drop(root, index, pool[0][0])
 
 
 def _evict_for_room(root: str, index: dict, need: int = 1) -> int:
-    """给新表情腾位置，返回删掉几张。
-
-    顺序：先删没收藏的，再删用得最少的，再删最久没发的，最后才动加得最早的。
-    """
+    """给新表情腾位置，返回删掉几张（总库超 MAX_ITEMS 时才动）。"""
     removed = 0
     need = max(0, int(need))
     while removed < need and len(index) >= MAX_ITEMS:
-        pool = [(key, entry) for key, entry in index.items() if isinstance(entry, dict)]
-        if not pool:
+        if not _evict_one(root, index):
             break
-        pool.sort(key=lambda item: (
-            bool(item[1].get("fav")),
-            int(item[1].get("uses") or 0),
-            int(item[1].get("last") or 0),
-            int(item[1].get("added") or 0),
-        ))
-        key, entry = pool[0]
-        try:
-            rel = entry.get("file") or ""
-            path = os.path.join(root, rel)
-            if rel and os.path.exists(path):
-                os.remove(path)
-        except Exception:
-            pass
-        index.pop(key, None)
         removed += 1
     return removed
 
 
+def _score(entry: dict) -> tuple:
+    """一张表情该不该留：收藏过 > 用得多 > 最近用过 > 放得晚的。"""
+    return (
+        bool(entry.get("fav")),
+        int(entry.get("uses") or 0),
+        int(entry.get("last") or 0),
+        int(entry.get("added") or 0),
+    )
+
+
+def _primary_tag(entry: dict) -> str:
+    """一张图只算一个情绪：ALL_TAGS 里第一个命中的标签（没有就空）。"""
+    tags = _entry_tags(entry)
+    for tag in ALL_TAGS:
+        if tag in tags:
+            return tag
+    return ""
+
+
+def _select_keep(index: dict) -> tuple:
+    """每种情绪留最该留的 PER_TAG_CAP 张，一张图只归一类，没标签的不留。
+
+    按「候选张数」稀缺优先分配：像「敷衍」这种大部分图还带着别的标签、
+    候选本来就少的类别先挑，免得被前面的类别把图吃光。
+    返回 (留, 删)；留下的图会被改成只带被分到的那个标签。
+    """
+    cands: dict = {}
+    for tag in ALL_TAGS:
+        pool = [(k, e) for k, e in index.items()
+                if isinstance(e, dict) and tag in _entry_tags(e)]
+        if pool:
+            cands[tag] = sorted(pool, key=lambda item: _score(item[1]), reverse=True)
+    keep: dict = {}
+    taken: set = set()
+    for tag in sorted(cands, key=lambda t: len(cands[t])):
+        got = 0
+        for key, entry in cands[tag]:
+            if got >= PER_TAG_CAP:
+                break
+            if key in taken:
+                continue
+            taken.add(key)
+            entry["tags"] = [tag]        # 归到这一类，索引里也只留这一个
+            keep[key] = entry
+            got += 1
+    # 8 类 × 5 张 = 40；剩下 10 个名额留给以后新收的（先没标签进来，标好才占某类的位）
+    drop = [k for k in index if k not in keep]
+    return list(keep), drop
+
+
+def rebalance(root: str) -> dict:
+    """按「每种情绪 PER_TAG_CAP 张、总数 MAX_ITEMS 张」重新选一遍，返回统计。"""
+    index = load_index(root)
+    keep, drop = _select_keep(index)
+    for key in drop:
+        _drop(root, index, key)
+    if drop or keep:
+        save_index(root, index)
+    counts = _counters(index)[1]
+    return {"removed": len(drop), "total": len(index), "tags": counts}
+
+
 def enforce_limit(root: str) -> int:
     """把现有表情库裁到上限内，返回删掉几张。"""
-    index = load_index(root)
-    excess = len(index) - MAX_ITEMS
-    if excess <= 0:
-        return 0
-    removed = _evict_for_room(root, index, excess)
-    if removed:
-        save_index(root, index)
-    return removed
+    return int(rebalance(root).get("removed") or 0)
 
 
 def root_dir(db_path: str) -> str:
@@ -143,9 +254,11 @@ def add_bytes(root: str, data: bytes, tags=()) -> tuple[str, str]:
             index[key] = entry
             save_index(root, index)
         return key, os.path.join(root, entry["file"])
-    # EMOJI_MAX_CAP：满了先腾位置再存，别让库无限长
-    if len(index) >= MAX_ITEMS:
-        _evict_for_room(root, index, 1)
+    # EMOJI_MAX_CAP 2026-11-24：满了就不收（总库 50 张、每种情绪 5 张），不再挤掉旧的
+    tags = [t for t in (tags or []) if t in ALL_TAGS]
+    blocked, _why = _blocked(index, tags)
+    if blocked:
+        return "", ""
     ext = _guess_ext(data)
     rel = os.path.join("files", "%s.%s" % (key, ext))
     abs_path = os.path.join(root, rel)
@@ -350,10 +463,20 @@ def untagged(root: str) -> list[str]:
 
 
 def set_tags(root: str, path: str, tags) -> bool:
+    """给一张表情打标签；某个情绪已经满 PER_TAG_CAP 张时不再往上加（免得刚标完就被裁）。"""
     index = load_index(root)
     for key, entry in index.items():
         if isinstance(entry, dict) and os.path.join(root, entry.get("file") or "") == path:
-            entry["tags"] = list(dict.fromkeys([t for t in tags if t in ALL_TAGS]))
+            counts = _counters(index)[1]
+            own = _entry_tags(entry)
+            picked = []
+            for tag in tags or []:
+                if tag not in ALL_TAGS:
+                    continue
+                if tag in own or counts.get(tag, 0) < PER_TAG_CAP:
+                    picked = [tag]          # 一张图只归一个情绪，不重复占名额
+                    break
+            entry["tags"] = picked
             index[key] = entry
             save_index(root, index)
             return True
@@ -381,5 +504,5 @@ def set_fav(root: str, key: str, ok: bool) -> None:
 __all__ = [
     "ALL_TAGS", "TAG_BY_DIM", "add_bytes", "add_file", "load_index", "mark_used",
     "get_entry", "pick", "root_dir", "save_index", "set_tags", "set_fav", "stats",
-    "tag_of", "untagged",
+    "tag_of", "untagged", "rebalance", "is_saturated", "PER_TAG_CAP", "MAX_ITEMS",
 ]

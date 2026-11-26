@@ -99,13 +99,7 @@ async def save_to_conversation_history(context, event, content: str) -> None:
 
 def notify_heartflow(plugin, event, text: str = "") -> None:
     """手工发送后主动清除「判断暂停」，否则她会哑到超时。"""
-    try:
-        heartflow = getattr(plugin, "heartflow", None)
-        marker = getattr(heartflow, "mark_replied", None)
-        if callable(marker):
-            marker(getattr(event, "unified_msg_origin", ""), text)
-    except Exception:
-        pass
+    return  # 心流已删除，没有需要清的状态
 
 
 async def after_external_send(plugin, event, text: str) -> None:

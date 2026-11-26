@@ -789,7 +789,8 @@ class HumanState:
         """一级 4 段、二级每小时；不再生成三级 10 分钟。"""
         day = str(day or today_str())
         raw = self.schedule.get(day) or self.db.get_schedule(day) or []
-        hourly = self._hourly_schedule(self._strip_his_presence(raw, day))
+        real_items = [it for it in self._strip_his_presence(raw, day) if isinstance(it, dict)]
+        hourly = self._hourly_schedule(real_items)
         now_min = minutes_now()
         is_today = day == today_str()
         # 一级四段（深夜/上午/中午/晚上）只在 amo_enums.DAY_PART_SPANS 里定义一份，
@@ -826,6 +827,23 @@ class HumanState:
                     "outfit": item.get("outfit", ""),
                     "current": bool(is_today and start <= now_min < end),
                 }
+                # 三级：这一小时里的真实分钟格（2026-11-26 日程按分钟排，车程也在这）
+                slots = []
+                for it in real_items:
+                    s = max(start, parse_hhmm(it.get("start")))
+                    e = min(end, parse_hhmm(it.get("end")))
+                    if s >= e:
+                        continue
+                    slots.append({
+                        "start": self._fmt_minutes(s),
+                        "end": self._fmt_minutes(e),
+                        "activity": it.get("activity", ""),
+                        "place": it.get("place", ""),
+                        "detail": it.get("detail", ""),
+                        "zone": it.get("zone", ""),
+                        "category": it.get("category", ""),
+                    })
+                hour["slots"] = slots
                 children.append(hour)
             block["date"] = day
             block["children"] = children

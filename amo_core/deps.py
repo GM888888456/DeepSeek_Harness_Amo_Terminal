@@ -196,7 +196,7 @@ except Exception:
                 return getattr(_module, class_name)
             HeartflowEngine = _load_engine("heartflow_engine", "HeartflowEngine")
         except Exception as _engine_exc:
-            logger.error("[amo] 内置心流模块加载失败: %s" % _engine_exc)
+            logger.debug("[amo] 心流已删除，跳过加载: %s" % _engine_exc)
 try:
     from ..send_bookkeeping import after_external_send as _after_external_send
 except Exception:

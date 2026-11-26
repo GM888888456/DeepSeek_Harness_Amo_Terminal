@@ -191,3 +191,38 @@ def strip_meta_monologue(text):
         if m:
             body = m.group(1).strip()
     return body, hits
+
+#: SPEAK 协议行：单独一行、或「SPEAK 1 正文」连写，允许 ** 与引号
+_SPEAK_LINE_RE = re.compile(
+    r"""^[\s>*_`"'\u300c\u300d]*SPEAK[\s*_]*[:\uff1a]?[\s*_]*([01])[\s*_]*"""
+    r"""[\u300c\u300d>*_`"'\s:：,，]*"""
+    r"""(.*)$""",
+    re.I,
+)
+
+
+def strip_speak_protocol(text):
+    """剥掉模型写的 SPEAK 1 / SPEAK 0 协议行。
+
+    返回 (正文, 决定)：决定是 "0" / "1" / ""（没写协议）。
+    "0" 时正文为空串，调用方按空串处理即可（不发）。
+    """
+    raw = str(text or "")
+    if not raw.strip() or "speak" not in raw.lower():
+        return raw, ""
+    decision = ""
+    kept = []
+    for line in raw.split("\n"):
+        m = _SPEAK_LINE_RE.match(line.strip())
+        if m:
+            decision = decision or m.group(1)
+            rest = (m.group(2) or "").strip()
+            if rest:
+                kept.append(rest)
+            continue
+        kept.append(line)
+    body = "\n".join(kept).strip()
+    body = re.sub(r"\n{3,}", "\n\n", body).strip()
+    if decision == "0":
+        return "", "0"
+    return body, decision

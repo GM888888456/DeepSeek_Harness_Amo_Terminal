@@ -4,59 +4,137 @@ from __future__ import annotations
 
 
 def workday_segments(ctx, seg, overtime=False):
+    """总裁的工作日：会议、批红、见人、偶尔应酬。不再是朝九晚五的工位。
+
+    2026-11-25（用户口径）：她把职业改成智脑集团总裁，日程要跟着换。
+    """
+    import time as _time
+
     home = ctx["home"]
-    office = ctx["workplace"]
+    office = ctx.get("workplace") or "智脑集团"
     late = bool((ctx.get("yesterday") or {}).get("late_night"))
     sick = bool((ctx.get("health") or {}).get("sick"))
     sick_work = sick and str(ctx.get("sick_action") or "") == "go_to_work_sick"
-    wake = "硬撑着洗漱，量了体温还是烧" if sick else "急急忙忙洗漱，准备出门"
     has_car = bool(ctx.get("has_gift_car"))
-    if has_car:
-        commute = "戴着口罩开车去公司" if sick_work else "开车去公司"
-    elif sick_work:
-        commute = "戴着口罩去挤地铁，咳得嗓子疼"
-    elif sick:
-        commute = "带病出门，慢慢走去地铁站"
+    car = ctx.get("car") or ""
+
+    try:
+        dow = int(_time.strftime("%w"))
+    except Exception:
+        dow = 1
+    social = dow in (2, 4)          # 周二、周四晚上有应酬
+
+    def drive(detail=""):
+        return dict(transit="drive", vehicle=car, detail=detail) if has_car else \
+            dict(transit="subway", detail=detail)
+
+    if sick_work:
+        morning = "量了体温还是低烧，照样出门——今天有会推不掉"
+    elif late:
+        morning = "昨晚睡得晚，起来灌了杯咖啡"
     else:
-        commute = "挤地铁去公司"
-    work_activity = "在工位上昏昏沉沉，时不时咳嗽" if sick_work else "上班"
-    lunch_activity = "没胃口，在工位上趴了一会儿" if sick_work else "吃午饭"
+        morning = "起来洗漱，顺手翻了翻昨晚的晨报"
+
+    work_morning = seg("09:20", "10:30", "开高管例会，各条线的数摆一桌",
+                       "%s会议室" % office, "office", "work")
+    if sick_work:
+        work_morning = seg("09:20", "10:30", "强撑着开完高管例会，声音都哑了",
+                           "%s会议室" % office, "office", "work")
+
     if overtime:
-        effects = (ctx.get("event") or {}).get("effects") or {}
         evening = [
-            seg("18:00", "19:00", "临时的事还没完，还在公司", office, "office", "work",
-                effects=effects),
-            seg("19:00", "20:00", "点个外卖，边吃边改", office, "office", "work"),
-            seg("20:00", "21:00", "总算收尾，收拾东西准备走", office, "office", "work"),
-            seg("21:00", "22:00", "下班回家", "路上", "road", "commute",
-                transit="drive" if has_car else "subway",
-                vehicle=ctx.get("car") if has_car else "",
-                detail="晚高峰，慢慢挪" if has_car else ""),
-            seg("22:00", "23:00", "到家洗漱", home, "home", "life"),
+            seg("18:30", "19:30", "出岔子了，留在办公室处理", office, "office", "work"),
+            seg("19:30", "20:30", "让人送了两份便当上来", office, "office", "meal"),
+            seg("20:30", "21:30", "事情压下去了，收尾签字", office, "office", "work"),
+            seg("21:30", "22:00", "开车回去", "路上", "road", "commute", **drive("夜里路空，开得快")),
+            seg("22:00", "23:00", "到家先冲个澡", home, "home", "life"),
+            seg("23:00", "24:00", "睡觉", home, "home", "sleep"),
+        ]
+    elif social and not sick:
+        evening = [
+            seg("18:30", "20:30", "在饭局上应酬，敬酒、听人讲话、点头",
+                "观山湖的酒楼", "restaurant", "work"),
+            seg("20:30", "21:30", "散场，把两个客人送上车", "门口", "road", "work"),
+            seg("21:30", "22:00", "开车回家", "路上", "road", "commute", **drive("喝了酒就叫代驾")),
+            seg("22:00", "23:00", "回家卸妆、换掉一身烟味", home, "home", "life"),
             seg("23:00", "24:00", "睡觉", home, "home", "sleep"),
         ]
     else:
         evening = [
-            seg("18:00", "19:00", "下班开车回家" if has_car else "下班回家", "路上", "road", "commute",
-                transit="drive" if has_car else "subway",
-                vehicle=ctx.get("car") if has_car else "",
-                detail="晚高峰，慢慢挪" if has_car else ""),
-            seg("19:00", "20:00", "吃晚饭", home, "home", "meal"),
-            seg("20:00", "22:00", "休息", home, "home", "rest"),
-            seg("22:00", "23:00", "洗澡护肤", home, "home", "life"),
+            seg("18:30", "19:00", "收拾桌面，最后回一遍邮件", office, "office", "work"),
+            seg("19:00", "19:30", "开车回家", "路上", "road", "commute", **drive("错峰，路上不堵")),
+            seg("19:30", "20:30", "在家里吃晚饭", home, "home", "meal"),
+            seg("20:30", "22:00", "窝在沙发上，不想再动脑子", home, "home", "rest"),
+            seg("22:00", "23:00", "洗澡、敷面膜", home, "home", "life"),
             seg("23:00", "24:00", "睡觉", home, "home", "sleep"),
         ]
+
+    # ---- 下午去看现场：车程按真实分钟排，回不回、玩不玩由时间决定 ----
+    # 2026-11-26 用户口径：要有时间因果——A→B 花 X，B 待 Y，回程 Z；
+    # 视察完够时间就近透一圈，不够就直接回办公室。
+    try:
+        from .route_time import drive_minutes
+    except ImportError:      # 单独 import 这个文件做测试时走绝对导入
+        from route_time import drive_minutes
+
+    def hhmm(mins):
+        mins = int(max(0, min(24 * 60, mins)))
+        return "24:00" if mins >= 24 * 60 else "%02d:%02d" % (mins // 60, mins % 60)
+
+    city = str(ctx.get("city") or "")
+    site_place = "贵安机房"
+    yard_place = "贵安园区工地"
+    out_min = int(round(drive_minutes(office, site_place, city=city)[0] or 27))
+    back_min = int(round(drive_minutes(yard_place, office, city=city)[0] or out_min))
+    leave = 15 * 60 + 30
+    arrive = leave + out_min
+    check_done = arrive + 45          # 蹲下查线缆
+    yard_done = check_done + 25       # 隔壁园区工地走一圈
+    play_min = 30
+    want_play = ((int(ctx.get("seed") or 0) // 11) % 2 == 0)
+    # 18:40 前得坐回办公室：回程、就近玩、再回程，都塞得进去才玩
+    can_play = (yard_done + play_min + 10) <= (18 * 60 + 40 - back_min)
+    visit = [
+        seg(hhmm(leave), hhmm(arrive), "出门去贵安看机房，园区外环在修路",
+            "路上", "road", "commute", **drive("自己开，路上约 %d 分钟" % out_min)),
+        seg(hhmm(arrive), hhmm(check_done), "在贵安机房蹲下来查线缆，一排排看过去",
+            site_place, "office", "work"),
+        seg(hhmm(check_done), hhmm(yard_done), "顺路到隔壁园区工地转一圈，风把头发吹乱",
+            yard_place, "scenic", "work"),
+    ]
+    if can_play and want_play:
+        visit.append(seg(hhmm(yard_done), hhmm(yard_done + play_min),
+                         "看完了不急着走，就近在贵安园区走了走，站路边吹了会儿风",
+                         "贵安园区", "park", "rest"))
+        yard_done += play_min
+    visit.append(seg(hhmm(yard_done), hhmm(yard_done + back_min),
+                     "开车回办公室，赶在晚高峰前走", "路上", "road", "commute",
+                     **drive("路上约 %d 分钟" % back_min)))
+    visit.append(seg(hhmm(yard_done + back_min), "18:30",
+                     "回到办公室，把今天的字签完", office, "office", "work"))
+
     return [
-        seg("00:00", "07:00", "睡觉", home, "home", "sleep"),
-        seg("07:00", "08:00", wake, home, "home", "life", detail="昨晚没睡好，强撑着起来" if late else ""),
-        seg("08:00", "09:00", commute, "路上", "road", "commute",
-            transit="drive" if has_car else "subway",
-            vehicle=ctx.get("car") if has_car else "",
-            detail="早高峰有点堵，到公司还得找车位" if has_car else ""),
-        seg("09:00", "12:00", work_activity, office, "office", "work"),
-        seg("12:00", "13:00", lunch_activity, office + "附近", "restaurant", "meal"),
-        seg("13:00", "14:00", "午休", office, "office", "rest"),
-        seg("14:00", "18:00", work_activity, office, "office", "work"),
+        seg("00:00", "06:40", "睡觉", home, "home", "sleep"),
+        seg("06:40", "07:20", morning, home, "home", "life",
+            detail="昨晚没睡好" if late else ""),
+        seg("07:20", "08:00", "在家吃早饭，边吃边看今天的安排", home, "home", "meal"),
+        seg("08:00", "08:40", "出门去集团总部" if has_car else "出门去集团总部",
+            "路上", "road", "commute", **drive("早高峰有点堵" if has_car else "")),
+        seg("08:40", "09:20", "到办公室，总办已经把今天的材料摆在桌上",
+            office, "office", "work"),
+        work_morning,
+        seg("10:30", "11:40", "批红：一份一份看，该签的签，该驳的驳",
+            office, "office", "work"),
+        seg("11:40", "12:30", "见人——客户、机构、或者省里来的",
+            "%s会客室" % office, "office", "work"),
+        seg("12:30", "13:30", "吃午饭，跟高管在食堂坐一桌" if not sick_work else "没胃口，喝了点粥",
+            office, "restaurant", "meal"),
+        seg("13:30", "15:00", "评审会：算力扩建、产品路线、预算",
+            "%s会议室" % office, "office", "work"),
+        seg("15:00", "15:30", "在走廊上被两个人拦住，边走边说",
+            office, "office", "work"),
+        *visit,
+
     ] + evening
 
 

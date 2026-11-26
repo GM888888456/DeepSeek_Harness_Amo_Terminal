@@ -66,6 +66,114 @@ class WebApiMixin:
         return _panel_default_uid_of(self)
 
 
+    async def api_owned(self):
+        """面板开关：车子/房子是不是全款（写金融账本）。"""
+        import json as _json
+        import glob as _glob
+        params = {}
+        try:
+            params.update({k: v for k, v in dict(self._query_items()).items()})
+        except Exception:
+            pass
+        try:
+            body = await self._body()
+            if isinstance(body, dict):
+                params.update(body)
+        except Exception:
+            pass
+        cands = _glob.glob("/AstrBot/data/plugin_data/*Amo_Finance/book.json")
+        if not cands:
+            return {"code": 1, "msg": "账本没找到"}
+        cands = sorted(cands, key=lambda x: 0 if "DeepSeek_Harness" in x else 1)
+        path = cands[0]
+        try:
+            with open(path, encoding="utf-8") as f:
+                book = _json.load(f) or {}
+        except Exception as exc:
+            return {"code": 1, "msg": "账本读不到：%s" % exc}
+        led = book.setdefault("ledger", {})
+        def truthy(v):
+            return str(v).lower() in ("1", "true", "on", "yes", "是")
+        if "car" in params:
+            led["own_car_full"] = truthy(params.get("car"))
+        if "house" in params:
+            led["own_house_full"] = truthy(params.get("house"))
+        try:
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                _json.dump(book, f, ensure_ascii=False, indent=1)
+            import os as _os
+            _os.replace(tmp, path)
+        except Exception as exc:
+            return {"code": 1, "msg": "账本存不上：%s" % exc}
+        # 读人格：人格里有车/有房 → 全款；人格没写才用账本里的标记
+        try:
+            book_state = book.get("state") or {}
+            persona_car = str(book_state.get("persona_car") or "").strip()
+            persona_house = str(book_state.get("persona_house") or "").strip()
+        except Exception:
+            persona_car = persona_house = ""
+        def pick(flag_key, kind_key, persona, desc_key):
+            desc = str(led.get(desc_key) or "")
+            if persona and not any(w in desc for w in ("租", "贷", "按揭")):
+                return True
+            if str(led.get(kind_key) or "") == "own":
+                return True
+            return bool(led.get(flag_key))
+        car = pick("own_car_full", "car_kind", persona_car, "car_desc")
+        house = pick("own_house_full", "house_kind", persona_house, "house_desc")
+        return {"code": 0, "data": {"car": car, "house": house,
+                                    "persona_car": persona_car, "persona_house": persona_house}}
+
+    async def api_bills(self):
+        """面板用：她买了什么、进账多少（读金融账本）。"""
+        import json as _json
+        import glob as _glob
+        book = {}
+        try:
+            cands = _glob.glob("/AstrBot/data/plugin_data/*Amo_Finance/book.json")
+            # 优先 DeepSeek_Harness_Amo_Finance（旧那份 Astrbot_Amo_Finance 的历史是空的）
+            cands = sorted(cands, key=lambda x: 0 if "DeepSeek_Harness" in x else 1)
+            if cands:
+                with open(cands[0], encoding="utf-8") as f:
+                    book = _json.load(f) or {}
+        except Exception as exc:
+            logger.debug("[amo] 读账单失败: %s" % exc)
+        led = book.get("ledger") or {}
+        rows = []
+        # 真实流水（消费/收入/利息）
+        for h in reversed((book.get("history") or [])[-80:]):
+            kind = str(h.get("kind") or "expense")
+            income = kind in ("income", "interest")
+            note = "%s %s" % (h.get("time") or "", h.get("reason") or "")
+            if h.get("payee"):
+                note += "·" + str(h.get("payee"))
+            rows.append({"note": note.strip(), "amount": round(float(h.get("amount") or 0), 2),
+                         "sign": "+" if income else "-", "kind": "收入" if income else "支出"})
+        for o in (book.get("orders") or [])[-80:]:
+            note = str(o.get("note") or "")
+            amount = float(o.get("amount") or 0)
+            income = note.startswith("卖出") or "收入" in note or "进账" in note or "工资" in note
+            rows.append({"note": "%s %s" % (o.get("ts", ""), note),
+                         "amount": round(amount, 2),
+                         "sign": "+" if income else "-",
+                         "kind": "收入" if income else "支出"})
+        # 本月工资 + 储蓄利息，算进账
+        try:
+            salary = float(led.get("salary") or 0)
+            if salary > 0:
+                rows.append({"note": "本月工资（税后）", "amount": round(salary * 0.78, 2),
+                             "sign": "+", "kind": "收入"})
+            saving = float(led.get("saving") or 0)
+            rate = float(led.get("saving_rate") or 1.5)
+            if saving > 0:
+                rows.append({"note": "储蓄利息（年化 %.1f%%）" % rate,
+                             "amount": round(saving * rate / 100 / 12, 2), "sign": "+", "kind": "收入"})
+        except Exception:
+            pass
+        return {"code": 0, "data": {"items": rows, "balance": led.get("balance"),
+                                    "count": len(rows)}}
+
     async def api_weather_brief(self):
         """面板用：当前天气一行摘要 + 配置里的城市（只读缓存）。"""
         await self._ensure_ready()
@@ -1188,6 +1296,8 @@ class WebApiMixin:
             logger.warning("[amo] 清理旧 Web API 路由失败（插件重载后如遇 closed database，请完整重启）: %s" % exc)
         routes = [
             ("/status", self.api_status, ["GET"]),
+            ("/bills", self.api_bills, ["GET"]),
+            ("/owned", self.api_owned, ["GET", "POST"]),
             ("/records", self.api_records, ["GET", "POST"]),
             ("/get_status", self.api_get_status, ["GET"]),
             ("/events", self.api_events, ["GET", "POST"]),

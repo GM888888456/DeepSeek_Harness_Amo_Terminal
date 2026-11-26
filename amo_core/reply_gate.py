@@ -39,59 +39,7 @@ class ReplyGate:
     def __init__(self, plugin):
         self.p = plugin
 
-    def activity(self, group_id):
-        if not group_id:
-            return 0.0
-        cutoff = now_ts() - 300
-        times = [item for item in self.p._group_times.get(group_id, []) if item >= cutoff]
-        self.p._group_times[group_id] = times
-        return len(times) / 5.0
 
-    def dynamic_threshold(self, activity, snap, profile):
-        base = self.p.cfg_float("reply_threshold", 0)
-        if base <= 0:
-            legacy = self.p.cfg_float("base_reply_threshold", 0.55)
-            base = legacy * 100 if legacy <= 1 else legacy
-        base = clamp(base, 0, 100)
-
-        if activity < 1:
-            activity_delta = -8
-        elif activity < 4:
-            activity_delta = -2
-        elif activity < 9:
-            activity_delta = 3
-        elif activity < 18:
-            activity_delta = 8
-        else:
-            activity_delta = 12
-
-        # 心情不再推高/压低门槛（同上）：这里只留活跃度、关系、身体、时段、天气。
-        mood_delta = 0.0
-
-        relation = profile.get("relation", "普通")
-        relation_delta = {"相恋": -10, "熟识": -5, "抵触": 16, "仇恨": 36}.get(relation, 0)
-        health_delta = 8 if snap["health"]["sick"] else 0
-        phase = snap["period"]["phase"]
-        period_delta = {"月经期": 6, "黄体期": 4, "排卵期": -3, "卵泡期": -1}.get(phase, 0)
-        time_delta = 10 if _now().hour in (23, 0, 1, 2, 3, 4, 5) else 0
-        weather_delta = 3 if snap["weather"].get("tag") in ("rain", "storm", "snow") else 0
-
-        value = clamp(
-            base + activity_delta + mood_delta + relation_delta
-            + health_delta + period_delta + time_delta + weather_delta,
-            20, 92,
-        )
-        return {
-            "value": round(value, 1),
-            "base": round(base, 1),
-            "activity_delta": activity_delta,
-            "mood_delta": round(mood_delta, 1),
-            "relation_delta": relation_delta,
-            "health_delta": health_delta,
-            "period_delta": period_delta,
-            "time_delta": time_delta,
-            "weather_delta": weather_delta,
-        }
 
     def private_probability(self, snap, profile):
         probability = 0.95

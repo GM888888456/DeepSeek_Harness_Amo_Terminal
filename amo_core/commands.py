@@ -305,6 +305,13 @@ class CommandMixin:
         """把库里还没进 QQ 收藏表情的旧图补收一遍（每个进程只做一次）。"""
         if getattr(self, "_face_synced", False):
             return
+        try:
+            if float(self.db.kv_get("emoji_fav_off_until", 0) or 0) > now_ts():
+                self._face_synced = True
+                logger.debug("[amo] 表情收藏处于熔断期，跳过补收")
+                return
+        except Exception:
+            pass
         self._face_synced = True
         if not self.cfg_bool("emoji_enable", True):
             return
@@ -326,6 +333,8 @@ class CommandMixin:
             if not todo:
                 return
             logger.debug("[amo] 补收 QQ 收藏表情 %d 张" % len(todo))
+            # 2026-11-24：连续失败就别硬塞了（QQ 收藏面板满了会一直失败）
+            _fail_streak = 0
             for key in todo[:60]:
                 entry = emoji_lib.get_entry(root, key)
                 path = _os_s.path.join(root, entry.get("file") or "")
@@ -336,8 +345,15 @@ class CommandMixin:
                     event, path,
                     remote_path=qq_face.napcat_emoji_path(entry.get("file")))
                 emoji_lib.set_fav(root, key, ok)
-                logger.debug("[amo] %s 收进 QQ 收藏表情：%s"
-                            % ("已" if ok else "没", path.split("/")[-1]))
+                if ok:
+                    _fail_streak = 0
+                    logger.debug("[amo] 已收进 QQ 收藏表情：%s" % path.split("/")[-1])
+                else:
+                    _fail_streak += 1
+                    logger.debug("[amo] 没进 QQ 收藏：%s" % path.split("/")[-1])
+                    if _fail_streak >= 3:
+                        logger.info("[amo] 表情收藏连续失败 3 次，本次不再补收")
+                        break
                 await _aio_s.sleep(0.8)
         except Exception as exc:
             logger.debug("[amo] 补收收藏表情失败: %s" % exc)
@@ -375,6 +391,11 @@ class CommandMixin:
         except Exception:
             from amo_core import emoji_lib  # type: ignore
         root = emoji_lib.root_dir(self.db.path)
+        # 2026-11-24：每种情绪 5 张、总数 50 张，收满了就不再收
+        if emoji_lib.is_saturated(root):
+            logger.debug("[amo] 表情库已满（每种情绪 %d 张 / 最多 %d 张），不再收藏"
+                         % (emoji_lib.PER_TAG_CAP, emoji_lib.MAX_ITEMS))
+            return
         saved_n = 0
         for comp in images[:3]:
             try:
@@ -405,6 +426,7 @@ class CommandMixin:
                 continue
             import asyncio as _aio_w
             key, saved = await _aio_w.to_thread(emoji_lib.add_file, root, path)
+            # 库满了（总 50 / 每种情绪 5）add_file 会返回空，这里就当没收到
             if key:
                 saved_n += 1
                 # 同一张还要收进 QQ「收藏表情」：留在本地发出去是大图，
@@ -453,6 +475,16 @@ class CommandMixin:
                 emoji_lib.set_tags(root, path, tags)
                 logger.debug("[amo] 表情已标注：%s -> %s"
                             % (path.split("/")[-1], ",".join(tags)))
+                # 2026-11-24：标上一个新情绪后，这一类可能就超了 5 张，当场裁一次
+                try:
+                    import asyncio as _aio_rb
+                    _rb = await _aio_rb.to_thread(emoji_lib.rebalance, root)
+                    if _rb.get("removed"):
+                        logger.debug("[amo] 表情库超配，每种情绪 %d 张，裁掉 %d 张（剩 %d 张）"
+                                     % (emoji_lib.PER_TAG_CAP, _rb.get("removed"),
+                                        _rb.get("total", 0)))
+                except Exception as _rb_exc:
+                    logger.debug("[amo] 表情库裁减失败: %s" % _rb_exc)
         except Exception as exc:
             logger.debug("[amo] 表情打标签失败: %s" % exc)
 
@@ -479,10 +511,19 @@ class CommandMixin:
             ok = await qq_face.add_favorite(event, path, remote_path=remote)
             if ok:
                 emoji_lib.set_fav(root, key, True)
+                self.db.kv_set("emoji_fav_fail_streak", 0)
                 logger.debug("[amo] 表情已收进 QQ 收藏表情：%s" % path.split("/")[-1])
                 return
-            logger.warning("[amo] 表情没收进 QQ 收藏（第 %d 次）：%s"
-                           % (attempt + 1, path.split("/")[-1]))
+            # 2026-11-24：失败不再 warning 刷屏；连续 5 次就停 6 小时
+            streak = int(self.db.kv_get("emoji_fav_fail_streak", 0) or 0) + 1
+            self.db.kv_set("emoji_fav_fail_streak", streak)
+            logger.debug("[amo] 表情没收进 QQ 收藏（第 %d 次，连失 %d）：%s"
+                         % (attempt + 1, streak, path.split("/")[-1]))
+            if streak >= 5:
+                self.db.kv_set("emoji_fav_off_until", now_ts() + 6 * 3600)
+                self.db.kv_set("emoji_fav_fail_streak", 0)
+                logger.info("[amo] 表情收藏连续失败 5 次，暂停 6 小时再试")
+                return
             if attempt < 3:
                 import asyncio as _aio_r
                 _aio_r.create_task(
@@ -570,17 +611,8 @@ class CommandMixin:
             await self._handle_private(event, profile)
             return
 
-        # 群聊只走完整心流引擎；旧的五维门控/防抖/直发逻辑不再参与。
-        if self.heartflow is None or not self.cfg_bool("hf_enable_heartflow", True):
-            return
-        snap = self.state.snapshot()
-        if self._should_disturb(snap, umo, uid, text, group=True):
-            self._apply_disturbance(umo)
-            setattr(event, "amo_force_reply", True)
-        try:
-            await self.heartflow.on_group_message(event)
-        except Exception as exc:
-            logger.error("[amo] 心流处理失败: %s" % exc)
+        # 群聊：判定交给 main.py 的 AGENT_DECIDES（每条都进主模型自决）。
+        return
 
     async def _handle_private(self, event, profile):
         snap = self.state.snapshot()
@@ -597,13 +629,7 @@ class CommandMixin:
             return
         # FUSE 2026-11-23（用户口径：融合，不要两套引擎）：私聊也交给心流，
         # 旧的「概率 roll」只在心流没启用时兜底。
-        _reply = None
-        if self.heartflow is not None and self.cfg_bool("hf_enable_heartflow", True):
-            try:
-                _reply = await self.heartflow.on_private_message(event)
-            except Exception as exc:
-                logger.error("[amo] 私聊心流失败，按正常回复: %s" % exc)
-                _reply = True
+        _reply = True  # 私聊一律放行，判定交给上面的事实包
         if _reply is None:
             _p = self.gate.private_probability(snap, profile)
             _reply = random.random() <= _p

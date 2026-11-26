@@ -129,7 +129,7 @@ class MiscMixin:
         words = [word for word in ("jk", "汉服", "襦裙", "马面", "裙", "衬衫", "卫衣", "外套")
                  if word in text]
         try:
-            rows = market.items("outfits") or []
+            rows = market.net_rows("outfits") or []
         except Exception:
             rows = []
         for row in rows:
@@ -711,6 +711,28 @@ class MiscMixin:
         return value
 
     def _trim_reply(self, text):
+        # SPEAK 协议兜底：模型写的「SPEAK 1 / SPEAK 0」绝不许进正文或历史。
+        # SPEAK 0 → 返回空串（上游判空即不发）；SPEAK 1 → 剥掉协议行只留正文。
+        try:
+            try:
+                from ..text_clean import strip_speak_protocol as _sst
+            except Exception:
+                from text_clean import strip_speak_protocol as _sst  # type: ignore
+            text, _spd = _sst(text)
+            if _spd == "0":
+                logger.debug("[amo] 🤐 SPEAK 0：这轮不开口")
+                return ""
+        except Exception as _sst_exc:
+            logger.debug("[amo] SPEAK 剥离失败: %s" % _sst_exc)
+        # 口语化：书面词换成人话（「因此/然而/非常/是否/如何」这类）
+        try:
+            try:
+                from .humanize import humanize as _humanize
+            except Exception:
+                from amo_core.humanize import humanize as _humanize  # type: ignore
+            text = _humanize(text)
+        except Exception as _hz_exc:
+            logger.debug("[amo] 口语化失败: %s" % _hz_exc)
         value = self._strip_place_marks(str(text or "").strip())
         limit = max(1, self.cfg_int("reply_max_sentences", 3))
         parts = [item for item in re.split(r"(?<=[。！？!?~～])", value) if item.strip()]
