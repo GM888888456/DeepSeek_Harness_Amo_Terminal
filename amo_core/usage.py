@@ -135,11 +135,7 @@ class UsageMixin:
         return start.timestamp()
 
     def _judge_provider_id(self):
-        try:
-            if self.heartflow is not None:
-                return str(self.heartflow.judge_provider_info().get("id") or "")
-        except Exception:
-            pass
+        """判定模型随心流引擎一起删了，永远没有判定来源。"""
         return ""
 
     def _using_provider_id(self):

@@ -77,7 +77,7 @@ class CommandMixin:
             snap = self.state.snapshot()
             feel = snap.get("feel") or {}
             if not feel:
-                return "🫀 七情六欲没开（hf_enable_heartflow）"
+                return "🫀 七情六欲没数据（feelings 未初始化）"
             base = feel.get("base", 34.0)
             lines = ["🫀 七情六欲（常态约 %.0f，离常态越远越算情绪）" % base]
             for key in ("joy", "anger", "sadness", "fear", "love", "disgust", "surprise"):
@@ -281,7 +281,7 @@ class CommandMixin:
                 "基础阈值：" + str(round(threshold["base"] / 100, 3)) + "\n"
                 "绝对分数阈值：" + str(threshold["absolute"]) + "/10\n"
                 "当前群活跃度：" + str(data["activity_rate"]) + "%\n"
-                "说明：阈值越高越不想说话；详细状态用 /heartflow。"
+                "说明：阈值越高越不想说话。"
             )
 
         if sub == "say" or sub == "说":

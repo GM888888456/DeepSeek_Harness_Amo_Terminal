@@ -310,18 +310,8 @@ class SocialMixin:
                 return True
         except Exception:
             return True
-        target = str(getattr(event, "heartflow_target", "") or "")
-        if target == "bot":
-            return True
-        if str(getattr(event, "heartflow_mode_hint", "") or "") == "interject":
-            return False
         try:
             if getattr(event, "is_at_or_wake_command", False):
-                return True
-        except Exception:
-            pass
-        try:
-            if self.heartflow is not None and self.heartflow._addresses_bot(event.message_str or ""):
                 return True
         except Exception:
             pass

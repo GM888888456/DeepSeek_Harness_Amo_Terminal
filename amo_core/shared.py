@@ -50,7 +50,7 @@ def _looks_auto_note(text) -> bool:
     return bool(_AUTO_NOTE_RE.match(value))
 
 FORCED_ON_CONFIG_KEYS = frozenset({
-    "enable_group_reply", "enable_private_reply", "hf_enable_heartflow",
+    "enable_group_reply", "enable_private_reply",
     "diary_enabled", "usage_stats_enabled",
 })
 

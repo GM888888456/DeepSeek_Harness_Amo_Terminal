@@ -190,9 +190,7 @@ class InfraMixin:
             if key in PANEL_HIDDEN_KEYS:
                 # 面板不展示（配置文件仍可改）：评分规则、判定提示词这类「改错了很难查」的项
                 continue
-            if key.startswith("hf_"):
-                group = "心流"
-            elif key.startswith("voice_"):
+            if key.startswith("voice_"):
                 group = "语音"
             elif key.startswith("image_share_") or key.startswith("draw_") or key.startswith("photo_"):
                 group = "照片"
@@ -255,17 +253,9 @@ class InfraMixin:
                 data = json.load(stream)
             if not isinstance(data, dict):
                 return
-            old_engine_config = {
-                key: value for key, value in self.config.items()
-                if key.startswith("hf_")
-            }
             self.config.update(data)
-            new_engine_config = {
-                key: value for key, value in self.config.items()
-                if key.startswith("hf_")
-            }
-            if old_engine_config and old_engine_config != new_engine_config:
-                self._spawn(self._apply_runtime_config())
+            # 心流引擎已删：改成配置文件一变就重放运行时配置（以前只比较 hf_*）
+            self._spawn(self._apply_runtime_config())
             self._config_mtime = mtime
             if data.get("bot_name"):
                 self.bot_name = str(data.get("bot_name"))
@@ -273,8 +263,6 @@ class InfraMixin:
                 self.bot_aliases = [
                     item.strip() for item in str(data.get("bot_aliases")).split(",") if item.strip()
                 ]
-            if self.heartflow is not None:
-                self.heartflow.set_identity(self.bot_name, self.bot_aliases)
             self._persona_name_cache.clear()
             raw_admins = data.get("admin_uids", None)
             if raw_admins is not None:

@@ -473,8 +473,6 @@ class RelationsMixin:
                 self.db.kv_set("bot_aliases_last", aliases)
         except Exception:
             pass
-        if self.heartflow is not None:
-            self.heartflow.set_identity(self.bot_name, self.bot_aliases)
         # 世界观挂在 HumanState 上，不是插件实例；这里以前写成了 self.worldview，
         # 一旦人格名变化就会 AttributeError，整条消息处理直接中断。
         world = getattr(getattr(self, "state", None), "worldview", None)

@@ -810,7 +810,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             except Exception as exc:
                 logger.debug("[amo] 承诺账本没启动: %s" % exc)
                 self.promises = None
-        self.heartflow = None  # 心流引擎已删除（2b 连这行一起清）
         # 飞书适配器默认把每条回复都发成「引用回复」；私聊不该引用（群聊按概率）
         try:
             self._install_lark_quote_guard()
@@ -1740,9 +1739,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                     except Exception:
                         pass
                     event.set_extra("amo_speak_ask", True)
-                    setattr(event, "heartflow_target", "unknown")
-                    setattr(event, "heartflow_target_certain", False)
-                    setattr(event, "heartflow_mode_hint", "auto")
                 except Exception as _ad_exc:
                     logger.debug("[amo] 交主模型自决标记失败: %s" % _ad_exc)
             # 2026-11-21：她压根不会骂人。被骂、被开黄腔、有人贬低阿墨时，
@@ -2737,12 +2733,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
 
         if _speak_dec == "0":
             return
-        if self.heartflow is None:
-            return
-        try:
-            await self.heartflow.on_llm_response(event, resp)
-        except Exception as exc:
-            logger.debug("[amo] 心流回复记录失败: %s" % exc)
 
     @filter.after_message_sent()
     async def on_after_message_sent(self, event: AstrMessageEvent):
@@ -2754,18 +2744,11 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             self._scrub_conversation_speak(event.unified_msg_origin)
         except Exception as _sd_exc:
             logger.debug("[amo] 历史擦 SPEAK 失败: %s" % _sd_exc)
-        # 主动分享照片：必须放在心流判断之前。心流已关（enable_heartflow=False），
-        # 放后面就等于永远不分享。它内部只做判断、出图丢后台任务，不卡回复链路。
+        # 主动分享照片：内部只做判断、出图丢后台任务，不卡回复链路。
         try:
             await self._maybe_share_image(event)
         except Exception as exc:
             logger.debug("[amo] 主动分享入口异常: %s" % exc)
-        if self.heartflow is None:
-            return
-        try:
-            await self.heartflow.on_after_message_sent(event)
-        except Exception as exc:
-            logger.debug("[amo] 心流发送后状态更新失败: %s" % exc)
 
     async def _split_multiline_reply(self, event, text):
         """分段发送：**一句一句地**发，每句都按它自己的字数等一遍。
@@ -3501,62 +3484,6 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
 
 
 
-    # ---------- 心流完整版指令 ----------
-    @filter.command("heartflow")
-    async def cmd_heartflow(self, event: AstrMessageEvent):
-        await self._ensure_ready()
-        if self.heartflow is None:
-            yield event.plain_result("心流引擎未加载")
-            return
-        async for item in self.heartflow.heartflow_status(event):
-            yield item
-
-    @filter.command("heartflow_debug")
-    async def cmd_heartflow_debug(self, event: AstrMessageEvent):
-        await self._ensure_ready()
-        if self.heartflow is None:
-            yield event.plain_result("心流引擎未加载")
-            return
-        async for item in self.heartflow.heartflow_debug(event):
-            yield item
-
-    @filter.command("heartflow_clear")
-    async def cmd_heartflow_clear(self, event: AstrMessageEvent):
-        await self._ensure_ready()
-        if self.heartflow is None:
-            yield event.plain_result("心流引擎未加载")
-            return
-        async for item in self.heartflow.heartflow_clear_buffer(event):
-            yield item
-
-    @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("heartflow_log")
-    async def cmd_heartflow_log(self, event: AstrMessageEvent):
-        await self._ensure_ready()
-        if self.heartflow is None:
-            yield event.plain_result("心流引擎未加载")
-            return
-        async for item in self.heartflow.heartflow_toggle_log(event):
-            yield item
-
-    @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("heartflow_reset")
-    async def cmd_heartflow_reset(self, event: AstrMessageEvent):
-        await self._ensure_ready()
-        if self.heartflow is None:
-            yield event.plain_result("心流引擎未加载")
-            return
-        async for item in self.heartflow.heartflow_reset(event):
-            yield item
-
-    @filter.command("heartflow_help")
-    async def cmd_heartflow_help(self, event: AstrMessageEvent):
-        await self._ensure_ready()
-        if self.heartflow is None:
-            yield event.plain_result("心流引擎未加载")
-            return
-        async for item in self.heartflow.heartflow_help(event):
-            yield item
 
     @filter.command("taunt")
     @filter.permission_type(filter.PermissionType.ADMIN)

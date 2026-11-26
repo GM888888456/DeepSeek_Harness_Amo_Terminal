@@ -60,12 +60,6 @@ class MiscMixin:
             "mention": bool(settings.get("reply_with_mention", False)),
         }
 
-    def _hf_config(self):
-        try:
-            return {key[3:]: value for key, value in self.config.items() if key.startswith("hf_")}
-        except Exception:
-            return {}
-
     def _sanitize_schedule(self, sched):
         """对外入口：真正的清洗在 HumanState 里，插件这边代调。"""
         state = getattr(self, "state", None)

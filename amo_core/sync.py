@@ -317,17 +317,6 @@ class SyncMixin:
         snap = self.state.snapshot()
         activity = 0.0
         threshold = {"value": 0.0, "base": 0.0, "absolute": 0.0}
-        if self.heartflow is not None:
-            try:
-                hf_threshold, hf_activity, hf_absolute = self.heartflow._get_dynamic_threshold(umo)
-                threshold = {
-                    "value": round(float(hf_threshold) * 100, 1),
-                    "base": round(float(self.heartflow.reply_threshold) * 100, 1),
-                    "absolute": round(float(hf_absolute), 1),
-                }
-                activity = float(hf_activity) * 100
-            except Exception as exc:
-                logger.debug("[amo] 心流阈值读取失败: %s" % exc)
         counts = self.db.counts()
         # 记忆条数改成外挂插件的：本插件不再存记忆，面板显示外部模块里的条数
         primary_uid = ""
@@ -363,7 +352,7 @@ class SyncMixin:
                 "enable_group_reply": self.cfg_bool("enable_group_reply", True),
                 "enable_private_reply": self.cfg_bool("enable_private_reply", True),
                 "auto_active_msg": self.cfg_bool("auto_active_msg", True),
-                "heartflow": self.heartflow is not None,
+                "heartflow": False,  # 心流判定引擎已删；七情六欲见上方 heartflow 字段
                 "weather_key_set": bool(self.cfg_str("hefeng_key", "")),
                 "weather_host": self.cfg_str("weather_host", "https://devapi.qweather.com"),
                 "version": PLUGIN_VERSION,
