@@ -2606,6 +2606,36 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                     logger.debug("[amo] resp 已剥 SPEAK：%s" % (str(_speak_dec) or "-"))
         except Exception as _sp_exc:
             logger.debug("[amo] resp SPEAK 清洗失败: %s" % _sp_exc)
+        # TOOL_SPEAK_SCRUB 2026-11-26：她走 send_message_to_user 工具时会把「SPEAK 1」
+        # 当正文发出去（19:47:38 实测，绕过了 _trim_reply）。工具参数在框架执行前
+        # 就是普通 dict，这里就地抹掉协议行；整条只剩协议行就清空，等于这条不发。
+        try:
+            try:
+                from .text_clean import strip_speak_protocol as _sst_tool
+            except Exception:
+                from text_clean import strip_speak_protocol as _sst_tool  # type: ignore
+            _call_names = list(getattr(resp, "tools_call_name", None) or [])
+            _call_args = list(getattr(resp, "tools_call_args", None) or [])
+            for _idx, _arg in enumerate(_call_args):
+                if not isinstance(_arg, dict):
+                    continue
+                _msgs = _arg.get("messages")
+                if not isinstance(_msgs, list):
+                    continue
+                _kept = []
+                for _m in _msgs:
+                    if isinstance(_m, dict) and isinstance(_m.get("text"), str):
+                        _body_t, _dec_t = _sst_tool(_m["text"])
+                        _body_t = (_body_t or "").strip()
+                        if not _body_t:
+                            logger.info("[amo] 工具消息整条是协议行（%s），拦下不发"
+                                        % (_call_names[_idx] if _idx < len(_call_names) else "?"))
+                            continue
+                        _m["text"] = _body_t
+                    _kept.append(_m)
+                _arg["messages"] = _kept
+        except Exception as _ts_exc:
+            logger.debug("[amo] 工具参数 SPEAK 清洗失败: %s" % _ts_exc)
         # 一行指令协议（框架里工具调用没通，靠解析她的回复办事）
         #   DECIDE approve|reject 编号 / DIRECTION 方向 / POLICY bonus|cut / TRADE buy|sell 股票名 股数
         # 执行全放后台线程，不卡她的回复。
@@ -2917,9 +2947,24 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                     return
             except Exception:
                 pass
-            text = strip_chat_format("".join(
+            _raw_text = strip_chat_format("".join(
                 comp.text for comp in result.chain if isinstance(comp, Comp.Plain)
             ))
+            # SPEAK 协议行也可能从这里漏出去：整条只有「SPEAK 1」时 chain 直接清空＝不发
+            text = _raw_text
+            try:
+                try:
+                    from .text_clean import strip_speak_protocol as _sst_send
+                except Exception:
+                    from text_clean import strip_speak_protocol as _sst_send  # type: ignore
+                text, _spk = _sst_send(_raw_text)
+                text = text or ""
+            except Exception:
+                text = _raw_text
+            if text != _raw_text:
+                _keep_comp = [c for c in result.chain if not isinstance(c, Comp.Plain)]
+                result.chain = _keep_comp + ([Comp.Plain(text)] if text else [])
+                logger.info("[amo] 发送前剥掉协议行，剩 %d 字" % len(text))
             # 输出卫生：模型偶尔不调 amo_speak，直接把 <astrbot_speak text="…"> 写进正文。
             # 标签一个字都不能发出去（群里就是一串代码）；剩下正文照发，只剩标签时
             # 用标签里那句当正文。要念的那句留给语音插件（它读 event.amo_voice_text）。
