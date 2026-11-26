@@ -88,17 +88,44 @@ class ContextMixin:
         return "、".join(good[:3])
 
     def _speech_samples_line(self):
-        """随机取 3 句她自己说过的、像人的话，当语气参考（照语气，别照抄）。"""
+        """给她「说话节奏」，不给原句。
+
+        2026-11-26（用户口径：根治八股）：以前是把 3 句原话贴进上下文让她「照这个语气」，
+        等于每轮发一遍句式范本，模型直接抄骨架。现在只输出长度/形状标签。
+        """
         try:
-            import json as _json
             import random as _random
             raw = self.db.kv_get("speech_samples", []) or []
-            pool = [str(x) for x in raw if str(x).strip()]
+            pool = [str(x).strip() for x in raw if str(x).strip()]
             if len(pool) < 3:
                 return ""
-            picked = _random.sample(pool, 3)
-            return ("【你平时说话就这样】" + "／".join(picked)
-                    + "。照这个语气和长度说，别照抄原句，也别每轮都一样的腔调。")
+            picked = _random.sample(pool, min(6, len(pool)))
+            labels = []
+            for s in picked:
+                n = len(s)
+                if n <= 4:
+                    shape = "一个词就收"
+                elif n <= 9:
+                    shape = "七八个字"
+                elif n <= 16:
+                    shape = "十来字"
+                else:
+                    shape = "二十来字"
+                if "?" in s or "？" in s:
+                    shape += "、带反问"
+                elif "，" in s:
+                    shape += "、一句一件事"
+                if n <= 9 and any(k in s for k in ("别", "少", "才不", "想得美")):
+                    shape += "、口气冲"
+                if shape not in labels:
+                    labels.append(shape)
+                if len(labels) >= 3:
+                    break
+            if not labels:
+                return ""
+            return ("【你的说话节奏】" + "／".join(labels)
+                    + "。长度和口气照这个走，但每个字都得是此刻这句该说的话"
+                    + "——别沿用以前说过的句式。")
         except Exception:
             return ""
 
@@ -372,8 +399,12 @@ class ContextMixin:
             "里面没有的地点、行程、承诺就是没有，拿不准就按【正在】说；"
             "口语：不用「因此/然而/并且/非常/是否/如何/以及」这类书面词，"
             "换成「所以/不过/而且/挺/是不是/怎么/和」；能说「也就那样」就别写「确实如此」。"
-            "一条只讲一件事，讲完就停，别把解释补在同一个气泡里。" +
-            "说话不用每句都凑成前后两半：真人常只回半句、一个词或一声哼；"
+            "一条只讲一件事，讲完就停，别把解释补在同一个气泡里。"
+            "别写旁白：不把心里话和判断过程写进正文，也不写自己打算怎么回；"
+            "想好了直接说给他听，别把想的过程发出来。" +
+            "话要说完：短可以，但意思得完整，别只说半截就断；"
+            "不许把对方的话换个人称丢回去——他说「多我一个不多」，你答「多你一个就多一个」，这种等于没说话；"
+            "群里别人（尤其是另一个机器人/助手）说的话不当成冲你说的：没点你名就别当接话茬，要接就接一件新的事；"
             "但说自己的动作要把词说全——「站起来」不能写成「直起来」，"
             "「坐下」「蹲下」「坐直」「躺下」也别缩成一个字，"
             "也不用解释自己的情绪是怎么来的——一解释就不像在说话了；"
@@ -521,7 +552,7 @@ class ContextMixin:
             parts.append(
                 "【群聊】这是群聊，群里还有别人，说话的是 " + sender_nick + "。" + _head
                 + " 1~2 句，像群里随口说话；接住他的意思就行，不用面面俱到——"
-                "可以只回半句、一个词、一声“嗯”或“哈哈哈”，别每条都凑成前后两个分句；"
+                "可以写得短，但每句都得有话说；别把他说过的词换个说法再丢回去——那是复读，不是回话；"
                 "别抢话、别辩解、别用恋人语气，也别把别人的问答当成在问自己。"
             )
             # 2026-11-25（用户口径）：群里她分不清「是不是在问她」

@@ -139,7 +139,7 @@ class ReplyMixin:
             system_parts.append("【怎么回】" + self._group_reply_guide(relation, name))
             if target != "bot":
                 system_parts.append(
-                    "【先想再回】这段话不一定是在跟你说话：叫了别人名字、@了别人、或他们在聊自己的事，"
+                    "【判断是不是在跟你说话】这段话不一定是在跟你说话：叫了别人名字、@了别人、或他们在聊自己的事，"
                     "都当普通群聊，可以插一句但别当成在问你，也别辩解、别怼。"
                 )
         system_parts.append("【别主动报日程】你在做什么、在哪只是内在状态；他明确问起才说。")

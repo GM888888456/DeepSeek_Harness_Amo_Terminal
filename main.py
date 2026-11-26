@@ -707,13 +707,9 @@ def typing_delay_ms(text, base=700, per_char=400, cap=20000):
 # 以前守卫按「methods 里有没有 GET」判断，而写接口全被注册成 GET+POST，于是守卫一次都没执行过。
 
 
-try:
-    from .amo_core.tools_ext import ExtToolsMixin
-except Exception:
-    from amo_core.tools_ext import ExtToolsMixin  # type: ignore
 
 
-class HumanCorePlugin(ExtToolsMixin, WebApiMixin, ContextMixin, CommandMixin, TickerMixin, ReplyMixin, SyncMixin, LearnMixin, EconomyMixin, WeatherMixin, OutfitMixin, PresenceMixin, RelationsMixin, MediaMixin, MemoryOpsMixin, VitalsMixin, InfraMixin, ConfigMixin, PersonaMixin, DataBridgeMixin, UsageMixin, ProactiveMixin, SocialMixin, CircleMixin, MiscMixin, Star):
+class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, ReplyMixin, SyncMixin, LearnMixin, EconomyMixin, WeatherMixin, OutfitMixin, PresenceMixin, RelationsMixin, MediaMixin, MemoryOpsMixin, VitalsMixin, InfraMixin, ConfigMixin, PersonaMixin, DataBridgeMixin, UsageMixin, ProactiveMixin, SocialMixin, CircleMixin, MiscMixin, Star):
     def __init__(self, context: Context, config: dict = None):
         super().__init__(context)
         self.config = config or {}
@@ -937,49 +933,6 @@ class HumanCorePlugin(ExtToolsMixin, WebApiMixin, ContextMixin, CommandMixin, Ti
 
 
 
-    @filter.llm_tool(name="amo_buy")
-    async def amo_buy(self, event, item: str = "", kind: str = "") -> str:
-        """给自己买东西：网上查价 → 扣钱。
-
-        不再翻本地目录。衣服、首饰、菜、药、外卖、日用、数码、门票、酒店、机票、打车都能买，
-        价格是网上查到的到手价（含配送费/券），下单后就从账上扣。
-
-        Args:
-            item(string): 要买什么，比如 白色衬衫 / 珍珠发圈 / 番茄 / 酸菜鱼 / 感冒药。
-            kind(string): 可留空。想指定品类就填 cloth/sport/beauty/food/drink/fruit/daily/digital/medical/taxi。
-        """
-        word = str(item or "").strip()
-        if not word:
-            return "没说要买什么。"
-        quote = self._net_quote()
-        if quote is None:
-            return "现在没有报价表了：要买什么，直接按你看到的价报个数（金额），我记账。"
-        q = quote(word, kind=str(kind or ""))
-        if not q:
-            return "网上没搜到「%s」的价钱。" % word
-        name = str(q.get("name") or word)
-        price = round(float(q.get("total") or 0), 2)
-        platform = str(q.get("platform") or "网上")
-        scene = "private" if event.is_private_chat() else "group"
-        result = await self._approved_charge(
-            price, reason="买%s" % name, payee=platform, source="net", scene=scene)
-        if not result.get("ok"):
-            return "没买成：%s" % (result.get("reason") or "钱不够")
-        tail = ""
-        if str(q.get("kind") or "") in ("cloth", "sport") and getattr(self, "wardrobe", None) is not None:
-            try:
-                await self.wardrobe.add(name, scenes=market_set_scenes(name), note="网上买")
-                tail = "，已经放进衣柜"
-            except Exception as exc:
-                logger.debug("[amo] 买完放衣柜失败: %s" % exc)
-        alt = ""
-        others = q.get("alternatives") or []
-        if others:
-            alt = "%s那边 %.2f¥，" % (others[0].get("platform") or "别家",
-                                    float(others[0].get("total") or 0))
-        return "买了%s，%.2f¥（%s下单，%s余额 %.2f¥）%s。" % (
-            name, price, platform, alt, float(result.get("balance") or 0), tail)
-
     #: 他要她换衣服的说法：只用来给事实（在外面/在家、衣柜里有什么），换不换她自己定
     OUTFIT_REQUEST_RE = re.compile(
         r"(?:换上|换成|换一套|换套|换一身|换身|换一件|换件|换一条|换条|去换|给我换|"
@@ -996,47 +949,6 @@ class HumanCorePlugin(ExtToolsMixin, WebApiMixin, ContextMixin, CommandMixin, Ti
 
 
 
-
-
-
-    @filter.llm_tool(name="amo_change_outfit")
-    async def amo_change_outfit(self, event, outfit: str = "") -> str:
-        """换衣服：在衣柜里挑一套换上，从此刻穿到今晚睡觉（日程、面板、照片都会跟着变）。
-
-        Args:
-            outfit(string): 他说的款式或件名，比如 JK / 汉服 / 马面裙；空着就自己挑一套。
-        """
-        engine = getattr(self, "outfits", None)
-        if engine is None:
-            return "衣柜还没准备好，换不了。"
-        text = str(outfit or "").strip()
-        try:
-            activity = self.state.current_activity() or {}
-        except Exception:
-            activity = {}
-        if not at_home(activity):
-            place = str(activity.get("place") or "外面")
-            self._remember_outfit_pending(text, getattr(event, "unified_msg_origin", "") or "")
-            return ("现在在%s，换不了衣服；已经记下「回家换%s」，到家会真的换上。"
-                    % (place, text or "一套"))
-        result = await self._change_outfit_now(text)
-        if result.get("ok"):
-            try:
-                event.amo_outfit_changed = True
-            except Exception:
-                pass
-            return "换好了：%s（从现在穿到今晚睡觉）。" % (result.get("look") or "")
-        if result.get("outside"):
-            self._remember_outfit_pending(text)
-            return str(result.get("reason") or "现在换不了")
-        hint = str(result.get("hint") or "")
-        if hint == "市场没开门":
-            return "衣柜里没有%s，市场也没开门；这次换不了，下次再买、下次再拍。" % (text or "这类衣服")
-        if hint.startswith("市场有"):
-            return "衣柜里没有%s。%s；要买就 amo_buy，买回来再换。" % (text or "这类衣服", hint)
-        if hint:
-            return "衣柜里没有%s，%s；下次再买。" % (text or "这类衣服", hint)
-        return "衣柜里没有%s，这次换不了。" % (text or "这类衣服")
 
 
 
@@ -2125,92 +2037,6 @@ class HumanCorePlugin(ExtToolsMixin, WebApiMixin, ContextMixin, CommandMixin, Ti
 
 
 
-    @filter.llm_tool(name="amo_buy_asset")
-    async def amo_buy_asset(self, event, asset: str = "house", full: bool = False) -> str:
-        """买房或买车（她自己的钱走金融账本；不全款就三成首付、剩下走月供）。
-
-        Args:
-            asset(string): house 房子 / car 车。
-            full(boolean): true=全款，false=首付（默认）。
-        """
-        plugin = self._finance()
-        buyer = getattr(plugin, "buy_asset", None) if plugin is not None else None
-        if not callable(buyer):
-            return "我现在买不了（金融插件没连上）。"
-        result = buyer(asset, bool(full)) or {}
-        name = "房子" if str(result.get("asset") or "").startswith("house") else "车"
-        if not result.get("ok"):
-            if result.get("reason") == "钱不够":
-                return "买不起：%s要 %s，首付 %s，我卡里只有 %s。" % (
-                    name, self._money_text(result.get("price") or 0),
-                    self._money_text(result.get("need") or 0),
-                    self._money_text(result.get("balance") or 0))
-            return "现在买不了%s：%s。" % (name, result.get("reason") or "不知道怎么了")
-        tail = "全款" if full else "首付 %s，月供 %s" % (
-            self._money_text(result.get("paid") or 0), self._money_text(result.get("monthly") or 0))
-        return "%s买好了（%s），卡里还剩 %s。" % (
-            name, tail, self._money_text(result.get("balance") or 0))
-
-    @filter.llm_tool(name="amo_sell_asset")
-    async def amo_sell_asset(self, event, asset: str = "house") -> str:
-        """卖房或卖车换现金（钱进卡里，月供一起清掉）。
-
-        Args:
-            asset(string): house 房子 / car 车。
-        """
-        plugin = self._finance()
-        seller = getattr(plugin, "sell_asset", None) if plugin is not None else None
-        if not callable(seller):
-            return "我现在卖不了（金融插件没连上）。"
-        result = seller(asset) or {}
-        name = "房子" if str(result.get("asset") or "").startswith("house") else "车"
-        if not result.get("ok"):
-            return "卖不了%s：%s。" % (name, result.get("reason") or "不知道怎么了")
-        return "%s卖了 %s，卡里现在 %s。" % (
-            name, self._money_text(result.get("price") or 0),
-            self._money_text(result.get("balance") or 0))
-
-    @filter.llm_tool(name="amo_buy_device")
-    async def amo_buy_device(self, event, kind: str = "phone") -> str:
-        """换手机或电脑（她自己的钱，走金融账本）。
-
-        Args:
-            kind(string): phone 换手机 / pc 换电脑。
-        """
-        await self._ensure_ready()
-        data = self._devices()
-        wish = self._device_wish()
-        kind = "pc" if str(kind or "").strip().lower() in ("pc", "电脑", "laptop") else "phone"
-        if not wish or wish.get("kind") != kind:
-            # 没到欲望线也允许，但按现价算
-            item = data.get(kind) or {}
-            wish = {"kind": kind, "current": item,
-                    "model": random.choice(self.PC_POOL if kind == "pc" else self.PHONE_POOL),
-                    "price": float(item.get("price") or (6999 if kind == "pc" else 5499))}
-        name = "手机" if kind == "phone" else "电脑"
-        price = round(float(wish.get("price") or 0), 2)
-        rid = "device:%s:%s" % (kind, today_str())
-        result = await self.charge(price, reason="换%s" % name, payee=wish.get("model") or "数码店",
-                                   request_id=rid, source="device",
-                                   detail="%s → %s" % ((wish.get("current") or {}).get("model") or "旧的",
-                                                       wish.get("model")))
-        if not result.get("ok"):
-            return "现在换不了%s：%s。" % (name, result.get("reason") or "钱不够")
-        data[kind] = {"model": wish.get("model"), "since": today_str(), "price": price}
-        try:
-            self.db.kv_set("devices", data)
-            self.db.kv_set("device_wish", {})
-            self.db.kv_set("device_wish_day", "")
-        except Exception:
-            pass
-        try:
-            self.feel(FeelEvent.MONEY_TIGHT)
-        except Exception:
-            pass
-        return "换了新%s：%s（¥%.0f，余额 ¥%.0f）。" % (
-            name, wish.get("model"), price, float(result.get("balance") or 0))
-
-
     @staticmethod
     def _meal_slot(item: dict) -> bool:
         """日程这一格是不是在吃饭：分类不一定对，按活动词兜底。"""
@@ -2614,6 +2440,53 @@ class HumanCorePlugin(ExtToolsMixin, WebApiMixin, ContextMixin, CommandMixin, Ti
         if hits:
             logger.info("[amo] 🧽 送模型前洗掉 %d 段 SPEAK 协议行" % hits)
 
+    def _flatten_self_history(self, req):
+        """她自己以前的回复只留最近 2 条原文，更早的压成一句。
+
+        2026-11-26（用户口径：根治八股）：历史回灌是她学自己的正反馈——模型会顺着
+        自己前几轮的句式往下说。事实都在记忆/日程/账本里，砍掉原文不影响她记事。
+        """
+        try:
+            ctxs = getattr(req, "contexts", None) or []
+        except Exception:
+            return
+
+        def _short(t):
+            t = str(t or "").strip()
+            if not t:
+                return t
+            if len(t) > 6:
+                return "（上一轮说过：" + t[:6] + "…）"
+            return "（上一轮说过：" + t + "）"
+
+        try:
+            idx = [i for i, m in enumerate(ctxs)
+                   if isinstance(m, dict) and m.get("role") == "assistant"]
+            keep = set(idx[-2:])
+            cut = 0
+            for i in idx:
+                if i in keep:
+                    continue
+                m = ctxs[i]
+                c = m.get("content")
+                if isinstance(c, str):
+                    if c.strip() and not c.startswith("（上一轮说过"):
+                        m["content"] = _short(c)
+                        cut += 1
+                elif isinstance(c, list):
+                    for part in c:
+                        if not isinstance(part, dict) or part.get("type") != "text":
+                            continue
+                        old = part.get("text") or ""
+                        if old.strip() and not old.startswith("（上一轮说过"):
+                            part["text"] = _short(old)
+                            cut += 1
+                        break
+            if cut:
+                logger.debug("[amo] ✂️ 压掉 %d 条自己的旧回复（只留最近 2 条原文）" % cut)
+        except Exception as exc:
+            logger.debug("[amo] 历史压缩失败: %s" % exc)
+
     @filter.on_llm_request()
     async def on_llm_request(self, event: AstrMessageEvent, req):
         try:
@@ -2625,6 +2498,7 @@ class HumanCorePlugin(ExtToolsMixin, WebApiMixin, ContextMixin, CommandMixin, Ti
             await self._caption_images(event, req)
             self._trim_contexts(req)
             self._scrub_speak_contexts(req)
+            self._flatten_self_history(req)
             context_text = await self._dynamic_context(event)
             # 只走官方推荐的 extra_user_content_parts（临时 part）注入。
             # 绝不能改 req.system_prompt：那里放每轮都变的内容会打散系统提示词前缀，
@@ -2651,7 +2525,7 @@ class HumanCorePlugin(ExtToolsMixin, WebApiMixin, ContextMixin, CommandMixin, Ti
                 wish = self.db.kv_get("device_wish", {}) or {}
                 if isinstance(wish, dict) and wish.get("model"):
                     body += ("\n【想换设备】你最近很想换%s：想要 %s（大概 ¥%.0f）。"
-                             "聊到手机/电脑/花钱时可以说出来；真要买就调用 amo_buy_device。"
+                             "聊到手机/电脑/花钱时可以说出来。"
                              % ("手机" if wish.get("kind") == "phone" else "电脑",
                                 wish.get("model"), float(wish.get("price") or 0)))
             except Exception:
@@ -2947,332 +2821,6 @@ class HumanCorePlugin(ExtToolsMixin, WebApiMixin, ContextMixin, CommandMixin, Ti
             await self.heartflow.on_after_message_sent(event)
         except Exception as exc:
             logger.debug("[amo] 心流发送后状态更新失败: %s" % exc)
-
-    @filter.llm_tool(name="amo_eat")
-    async def amo_eat(self, event, dish: str = "", method: str = "auto") -> str:
-        """吃东西、喝水、买菜。饿了想买点吃的、想自己做饭、想喝点什么，都走这个工具。
-
-        Args:
-            dish(string): 吃什么/喝什么/买什么，按你人格里的口味和当下心情从菜单里挑（别默认某一道菜，也别总点同一样）。
-            method(string): auto=按今日菜价自动选做饭/外卖（默认）/ order=买现成的 / cook=自己做 / drink=喝水喝饮料 / grocery=只买食材。
-        """
-        plugin = self._finance()
-        propose = getattr(plugin, "food_propose", None) if plugin is not None else None
-        if not callable(propose):
-            logger.debug("[amo] amo_eat 调用失败：金融插件没连上")
-            return "我现在没法买东西（金融插件没连上）。"
-        logger.debug("[amo] amo_eat 调用：%s / %s" % (str(dish or "").strip() or "?", str(method or "order")))
-        try:
-            result = propose(str(dish or "").strip(), str(method or "order").strip()) or {}
-        except Exception as exc:
-            logger.debug("[amo] amo_eat 异常: %s" % exc)
-            return "买不了，等会儿再说。"
-        if not result.get("ok"):
-            logger.debug("[amo] amo_eat 没成：%s %s" % (
-                result.get("code") or "?", result.get("reason") or ""))
-        if not result.get("ok"):
-            code = str(result.get("code") or "")
-            switched = str(result.get("switched") or "")
-            if code == "market_closed":
-                return "菜市场这个点关门了，只能点外卖。"
-            if code == "no_money":
-                return "买不起：%s 要 %.1f 元，还差 %.1f 元。" % (
-                    result.get("dish") or dish, float(result.get("price") or 0),
-                    float(result.get("short") or 0))
-            if code == "not_home":
-                return ("在外面做不了%s，得回家或点外卖。" % (result.get("dish") or dish)
-                        + ("（%s）" % switched if switched else ""))
-            if code == "need_grocery":
-                miss = "、".join(
-                    "%s 缺 %.1f" % (m.get("item"), float(m.get("need") or 0) - float(m.get("have") or 0))
-                    for m in (result.get("missing") or []))
-                return (((switched + "；") if switched else "")
-                        + "家里没食材，做不了：%s。要先去买（method=grocery）。" % miss)
-            return "没成：%s" % (result.get("reason") or "不知道怎么了")
-        dish_name = str(result.get("dish") or dish)
-        mode = str(result.get("method") or method)
-        try:
-            self.db.kv_set("last_meal", {"ts": now_ts(), "dish": dish_name, "method": mode})
-        except Exception:
-            pass
-        venv = result.get("vitals") or {}
-        if mode == "cook":
-            head = "自己做了%s，食材从家里拿的" % dish_name
-        elif mode == "drink":
-            head = "喝了%s" % dish_name
-        elif mode == "grocery":
-            head = "去买了食材，一共 %.1f 元" % float(result.get("total") or 0)
-        else:
-            head = "吃了%s，花了 %.1f 元" % (dish_name, float(result.get("price") or 0))
-        tail = []
-        if venv.get("satiety") is not None:
-            tail.append("饱食度 %.0f" % float(venv.get("satiety") or 0))
-        if result.get("balance") is not None:
-            tail.append("余额 %.0f 元" % float(result.get("balance") or 0))
-        switched = str(result.get("switched") or "")
-        note = ("（%s）" % switched) if switched else ""
-        try:
-            self.feel(FeelEvent.MEAL)
-        except Exception:
-            pass
-        self._sync_hunger_from_vitals()
-        return head + ("（" + "，".join(tail) + "）" if tail else "") + note + "。"
-
-    @filter.llm_tool(name="amo_futures")
-    async def amo_futures(self, event, code: str = "", action: str = "open",
-                          contracts: int = 1, side: str = "long") -> str:
-        """开/平期货仓位（内盘主力连续，保证金交易，随时可平）。
-
-        Args:
-            code(string): 合约，例如 RB（螺纹钢）、I（铁矿）、AU（沪金）、SC（原油）、IF（沪深300）
-            action(string): open=开仓（默认）/ close=平仓
-            contracts(number): 手数，默认 1
-            side(string): long=做多（默认）/ short=做空
-        """
-        plugin = self._finance()
-        if plugin is None:
-            return "我现在没法做期货（金融插件没连上）。"
-        code = str(code or "").strip().upper() or "RB"
-        try:
-            if str(action or "open").strip().lower() in ("close", "平仓", "sell"):
-                call = getattr(plugin, "futures_close", None)
-                result = call(code, int(contracts or 0)) if callable(call) else {}
-                if not result.get("ok"):
-                    return "平不了：%s" % (result.get("reason") or "不知道怎么了")
-                return "平了 %s %d 手，%s %.0f 元（保证金退回，余额 %.0f）。" % (
-                    result.get("name") or code, int(result.get("contracts") or 0),
-                    "赚" if float(result.get("pnl") or 0) >= 0 else "亏",
-                    abs(float(result.get("pnl") or 0)), float(result.get("balance") or 0))
-            call = getattr(plugin, "futures_buy", None)
-            result = call(code, int(contracts or 1), "short" if str(side).lower() in ("short", "空") else "long") if callable(call) else {}
-            if not result.get("ok"):
-                return "开不了：%s" % (result.get("reason") or "不知道怎么了")
-            return "开了 %s %s %d 手，保证金 %.0f 元（余额 %.0f，储蓄 %.0f）。" % (
-                result.get("name") or code,
-                "空" if str(result.get("side")) == "short" else "多",
-                int(result.get("contracts") or 0), float(result.get("margin") or 0),
-                float(result.get("balance") or 0), float(result.get("savings") or 0))
-        except Exception as exc:
-            logger.debug("[amo] amo_futures 异常: %s" % exc)
-            return "期货没成，等会儿再说。"
-
-    @filter.llm_tool(name="amo_leverage")
-    async def amo_leverage(self, event, times: int = 1) -> str:
-        """调整你的炒股杠杆倍数（1–100 倍，1 倍=不借钱）。
-
-        杠杆是你自己的决定：倍数越大，涨的时候赚得越多，跌的时候离强平越近。
-        10 倍杠杆下标的跌约 5% 就会被强制平仓，别一上来就顶格。
-        以前倍数只能在后台上改（还被设成 100 倍），等于你根本不敢下手。
-
-        Args:
-            times(number): 杠杆倍数，1–100。1=不借钱；3~10 是常见区间；20 以上很危险
-        """
-        plugin = self._finance()
-        if plugin is None:
-            return "我现在没法调杠杆（金融插件没连上）。"
-        try:
-            value = int(float(times or 0))
-        except Exception:
-            return "倍数得是个数字，比如 3 或 10。"
-        value = max(1, min(100, value))
-        call = getattr(plugin, "set_leverage", None)
-        if not callable(call):
-            return "金融插件没有杠杆接口，先别动。"
-        result = call(value)
-        if not result.get("ok"):
-            return "杠杆没调成：%s" % (result.get("reason") or "不知道怎么了")
-        lev = int(result.get("leverage") or value)
-        if lev <= 1:
-            return "杠杆关了（1 倍，不借钱），只花自己有的钱。"
-        hint = "，这个倍数跌 %.1f%% 就强平，你自己掂量" % (100.0 / lev)
-        return "杠杆调到 %d 倍了%s。" % (lev, hint)
-
-    @filter.llm_tool(name="amo_repay")
-    async def amo_repay(self, event, amount: float = 0) -> str:
-        """还他钱。你欠他钱、手里又有点钱的时候，主动转给他（记成还款，不是消费）。
-
-        Args:
-            amount(number): 还多少；0 或不填 = 能还多少还多少。
-        """
-        plugin = self._finance()
-        payer = getattr(plugin, "repay", None) if plugin is not None else None
-        if not callable(payer):
-            return "我现在没法转账（金融插件没连上）。"
-        try:
-            value = float(amount or 0)
-            logger.debug("[amo] amo_repay 调用：%s" % ("全部" if value <= 0 else "%.0f" % value))
-            result = payer(value if value > 0 else 10 ** 9, notify=False) or {}
-        except Exception as exc:
-            logger.debug("[amo] amo_repay 失败: %s" % exc)
-            return "转账没成功，等会儿再说。"
-        if not result.get("ok"):
-            logger.debug("[amo] amo_repay 没成：%s" % (result.get("reason") or "没有可还的金额"))
-            return "还不了：%s" % (result.get("reason") or "没有可还的金额")
-        try:
-            event.amo_repay_done = True
-            self.db.kv_set("repay_pending", {})
-        except Exception:
-            pass
-        self._sync_finance()
-        paid = float(result.get("paid") or 0)
-        remaining = float(result.get("remaining") or 0)
-        try:
-            note = getattr(plugin, "money_repay", lambda: {})() or {}
-            if note.get("ts"):
-                # 已经在这里发过了，别再让 tick 重复发一遍
-                self.db.kv_set("last_repay_notified_ts", note["ts"])
-        except Exception:
-            pass
-        # 还款必须在聊天里看得见：直接发「[还款]金额 + 一句话」，
-        # 不能只把结果当工具返回值塞回给模型（模型常常一句都不提）。
-        text = self._repay_message(paid, remaining)
-        if text:
-            umo = ""
-            try:
-                if event.is_private_chat():
-                    umo = event.unified_msg_origin
-            except Exception:
-                umo = ""
-            umo = umo or self._first_private_umo() or self._last_umo
-            if umo:
-                try:
-                    await self.context.send_message(umo, text)
-                    logger.debug("[amo] 还款回执已发：[还款]%s（还欠 %s）"
-                                % (self._money_text(paid), self._money_text(remaining)))
-                except Exception as exc:
-                    logger.debug("[amo] 还款回执发送失败: %s" % exc)
-        return ("还款回执已经发出去了（[还款]%s）。这轮不用再报一遍数字，"
-                "像平常一样说一句就行，别重复金额。"
-                % self._money_text(paid))
-
-    @filter.llm_tool(name="amo_recall_history")
-    async def amo_recall_history(self, event, when: str = "", keyword: str = "") -> str:
-        """翻以前的聊天记录。想不起某天跟他说过什么、他答应过什么、某件事的前因时用。
-
-        Args:
-            when(string): 时间说法，例如「昨天」「前天下午」「11月20日」；留空就取最近几条。
-            keyword(string): 关键词，只想找跟某件事有关的就填，留空表示不筛。
-        """
-        try:
-            import time as _time
-
-            mem = self._data_mem()
-            if mem is None:
-                return "记忆库没连上，翻不了。"
-            res = await mem.recall_messages(
-                self._data_bot_id(), str(when or ""),
-                umo=event.unified_msg_origin, limit=60,
-            )
-            rows = (res or {}).get("messages") or []
-            kw = str(keyword or "").strip()
-            if kw:
-                rows = [r for r in rows if kw in str(r.get("content") or "")]
-            if not rows:
-                return "那段我没找到印象。"
-            lines = []
-            for r in rows[-30:]:
-                who = "他" if str(r.get("role")) == "user" else "我"
-                ts = int(r.get("created_at") or 0)
-                hm = _time.strftime("%m-%d %H:%M", _time.localtime(ts)) if ts else ""
-                lines.append("%s %s：%s" % (hm, who, str(r.get("content") or "")[:200]))
-            label = str((res or {}).get("label") or "")
-            return ("（%s）\n" % label if label else "") + "\n".join(lines)
-        except Exception as exc:
-            logger.debug("[amo] amo_recall_history 失败: %s" % exc)
-            return "翻记录的时候出错了。"
-
-    @filter.llm_tool(name="schedule_view")
-    async def schedule_view(self, event, day: str = "today") -> str:
-        """回想自己某一天打算做什么、做过什么。想不起今天或明天的安排时用。
-
-        Args:
-            day(string): today / tomorrow / yesterday，默认今天。
-        """
-        try:
-            import datetime as _dt
-
-            which = str(day or "today").strip().lower()
-            today = _clock_now().date()
-            if which == "tomorrow":
-                target = today + _dt.timedelta(days=1)
-            elif which == "yesterday":
-                target = today - _dt.timedelta(days=1)
-            else:
-                target = today
-            key = target.isoformat()
-            items = self.state.schedule.get(key) or self.db.get_schedule(key) or []
-            if not items:
-                return "那天还没有安排。"
-            dt_info = self.db.kv_get("day_type_" + key, None) or {}
-            lines = []
-            if isinstance(dt_info, dict) and dt_info.get("name"):
-                lines.append("今天是%s。" % dt_info["name"])
-            for it in items:
-                start = str(it.get("start") or "")
-                end = str(it.get("end") or "")
-                act = str(it.get("activity") or "").strip()
-                place = str(it.get("place") or "").strip()
-                if not act:
-                    continue
-                outfit = str(it.get("outfit") or "").strip()
-                lines.append("%s-%s %s%s%s" % (
-                    start, end, act,
-                    ("（%s）" % place) if place else "",
-                    ("，穿" + outfit) if outfit else ""))
-            return "\n".join(lines[:24]) or "那天还没有安排。"
-        except Exception as exc:
-            logger.debug("[amo] schedule_view 失败: %s" % exc)
-            return "想不起来…"
-
-    @filter.llm_tool(name="schedule_edit")
-    async def schedule_edit(self, event, time: str, activity: str, place: str = "") -> str:
-        """改自己今天某一段时间在做什么。比如想提前回家、临时出门一趟。
-
-        Args:
-            time(string): 要改的那个时间点，例如「15:00」。
-            activity(string): 改成做什么，一句话。
-            place(string): 地点，留空就沿用原来的。
-        """
-        try:
-            key = _clock_now().date().isoformat()
-            items = self.state.schedule.get(key) or self.db.get_schedule(key) or []
-            if not items:
-                return "今天还没有日程，改不了。"
-            want = str(time or "").strip()
-            hit = None
-            for it in items:
-                if str(it.get("start") or "") == want[:5]:
-                    hit = it
-                    break
-            if hit is None:
-                for it in items:
-                    s0 = str(it.get("start") or "")
-                    e0 = str(it.get("end") or "")
-                    if s0 and e0 and s0 <= want[:5] < e0:
-                        hit = it
-                        break
-            if hit is None:
-                return "那个时间点找不到对应的安排。"
-            hit["activity"] = str(activity or "").strip()[:60] or hit.get("activity")
-            if str(place or "").strip():
-                hit["place"] = str(place).strip()[:30]
-            # 改了活动/地点就重新配衣服，避免「在家穿通勤装」这种对不上
-            outfits = getattr(self, "outfits", None)
-            if outfits is not None:
-                try:
-                    persona = await self.llm.persona(event.unified_msg_origin) if self.llm else ""
-                except Exception:
-                    persona = ""
-                hit["outfit"] = outfits.for_activity(hit, key, persona)
-            self.state.schedule[key] = items
-            self.db.kv_set("schedule", self._sanitize_schedule(self.state.schedule))
-            self.db.save_schedule(key, items)
-            logger.debug("[amo] 日程已改: %s -> %s" % (hit.get("start"), hit.get("activity")))
-            return "改好了，%s 那会儿我就在%s。" % (
-                hit.get("start"), str(hit.get("activity") or "")[:20])
-        except Exception as exc:
-            logger.debug("[amo] schedule_edit 失败: %s" % exc)
-            return "没改成…"
 
     async def _split_multiline_reply(self, event, text):
         """分段发送：**一句一句地**发，每句都按它自己的字数等一遍。
@@ -3738,6 +3286,78 @@ class HumanCorePlugin(ExtToolsMixin, WebApiMixin, ContextMixin, CommandMixin, Ti
                     text = polish_generic(text)
                 except Exception as _vg_exc:
                     logger.debug("[amo] 出口润色失败，用原文: %s" % _vg_exc)
+            # 2026-11-26（用户口径：润色！）：出口校验，半截话/复读/空转就不发。
+            # 不重写、不额外调模型：群里沉默好过烂话，私聊换一句极短追问。
+            try:
+                try:
+                    from .amo_core.polish import check_broken
+                except Exception:
+                    from amo_core.polish import check_broken  # type: ignore
+                _inc = ""
+                try:
+                    _inc = str(getattr(event, "message_str", "") or "")
+                except Exception:
+                    _inc = ""
+                _bad_reason = check_broken(text, _inc)
+                if _bad_reason:
+                    _priv = False
+                    try:
+                        _priv = bool(event.is_private_chat())
+                    except Exception:
+                        _priv = False
+                    if _priv:
+                        logger.info("[amo] 出口拦截（%s），私聊换短句：%s"
+                                    % (_bad_reason, truncate(text, 30)))
+                        text = random.choice(["嗯？", "啊？", "你说啥"])
+                    else:
+                        logger.info("[amo] 出口拦截（%s），这条不发：%s"
+                                    % (_bad_reason, truncate(text, 30)))
+                        result.chain = []
+                        return
+            except Exception as _pl_exc:
+                logger.debug("[amo] 出口校验失败，照常发: %s" % _pl_exc)
+            # 2026-11-26（用户口径：根治八股）：空评价句 → 重写一次，点出具体东西 + 给态度。
+            try:
+                try:
+                    from .amo_core.polish import check_broken as _cb2, is_vague as _vague
+                except Exception:
+                    from amo_core.polish import check_broken as _cb2, is_vague as _vague  # type: ignore
+                _src_in = ""
+                try:
+                    _src_in = str(getattr(event, "message_str", "") or "")
+                except Exception:
+                    _src_in = ""
+                if _vague(text, _src_in):
+                    _act = _plc = ""
+                    try:
+                        _snap = self.state.snapshot() if self.state else {}
+                        _av = _snap.get("activity") or {}
+                        _act = str(_av.get("activity") or "")
+                        _plc = str(_av.get("place") or "")
+                    except Exception:
+                        pass
+                    _sys = "你是中文口语改写器。只输出一句改写后的中文，不要解释，不要引号。"
+                    _ask = (
+                        "她刚才要说的是：「%s」\n"
+                        "对方说的是：「%s」\n"
+                        "她现在正在：%s（%s）\n"
+                        "这句只是空评价，没指到任何具体东西。改写成正常人会说的一句："
+                        "必须点出一样具体的东西（她在做的事、对方提到的那个东西、时间、地点、数字），"
+                        "并且把她自己的态度说清楚（喜欢/嫌烦/想要/不想）。"
+                        "不许用「这」「那」开头，不许只是评价，20 字以内，只输出这一句。"
+                        % (truncate(text, 40), truncate(_src_in, 60), _act or "待着", _plc or "家")
+                    )
+                    _new = await self.llm.chat(event.unified_msg_origin, _sys, _ask,
+                                               limit=40, kind="polish")
+                    _new = str(_new or "").strip()
+                    for _ch in ("「", "」", "『", "』", '"', "'", " "):
+                        _new = _new.strip(_ch)
+                    if _new and not _cb2(_new, _src_in) and not _vague(_new, _src_in):
+                        logger.info("[amo] ✍️ 八股重写：%s → %s"
+                                    % (truncate(text, 22), truncate(_new, 22)))
+                        text = _new
+            except Exception as _vg2:
+                logger.debug("[amo] 八股重写失败，用原文: %s" % _vg2)
             # REPLY_GATE 2026-11-23：同群只回最新一条；异群错峰；点名优先
             try:
                 try:
