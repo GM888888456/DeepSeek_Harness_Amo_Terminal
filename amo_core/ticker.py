@@ -926,6 +926,10 @@ class TickerMixin:
         if now - self._proactive_last >= self.cfg_int("proactive_check_seconds", 300):
             self._proactive_last = now
             await self._maybe_proactive()
+            try:
+                await self._anniversary_maybe_send()
+            except Exception as _ann_exc:
+                logger.debug("[amo] 纪念日检查失败: %s" % _ann_exc)
         if now - self._last_ritual >= 60:
             await self._maybe_rituals()
 
@@ -1318,6 +1322,71 @@ class TickerMixin:
             # 所有平台都失败：清掉 checked 让下一轮重试（原来也是每轮重试）。
             self.db.kv_set("weather_alert_checked", "")
             logger.warning("[amo] 天气提醒所有平台都失败: %s" % umos)
+
+    async def _anniversary_maybe_send(self):
+        """纪念日当天主动发一句（预设台词，一天一次，不调模型）。"""
+        try:
+            try:
+                from ..world import dates as _dates
+            except Exception:
+                from world import dates as _dates  # type: ignore
+        except Exception:
+            return
+        mark = _dates.today_mark()
+        if not mark:
+            return
+        key = "anniv_sent:" + str(mark.get("date") or "")
+        try:
+            if self.db.kv_get(key, False):
+                return
+        except Exception:
+            pass
+        window = str(mark.get("window") or "09:00-22:00")
+        try:
+            if not quiet_now(window):      # 只在时段内发
+                return
+        except Exception:
+            pass
+        try:
+            profiles = self.db.proactive_profiles(limit=20)
+        except Exception:
+            return
+        lovers = [p for p in profiles if str(p.get("relation") or "") == "相恋"]
+        profile = (lovers or profiles or [None])[0]
+        if not profile:
+            return
+        umo = ""
+        try:
+            umo = self._pick_proactive_umo(profile) or ""
+        except Exception:
+            umo = ""
+        text = str(mark.get("line") or "").strip()
+        if not text or not umo:
+            return
+        for candidate in self._proactive_candidates(profile, umo):
+            try:
+                ok = await self._send_to_umo(candidate, text)
+            except Exception:
+                ok = False
+            if not ok:
+                continue
+            try:
+                self.db.kv_set(key, True)
+                self.db.bump_proactive(profile.get("uid"))
+                self.db.log_proactive(profile.get("uid"), "anniversary", text)
+                self._set_proactive_pending(profile.get("uid"), "anniversary", text, umo=candidate)
+            except Exception:
+                pass
+            try:
+                uid = self._primary_uid()
+                if uid:
+                    await self._write_memory_checked(
+                        uid, "今天是%s：我说了「%s」" % (mark.get("name"), text),
+                        kind="event", tier=0)
+            except Exception:
+                pass
+            logger.info("[amo] 纪念日主动（%s）：%s" % (mark.get("name"), text[:24]))
+            return
 
     async def _maybe_proactive(self):
         quiet = quiet_now(self.cfg_str("quiet_hours", "23:30-07:30"))

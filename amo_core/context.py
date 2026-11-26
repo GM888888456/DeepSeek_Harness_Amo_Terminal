@@ -249,6 +249,17 @@ class ContextMixin:
             if not text:
                 return ""
             blocks = []
+            # 纪念日：当天给一行，她自己会带出来
+            try:
+                try:
+                    from ..world import dates as _dates
+                except Exception:
+                    from world import dates as _dates  # type: ignore
+                _mark_line = _dates.hint()
+                if _mark_line:
+                    blocks.append(_mark_line)
+            except Exception:
+                pass
             try:
                 try:
                     from ..world import events as _we

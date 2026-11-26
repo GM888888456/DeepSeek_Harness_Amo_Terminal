@@ -108,6 +108,22 @@ def build():
                     w("| Q%d | %s | %s |\n" % (q, e.get("text", ""), eff))
             w("\n")
 
+    # ---- 纪念日 ----
+    try:
+        try:
+            from . import dates as dt
+        except Exception:
+            dt = None
+        if dt is not None:
+            w("## 纪念日（她会主动提）\n\n")
+            w("| 日子 | 名称 | 语气 | 她自己的说法 |\n|---|---|---|---|\n")
+            for m in dt.all_marks():
+                w("| %s | %s | %s | %s |\n" % (m["mmdd"], m["name"], m.get("tone", ""),
+                                              m["line"]))
+            w("\n")
+    except Exception:
+        pass
+
     # ---- 族谱与宅邸 ----
     try:
         try:
