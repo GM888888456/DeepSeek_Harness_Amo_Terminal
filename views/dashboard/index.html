@@ -402,18 +402,20 @@
   
     /* 世界「眼下」覆盖层：双击照片打开 */
     .world-overlay {
-      position: fixed; inset: 0; z-index: 9999; padding: 20px;
-      display: flex; align-items: center; justify-content: center;
-      background: rgba(24, 22, 30, 0.55);
-      backdrop-filter: blur(2px);
+      position: fixed; inset: 0; z-index: 9999; padding: 0;
+      display: flex; align-items: stretch; justify-content: center;
+      background: var(--bg, #f4f4f6);
+      overflow: hidden; touch-action: pan-y;
     }
     .world-overlay[hidden] { display: none; }
     .world-overlay-box {
-      width: min(560px, 100%); max-height: 80vh; overflow: auto;
+      /* 和面板内容同一列宽，铺满高度：看起来就是一页，而不是浮窗 */
+      width: min(560px, 100%); height: 100%; max-height: none;
+      overflow-y: auto; overflow-x: hidden; touch-action: pan-y;
       background: var(--card, #ffffff); color: var(--text, #2b2b31);
-      border: 1px solid var(--line, rgba(128,128,128,.22));
-      border-radius: 18px; padding: 16px 18px 18px;
-      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.22);
+      border: 0; border-radius: 0; box-shadow: none;
+      padding: 18px 18px 28px;
+      -webkit-overflow-scrolling: touch;
     }
     .world-overlay-box .label { font-size: 15px; }
     .world-overlay-box #worldToday div { margin-top: 4px; line-height: 1.5; }
@@ -1678,7 +1680,6 @@
     document.addEventListener("click", function (ev) {
       const target = ev.target;
       if (!target) return;
-      if (target.id === "worldIdPhoto") { closeWorldOverlay(); openIdPhotoDialog(); return; }
       if (target.id === "worldOverlayClose") { closeWorldOverlay(); return; }
       if (target.id === "worldOverlay") { closeWorldOverlay(); }
     });
@@ -3117,10 +3118,7 @@
         <div class="label">眼下</div>
         <div class="sub" id="worldDay">—</div>
       </div>
-      <div style="display:flex;gap:8px">
-        <button type="button" id="worldIdPhoto">证件照</button>
-        <button type="button" id="worldOverlayClose">关闭</button>
-      </div>
+      <button type="button" id="worldOverlayClose">关闭</button>
     </div>
     <div class="sub" style="margin-top:6px">今天外面发生的事，和她跟各方的观感（0~100，越低越难办事）。</div>
     <div id="worldToday" class="sub" style="margin-top:10px">加载中…</div>
