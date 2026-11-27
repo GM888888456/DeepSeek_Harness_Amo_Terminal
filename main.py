@@ -2980,6 +2980,30 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                     text = polish_generic(text)
                 except Exception as _vg_exc:
                     logger.debug("[amo] 出口润色失败，用原文: %s" % _vg_exc)
+            # 口癖检查（规范第八节，纯本地、最小修改）：同一条开场词连着用就去掉，
+            # 不换成别的语气词、不改句子；顺手记一下动作括号/星号旁白这类形态问题。
+            try:
+                try:
+                    from .amo_core.expression_guard import OpeningGuard, diagnose
+                except Exception:
+                    from amo_core.expression_guard import OpeningGuard, diagnose  # type: ignore
+                _guard = getattr(self, "_opening_guard", None)
+                if _guard is None:
+                    _guard = OpeningGuard()
+                    self._opening_guard = _guard
+                _guard_umo = ""
+                try:
+                    _guard_umo = str(getattr(event, "unified_msg_origin", "") or "")
+                except Exception:
+                    _guard_umo = ""
+                text, _guard_note = _guard.check(_guard_umo, text)
+                if _guard_note:
+                    logger.info("[amo] 口癖检查：%s -> %s" % (_guard_note, truncate(text, 30)))
+                _shape = diagnose(text)
+                if _shape:
+                    logger.debug("[amo] 出口形态：%s" % "、".join(_shape))
+            except Exception as _eg_exc:
+                logger.debug("[amo] 口癖检查失败，用原文: %s" % _eg_exc)
             # 2026-11-26（用户口径：润色！）：出口校验，半截话/复读/空转就不发。
             # 不重写、不额外调模型：群里沉默好过烂话，私聊换一句极短追问。
             try:
@@ -3021,7 +3045,9 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                     _src_in = str(getattr(event, "message_str", "") or "")
                 except Exception:
                     _src_in = ""
-                if _vague(text, _src_in):
+                _polish_rate = self.cfg_float("polish_model_rate", 1.0)
+                _do_rewrite = _vague(text, _src_in) and random.random() < max(0.0, min(1.0, _polish_rate))
+                if _do_rewrite:
                     _act = _plc = ""
                     try:
                         _snap = self.state.snapshot() if self.state else {}

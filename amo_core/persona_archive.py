@@ -44,21 +44,37 @@ RESIDENT_RULES = (
     "固定身份优先于任何生成内容；不知道的就说不知道，不编造经历、执行结果或现实操作。"
 )
 
-#: 问句关键词 → 字段。左边是用户可能说的词，右边是档案字段名。
+#: 强命中：直接说到字段本身（权重 2）。
 _ALIASES = {
     "姓名": ("叫什么", "名字", "姓名", "你是谁", "你叫"),
     "生日": ("生日", "出生", "多大", "几岁", "属什么"),
-    "体貌": ("身高", "体重", "多高", "多重", "长什么样", "好看", "体貌"),
-    "职业": ("做什么工作", "干什么工作", "职业", "工作", "上班", "总裁", "集团", "公司", "管什么"),
-    "资产": ("资产", "房子", "庄园", "别墅", "车", "宝马", "开什么", "多少钱", "有钱", "账上"),
-    "丈夫": ("丈夫", "老公", "阿墨", "墨辞烟", "结婚", "婚"),
-    "家里": ("家里", "家里背景", "长辈", "家族", "爸妈", "父母", "亲戚", "背景"),
+    "体貌": ("身高", "体重", "多高", "多重", "长什么样", "体貌"),
+    "职业": ("做什么工作", "干什么工作", "职业", "工作", "总裁", "集团", "公司", "管什么"),
+    "资产": ("资产", "房子", "庄园", "别墅", "开什么", "多少钱", "账上"),
+    "丈夫": ("丈夫", "老公", "阿墨", "墨辞烟", "结婚"),
+    "家里": ("家里", "家里背景", "长辈", "家族", "爸妈", "父母", "亲戚"),
     "性子": ("性格", "性子", "脾气", "傲娇"),
     "说话": ("说话", "语气", "口音", "打字"),
     "真实小矛盾": ("矛盾",),
     "关系边界": ("边界", "隐私", "能不能说"),
     "行为规则": ("规则",),
 }
+
+#: 弱命中：绕着说、口语问法（权重 1）。规范 4.2：同义说法也要能命中。
+_WEAK_ALIASES = {
+    "姓名": ("大名", "芳名", "怎么称呼", "怎么叫"),
+    "生日": ("哪年生", "年纪", "多大岁数"),
+    "体貌": ("个子", "长相", "胖", "瘦", "好不好看"),
+    "职业": ("干什么的", "做啥的", "混哪行", "上班", "拍板", "说了算", "做主", "谁管", "当什么"),
+    "资产": ("家底", "身家", "有钱", "存款", "几套房", "什么车", "阔"),
+    "丈夫": ("对象", "先生", "领证", "另一半", "你家那位", "口子", "当家的"),
+    "家里": ("老家", "家人", "底子", "背景", "伯", "叔", "姨", "爷爷", "奶奶"),
+    "性子": ("什么脾气", "好相处", "难不难搞"),
+    "真实小矛盾": ("嘴硬", "别扭"),
+}
+
+#: 命中字段最多注入几段（别一次把半本档案灌进去）。
+MAX_ANSWER_FIELDS = 3
 
 #: 明确纠正/否定的记忆优先级高于推断（规范 4.5），留给上层模块标注用。
 SOURCE_LABELS = ("user_template", "user_correction", "user_statement", "inference", "model")
@@ -86,24 +102,40 @@ class PersonaArchive:
         return list(self.fields.keys())
 
     # ---------------------------------------------------------------- 检索
-    def match(self, text: str) -> list:
-        """这句话在问哪些字段：按字段出现顺序返回 `[(字段, 命中的词), ...]`。"""
+    def match_scored(self, text: str) -> list:
+        """这句话在问哪些字段，带权重：`[(字段, 命中的词, 权重), ...]`，按权重降序。
+
+        权重 2 = 直接说到字段/强同义词；1 = 口语绕说（规范 4.2 的关键词层）。
+        """
         value = str(text or "")
         if not value:
             return []
         hits = []
-        for name in self.fields:
+        for order, name in enumerate(self.fields):
+            best = None
             for word in _ALIASES.get(name, ()):
                 if word in value:
-                    hits.append((name, word))
+                    best = (2, word)
                     break
-        return hits
+            if best is None:
+                for word in _WEAK_ALIASES.get(name, ()):
+                    if word in value:
+                        best = (1, word)
+                        break
+            if best is not None:
+                hits.append((name, best[1], best[0], order))
+        hits.sort(key=lambda item: (-item[2], item[3]))
+        return [(name, word, score) for name, word, score, _order in hits]
 
-    def answer(self, text: str, budget: int = 700) -> str:
-        """按需检索的产物：命中字段的原文，按预算截断；没命中返回空串。"""
+    def match(self, text: str) -> list:
+        """兼容老调用：`[(字段, 命中的词), ...]`，顺序与 match_scored 一致。"""
+        return [(name, word) for name, word, _score in self.match_scored(text)]
+
+    def answer(self, text: str, budget: int = 700, max_fields: int = MAX_ANSWER_FIELDS) -> str:
+        """按需检索的产物：命中的字段原文，按预算与段数截断；没命中返回空串。"""
         parts = []
         used = 0
-        for name, _word in self.match(text):
+        for name, _word, _score in self.match_scored(text)[:max_fields]:
             chunk = "%s：%s" % (name, self.field(name))
             if not chunk.strip():
                 continue

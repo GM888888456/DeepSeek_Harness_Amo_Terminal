@@ -42,6 +42,17 @@ STYLE_HINTS = {
 
 class ReplyMixin:
 
+    def _ledger_path(self):
+        """注入账本放插件数据目录，和人格档案缓存同级。"""
+        try:
+            archive_path = self.llm._archive_path()
+        except Exception:
+            archive_path = ""
+        if not archive_path:
+            return ""
+        import os as _os
+        return _os.path.join(_os.path.dirname(archive_path), "turn_ledger.jsonl")
+
     async def _compose_reply(self, event, text, snap, profile, memories, memory_text, group, note=""):
         umo = event.unified_msg_origin
         uid = self._canonical_uid(event)
@@ -213,13 +224,23 @@ class ReplyMixin:
         if note:
             # 延迟补话的说明放在系统侧，不能混进“对方刚刚说”里
             system_parts.append("【这次的情况】" + note)
-        # 固定身份优先级放在动态上下文之后，防止记忆/世界观/旧人格提示覆盖沈晓沫。
-        try:
-            from .persona_core import IDENTITY_PRIORITY
-            system_parts.append(IDENTITY_PRIORITY)
-        except Exception as exc:
-            logger.warning("[amo] 人格身份优先级模块不可用: %s" % exc)
+        # 身份优先级只留一句：完整版（241 字）每轮都灌属于重复，核心短版里已讲过同样的话。
+        system_parts.append(
+            "【身份优先级】姓名、生日、职业、婚姻、资产、家庭背景是固定设定；"
+            "日程、心情、地点、近期事件只是补充当前情况，跟固定设定冲突时以固定设定为准。"
+        )
         system = "\n\n".join(system_parts)
+        # 每轮注入账本（规范第十一节）：分区块记字符数，落一行 JSONL，便于核对 prefill
+        try:
+            try:
+                from .turn_ledger import TurnLedger
+            except ImportError:
+                from turn_ledger import TurnLedger  # type: ignore
+            ledger = TurnLedger(self._ledger_path())
+            ledger.add_from_parts(system_parts)
+            ledger.log(logger, umo=umo)
+        except Exception as exc:
+            logger.debug("[amo] 注入账本失败: %s" % exc)
         if group:
             prompt = (
                 "以下是群聊最近的对话：\n" + transcript + "\n\n"
