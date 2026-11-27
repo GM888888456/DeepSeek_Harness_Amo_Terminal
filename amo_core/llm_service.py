@@ -35,19 +35,18 @@ __all__ = [
     "LLMService",
 ]
 
-# 辅助任务用免费小模型：key 是 kind，value 是按顺序尝试的 provider id
-
-# 2026-11-26（用户口径）：**只有机械活交给免费小模型**——
-#   polish  八股重写（只改一句病句）
-#   judge   yes/no 判定
-#   extract 抽事实（JSON）
-# 写作类（日程文案 enrich、世界观 worldview、日记 diary、摘要 digest、主动消息 proactive）
-# 一律走主模型：每天也就调用一两次，省不出钱，但写出来会变平。
-AUX_ROUTES = {
-    "polish": ("智谱网站/GLM-4-flash", "硅基流动/Qwen/Qwen3-8B"),
-    "judge": ("硅基流动/Qwen/Qwen3-8B", "智谱网站/GLM-4-flash"),
-    "extract": ("智谱网站/GLM-4-flash", "硅基流动/Qwen/Qwen3-8B"),
-}
+# 辅助任务（机械活）**不写死任何 provider id**：一律看配置 `aux_provider_<kind>`。
+#
+# 2026-11-28（用户口径）：写死的那几条全删了。原因很实在——11-27 一天里三个 provider
+# 被删、11-28 主模型也换了，写死的 id 只带来两个后果：日志里天天刷 "provider not found"，
+# 辅助调用悄悄退化成主模型还不自知。
+#
+# 现在的规则：
+# - 配置 `aux_provider_polish` / `aux_provider_judge` / `aux_provider_extract`
+#   可以写逗号分隔的多个 id，按顺序取第一个可用的；
+# - **留空就走主模型**（写作类本来就该走主模型：一天一两次，省不出钱还会写平）；
+# - 换模型、删供应商都不用改代码。
+AUX_KINDS = ("polish", "judge", "extract")
 
 #: 只把「同一件事的不同叫法」归到上面三类，别把写作类也塞进来
 AUX_ALIASES = {
@@ -124,31 +123,34 @@ class LLMService:
             logger.debug("[amo] 取模型 %s 失败: %s" % (provider_id, exc))
             return None
 
-    async def _aux_provider(self, kind):
-        """按用途挑小模型：先看 aux_provider_<kind> 配置，再用内置免费链。"""
-        chain = []
+    def _aux_ids(self, kind):
+        """某个用途在配置里指定了哪些候选模型；没配返回空元组（= 用主模型）。"""
         try:
             conf = str(self.p.cfg_str("aux_provider_" + str(kind), "") or "").strip()
-            if conf:
-                chain.extend([x.strip() for x in conf.replace("，", ",").split(",") if x.strip()])
         except Exception:
-            pass
-        chain.extend(AUX_ROUTES.get(AUX_ALIASES.get(str(kind), str(kind)), ()))
-        for pid in chain:
+            return ()
+        return tuple(x.strip() for x in conf.replace("，", ",").split(",") if x.strip())
+
+    async def _aux_provider(self, kind):
+        """按用途挑小模型：只看 `aux_provider_<kind>` 配置，没配就返回 None（调用方用主模型）。"""
+        for pid in self._aux_ids(kind):
             provider = await self._provider_by_id(pid)
             if provider is not None:
                 return provider
         return None
 
     async def probe_all(self):
-        """启动时探一遍辅助模型是否可用（缺了就在日志里说，不用等触发）。"""
+        """启动时探一遍辅助模型配置（缺了就在日志里说，不用等触发）。"""
         results = {}
-        for kind, ids in AUX_ROUTES.items():
+        for kind in AUX_KINDS:
+            ids = self._aux_ids(kind)
+            if not ids:
+                logger.info("[amo] 辅助模型 %-8s 未配置 → 走主模型" % kind)
+                continue
             for pid in ids:
                 if pid in results:
                     continue
-                provider = await self._provider_by_id(pid)
-                results[pid] = provider is not None
+                results[pid] = (await self._provider_by_id(pid)) is not None
         for pid, ok in sorted(results.items()):
             logger.info("[amo] 模型可用性 %-30s %s" % (pid, "OK" if ok else "缺失"))
         return results
@@ -160,14 +162,18 @@ class LLMService:
         if kind in self._aux_probed:
             return
         self._aux_probed.add(kind)
-        for pid in AUX_ROUTES.get(str(kind), ()):
+        ids = self._aux_ids(kind)
+        if not ids:
+            logger.info("[amo] 辅助模型 %s：未配置，走主模型" % kind)
+            return
+        for pid in ids:
             provider = await self._provider_by_id(pid)
             logger.info("[amo] 辅助模型 %s（%s）-> %s" % (
                 pid, kind, "OK" if provider is not None else "缺失"))
 
     async def chat_raw(self, umo, system, prompt, contexts=None, kind="other"):
         route = AUX_ALIASES.get(str(kind), str(kind))
-        if route in AUX_ROUTES:
+        if route in AUX_KINDS:
             try:
                 await self._probe_aux_once(route)
             except Exception:
