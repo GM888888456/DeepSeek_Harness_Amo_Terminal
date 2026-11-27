@@ -32,63 +32,8 @@ except Exception:  # pragma: no cover
 
 from .shared import *
 
-CITY_DIALECT_RULES = (
-    (("贵阳", "贵州", "遵义", "安顺", "六盘水", "凯里"), "贵州话"),
-    (("成都", "四川", "重庆", "绵阳", "德阳", "宜宾"), "四川话"),
-    (("广州", "深圳", "东莞", "佛山", "珠海", "中山", "惠州", "江门", "汕头", "广东"), "广东话"),
-    (("上海", "苏州", "无锡", "常州", "昆山"), "上海话"),
-    (("天津",), "天津话"),
-    (("郑州", "河南", "洛阳", "开封"), "河南话"),
-    (("哈尔滨", "沈阳", "长春", "大连", "东北", "辽宁", "吉林", "黑龙江"), "东北话"),
-    (("台北", "台湾", "高雄", "台中"), "台湾腔"),
-)
-def dialect_for_city(city):
-    text = str(city or "")
-    if not text:
-        return ""
-    for keys, style in CITY_DIALECT_RULES:
-        if any(key in text for key in keys):
-            return style
-    return ""
-DIALECT_FALLBACK_ROWS = {
-    "东北话": [
-        ("咋整", "怎么办", "咋整啊"), ("唠嗑", "聊天", "来唠嗑"), ("得瑟", "显摆", "别得瑟"),
-        ("麻溜", "快点", "麻溜的"), ("贼拉", "非常", "贼拉冷"), ("嘎哈", "干什么", "你嘎哈呢"),
-        ("老铁", "哥们", "老铁没毛病"),
-    ],
-    "四川话": [
-        ("啥子", "什么", "你说啥子"), ("莫得", "没有", "莫得问题"), ("巴适", "舒服", "巴适得很"),
-        ("搞快些", "快点", "搞快些"), ("瓜娃子", "傻孩子", "你个瓜娃子"), ("雄起", "加油", "雄起"),
-        ("撇脱", "干脆", "撇脱点"),
-    ],
-    "广东话": [
-        ("唔该", "谢谢、劳驾", "唔该晒"), ("点解", "为什么", "点解啊"), ("得闲", "有空", "得闲饮茶"),
-        ("搞掂", "搞定", "搞掂啦"), ("靓仔", "帅哥", "靓仔"), ("靓女", "美女", "靓女"),
-        ("冇", "没有", "冇问题"),
-    ],
-    "台湾腔": [
-        ("酱紫", "这样", "酱紫啊"), ("蛮", "很", "蛮好的"), ("超赞", "非常棒", "超赞"),
-        ("拍谢", "不好意思", "拍谢啦"), ("机车", "麻烦、烦人", "很机车"), ("阿嬷", "奶奶", "阿嬷"),
-        ("龟毛", "挑剔", "别龟毛"),
-    ],
-    "天津话": [
-        ("嘛呢", "干什么", "嘛呢"), ("倍儿", "非常", "倍儿好"), ("哏儿", "有趣", "真哏儿"),
-        ("得嘞", "好的", "得嘞"), ("腻歪", "腻烦、黏人", "别腻歪"), ("幺蛾子", "麻烦", "出幺蛾子"),
-        ("耐人", "招人喜欢", "真耐人"),
-    ],
-    "河南话": [
-        ("弄啥嘞", "干什么", "你弄啥嘞"), ("中", "好", "中，就这么办"), ("得劲", "舒服", "真得劲"),
-        ("木有", "没有", "木有事"), ("恁", "你", "恁吃饭没"), ("俺", "我", "俺知道了"),
-        ("中不中", "行不行", "中不中"),
-    ],
-    "上海话": [
-        ("阿拉", "我、我们", "阿拉晓得"), ("侬", "你", "侬好"), ("哪能", "怎么", "哪能办"),
-        ("结棍", "厉害", "侬结棍"), ("老灵", "很好", "老灵额"), ("白相", "玩", "出去白相"),
-        ("适意", "舒服", "适意"),
-    ],
-}
 def extract_persona_name(persona):
-    """从 AstrBot Personality 的 name / system prompt 中取角色名。"""
+    """Amo 终端 · 人格与景区知识库（PersonaMixin）"""
     if not persona:
         return ""
     name = ""
@@ -172,83 +117,6 @@ class PersonaMixin:
                 aliases.append(item)
         return name, aliases
 
-    def _dialect_rows(self):
-        region = self._dialect_region()
-        try:
-            rows = [row for row in self.db.list_dialects() if region in str(row.get("region") or "")]
-        except Exception:
-            rows = []
-        if rows:
-            return rows
-        style = self._dialect_style().strip()
-        return [
-            {"term": term, "meaning": meaning, "region": style, "example": example}
-            for term, meaning, example in DIALECT_FALLBACK_ROWS.get(style, [])
-        ]
-
-    def _dialect_region(self):
-        style = self._dialect_style().strip()
-        return DIALECT_REGIONS.get(style, style)
-
-    def _dialect_active(self):
-        """方言是否生效：语种选「普通话」就等于关掉方言（连方言库都不查）。"""
-        style = str(self.cfg_str("dialect_style", "") or "").strip()
-        if style in ("普通话", "关闭", "off", "none"):
-            return False
-        return self.cfg_bool("dialect_enabled", True)
-
-    def _dialect_style(self):
-        """语种：配置里写了就用配置（面板可覆盖），没写就按世界观城市自动选。"""
-        explicit = str(self.cfg_str("dialect_style", "") or "").strip()
-        if explicit and explicit not in ("自动", "auto", "auto_city"):
-            return explicit
-        city = ""
-        try:
-            world = getattr(self.state, "worldview", None) or {}
-            city = str(world.get("city") or "")
-        except Exception:
-            pass
-        if not city:
-            try:
-                city = str(
-                    self.cfg_str("weather_city_name", "")
-                    or self.cfg_str("weather_city", "")
-                    or ""
-                )
-            except Exception:
-                pass
-        return dialect_for_city(city)
-
-    def _dialect_kb_name(self):
-        base = self.cfg_str("dialect_kb_name", "陪伴方言库").strip() or "陪伴方言库"
-        style = self._dialect_style().strip()
-        return base + "-" + style if style else base
-
-    async def _dialect_kb_context(self, query):
-        # 关掉方言就别检索方言库：省一次 embedding 查询和一段提示词
-        if not self._dialect_active():
-            return ""
-        try:
-            manager = getattr(self.context, "kb_manager", None)
-            if manager is None or not str(query or "").strip():
-                return ""
-            name = self._dialect_kb_name()
-            kb = await manager.get_kb_by_name(name)
-            names = [name]
-            if kb is None:
-                legacy = await manager.get_kb_by_name("核心方言库")
-                if legacy is not None:
-                    kb = legacy
-                    names = ["核心方言库"]
-            if kb is None:
-                return ""
-            result = await manager.retrieve(str(query)[:500], names, top_m_final=3)
-            if not isinstance(result, dict):
-                return ""
-            return str(result.get("context_text") or "")
-        except Exception as exc:
-            logger.debug("[amo] 方言知识库检索失败: %s" % exc)
-            return ""
 
     def scenic_spots(self):
         if getattr(self, "_scenic_cache", None):
@@ -358,10 +226,7 @@ class PersonaMixin:
 
 
 __all__ = [
-    "CITY_DIALECT_RULES",
-    "dialect_for_city",
-    "DIALECT_FALLBACK_ROWS",
-    "extract_persona_name",
+"extract_persona_name",
     "extract_persona_aliases",
     "PersonaMixin",
 ]
