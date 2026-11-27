@@ -1620,8 +1620,20 @@ class ScheduleEngine:
             return self._choose(INDOOR_BANK, rng, prev)
         if zone == "home":
             if category == "meal":
-                bank = self._meal_bank(hour)
-                return self._choose(bank, rng, prev)
+                # 在家吃 = 厨房做（庄园有厨师/帮厨/管家），不下楼、不点外卖。
+                # 2026-11-28 用户口径：「不应该是老周开车、佣人准备饭吗」。
+                bank = ()
+                try:
+                    try:
+                        from .household import meal_bank as _home_bank
+                    except ImportError:
+                        from household import meal_bank as _home_bank  # type: ignore
+                    bank, _is_home = _home_bank(hour, home=True)
+                except Exception:
+                    bank = ()
+                if not bank:
+                    bank = self._meal_bank(hour)
+                return self._choose(list(bank), rng, prev)
             if category == "work":
                 return self._choose(work_bank_for(ctx.get("world")), rng, prev)
             if category == "rest":
@@ -2066,6 +2078,9 @@ class ScheduleEngine:
             "1. 顺序对应，正好 24 个字符串；\n"
             "2. 时间、地点、类别按骨架原样保留；睡觉就写睡觉，在路上就写在路上；\n"
             "3. 在景区要写具体项目；写清是老周开车（她坐后排），路上堵车/找停车位；\n"
+            "3b. 她不用自己开车、不挤地铁：出门一律老周开车（她坐后排），到家/到公司下车即可；\n"
+            "3c. 在家吃的饭一律由厨房做（郑师傅掌勺、李姐帮厨、陈姨安排），"
+            "不写她下楼吃、点外卖、自己下厨；在外面吃才写餐馆；\n"
             "4. 相邻两小时用不同的句子；写生活本身，不写“日程”“AI”“模型”这些词；\n"
             "%s"
             "6. 只输出 JSON 数组，例如 [\"...\",\"...\"]。"
@@ -2384,7 +2399,9 @@ class ScheduleEngine:
             "%s\n"
             "请写一段 120-260 字的第一人称小日记，要求：\n"
             "1. 只写这一小时；\n"
-            "2. 写清交通方式（老周开车/打车/地铁/走路）、具体干了什么、吃了什么、遇到什么趣事；\n"
+            "2. 写清交通方式（老周开车/打车/走路）、具体干了什么、吃了什么、遇到什么趣事；\n"
+            "2b. 在家吃饭一律写厨房做的（郑师傅/李姐/陈姨），不写下楼吃、点外卖；"
+            "她不会自己开车；\n"
             "3. 情绪从上一小时自然延续（郁闷/生气不会无缘无故变成开心/兴奋）；\n"
             "4. 如果是周末开车出去玩，要提到车、堵车、停车位；\n"
             "5. 口语化、生动，像真人发朋友圈，不写旁白，也不提日程/AI/模型；\n"
