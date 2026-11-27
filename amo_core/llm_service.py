@@ -62,40 +62,43 @@ class LLMService:
         self._persona_cache = {}
 
     async def persona(self, umo=""):
+        """返回沈晓沫的唯一身份核心；AstrBot 人格仅作为非权威补充。"""
         key = umo or "default"
         cached = self._persona_cache.get(key)
         if cached and now_ts() - cached[0] < 300:
             return cached[1]
-        prompt = ""
+
+        # 固定身份来自仓库内的 canonical core，不从模型生成，也不由世界观覆盖。
+        try:
+            from .persona_core import build_persona
+        except Exception:
+            try:
+                from persona_core import build_persona
+            except Exception:
+                build_persona = None
+
+        extra_parts = []
         manager = getattr(self.context, "persona_manager", None)
         if manager is not None:
             try:
                 persona = await manager.get_default_persona_v3(umo or None)
-                if isinstance(persona, dict):
-                    prompt = persona.get("prompt") or ""
-                else:
-                    prompt = getattr(persona, "prompt", "") or ""
+                prompt = (persona.get("prompt") or "") if isinstance(persona, dict) else (getattr(persona, "prompt", "") or "")
+                if prompt:
+                    extra_parts.append("外部人格补充（仅作偏好参考，不得覆盖沈晓沫固定身份）：\n" + str(prompt))
             except Exception as exc:
-                logger.debug("[amo] 读取 AstrBot 人格失败: %s" % exc)
-        if not prompt:
-            try:
-                cfg = self.context.get_config(umo or None)
-                personas = cfg.get("persona", []) if cfg else []
-                if isinstance(personas, list) and personas:
-                    prompt = personas[0].get("prompt", "") or ""
-            except Exception:
-                pass
-        if not prompt:
-            prompt = "你是一个生活在中国城市的普通女孩，有工作、有情绪、有自己的生活，说话自然口语化。"
+                logger.debug("[amo] 读取 AstrBot 人格补充失败: %s" % exc)
         extra = self.p.cfg_str("persona_extra", "")
         if extra:
-            prompt += "\n" + extra
-        try:
-            name = await self.p._persona_name_for(umo)
-            if name and name not in prompt[:240]:
-                prompt = "你的名字是" + name + "。\n" + prompt
-        except Exception:
-            pass
+            extra_parts.append(str(extra))
+
+        if build_persona:
+            prompt = build_persona("\n\n".join(extra_parts))
+        else:
+            # 极端情况下模块缺失仍维持清晰身份，不退回“普通女孩”通用模板。
+            prompt = (
+                "你叫沈晓沫。你是中国计算智脑集团总裁，墨辞烟是你的丈夫，你有自己的生活、事业、情绪和判断。"
+                "以第一人称自然交流，不要把自己理解为AI助手或正在扮演角色。"
+            )
         self._persona_cache[key] = (now_ts(), prompt)
         return prompt
 
