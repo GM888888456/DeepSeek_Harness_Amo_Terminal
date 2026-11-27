@@ -54,9 +54,16 @@ def readme_version():
 
 def code_version():
     text = read("main.py")
-    match = re.search(r'PLUGIN_VERSION\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"', text)
+    # Terminal derives PLUGIN_VERSION from metadata.yaml at runtime; it is not
+    # duplicated as a literal in main.py. Validate that wiring, then use the
+    # canonical metadata version for the cross-file consistency check.
+    dynamic = re.search(
+        r'PLUGIN_VERSION\\s*=\\s*str\\(_amo_meta\\["version"\\]\\)', text
+    )
+    if dynamic:
+        return metadata_version()
+    match = re.search(r"""PLUGIN_VERSION\\s*=\\s*["']([0-9]+\\.[0-9]+\\.[0-9]+)["']""", text)
     return match.group(1) if match else ""
-
 
 def next_version(version, kind="test"):
     """按规则进位：第三位 0-9 逢十进一，第二位同理；首位不限、可多位数。"""
