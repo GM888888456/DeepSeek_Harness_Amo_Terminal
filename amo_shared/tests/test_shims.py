@@ -37,7 +37,20 @@ def load(path, name=None):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
-    spec.loader.exec_module(module)
+    # 子包（Image/sp、Terminal/mem）在生产里是把这个目录插进 sys.path 再 import 的，
+    # 所以 sp/link.py 这类「from sp_link import *」的兼容层，测试里也要同样给路径。
+    folder = os.path.dirname(path)
+    added = folder not in sys.path
+    if added:
+        sys.path.insert(0, folder)
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        if added:
+            try:
+                sys.path.remove(folder)
+            except ValueError:
+                pass
     return module
 
 
@@ -297,6 +310,74 @@ class ConfigGuardFallbackTest(unittest.TestCase):
         self.assertTrue(module.fallback_data_dir("/a/plugins/X", "X").endswith("plugin_data/X"))
         # 认不出实现时按敏感处理，宁可不回填
         self.assertTrue(module.is_sensitive_key("api_key"))
+
+
+class LinkTest(unittest.TestCase):
+    """link：同一份实现 + 面板字段不变（终端不在时如实说没连上）。"""
+
+    PANEL_KEYS = ("terminal_connected", "terminal_name", "terminal_version",
+                  "data_connected", "bot_id", "last_heartbeat", "error")
+
+    def _module(self, plugin, *extra):
+        return load(os.path.join(PLUGINS, plugin, *extra, "link.py"))
+
+    def test_all_use_shared_implementation(self):
+        modules = [self._module("DeepSeek_Harness_Amo_Image"),
+                   self._module("DeepSeek_Harness_Amo_Image", "sp"),
+                   self._module("DeepSeek_Harness_Amo_Finance"),
+                   self._module("DeepSeek_Harness_Amo_Market"),
+                   self._module("DeepSeek_Harness_Amo_Medical"),
+                   self._module("DeepSeek_Harness_Amo_Terminal", "mem")]
+        for module in modules:
+            self.assertEqual(module.SHIM_SOURCE, "shared")
+        for module in modules[1:]:
+            self.assertIs(module.probe, modules[0].probe)
+            self.assertIs(module._find, modules[0]._find)
+
+    def test_probe_without_context_reports_disconnected(self):
+        module = self._module("DeepSeek_Harness_Amo_Market")
+
+        class Bare:
+            pass
+
+        payload = module.probe(Bare())
+        for key in self.PANEL_KEYS:
+            self.assertIn(key, payload)
+        self.assertFalse(payload["terminal_connected"])
+        self.assertFalse(payload["data_connected"])
+        self.assertTrue(payload["error"])
+        self.assertIn("终端", module.summary(payload))
+
+    def test_helpers_degrade_quietly(self):
+        module = self._module("DeepSeek_Harness_Amo_Medical")
+        self.assertIsNone(module._find(None, ("x",), ("y",)))
+        self.assertEqual(module.version_of(None), "")
+        self.assertEqual(module.bot_id_of(None, None), module.DEFAULT_BOT_ID)
+
+    def test_market_import_style_still_works(self):
+        """Market 是 `from .link import _find, TERMINAL_NAMES, TERMINAL_MARKERS`。"""
+        module = self._module("DeepSeek_Harness_Amo_Market")
+        for name in ("_find", "TERMINAL_NAMES", "TERMINAL_MARKERS", "probe", "summary"):
+            self.assertTrue(hasattr(module, name), name)
+            self.assertIn(name, module.__all__)
+
+
+class LinkFallbackTest(unittest.TestCase):
+    def test_missing_terminal_falls_back(self):
+        root = tempfile.mkdtemp(prefix="amo-link-fb-")
+        self.addCleanup(shutil.rmtree, root, True)
+        plugin = os.path.join(root, "DeepSeek_Harness_Amo_Image")
+        os.makedirs(plugin)
+        shutil.copy2(os.path.join(PLUGINS, "DeepSeek_Harness_Amo_Image", "link.py"),
+                     os.path.join(plugin, "link.py"))
+        module = load(os.path.join(plugin, "link.py"))
+        self.assertEqual(module.SHIM_SOURCE, "fallback")
+        payload = module.probe(object())
+        self.assertFalse(payload["terminal_connected"])
+        self.assertIn("公共实现不可用", payload["error"])
+        self.assertIsNone(module._find(None, (), ()))
+        self.assertEqual(module.bot_id_of(None, None), "陪伴")
+        self.assertIn("终端未连接", module.summary(payload))
 
 
 if __name__ == "__main__":

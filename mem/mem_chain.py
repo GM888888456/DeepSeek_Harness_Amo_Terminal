@@ -100,7 +100,9 @@ def _publish(shared):
         globals()[name] = value
         names.append(name)
     globals()["SHIM_SOURCE"] = "shared"
-    globals()["__all__"] = sorted(set(names) | set(PUBLIC))
+    # SHIM_SOURCE 也进 __all__：sp/ 与 mem/ 的兼容层是「from sp_link import *」，
+    # 不带上它，诊断时就分不清某处拿到的是公共实现还是降级实现。
+    globals()["__all__"] = sorted(set(names) | set(PUBLIC) | {"SHIM_SOURCE"})
 
 
 _SHARED, _WHY = _load_shared()
