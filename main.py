@@ -2106,6 +2106,28 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         "【别报日程】": "【别报日程】不主动报自己的活动和地点；他问了就一句带过。",
     }
 
+    @classmethod
+    def _lean_parts(cls, parts):
+        """只在 lean 模式压缩已知的冗长规则；未知内容和动态事实原样保留。"""
+        try:
+            if str(cls.__dict__.get("_lean_parts_mode", "lean")) != "lean":
+                return parts
+        except Exception:
+            pass
+        out = []
+        replacements = getattr(cls, "LEAN_PARTS", {}) or {}
+        for part in parts or []:
+            if not isinstance(part, str):
+                out.append(part)
+                continue
+            compact = part
+            for prefix, replacement in replacements.items():
+                if part.startswith(prefix):
+                    compact = replacement
+                    break
+            out.append(compact)
+        return out
+
 
 
 
