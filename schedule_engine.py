@@ -188,11 +188,6 @@ DISTRICT_MAP = {
 }
 HOME_STYLES = ["小窝", "公寓", "出租屋", "家"]
 COMPANY_POOL = ["互联网公司", "设计工作室", "广告公司", "贸易公司", "医院", "学校", "书店", "咖啡店"]
-CAR_POOL = [
-    "黑色奔驰C级", "白色大众高尔夫", "银色特斯拉Model 3",
-    "红色Mini Cooper", "深灰色奥迪A4L", "蓝色比亚迪海豹",
-    "白色丰田凯美瑞", "黑色沃尔沃S60",
-]
 CAR_BRANDS = ["奔驰", "宝马", "奥迪", "特斯拉", "比亚迪", "大众", "本田", "丰田", "Mini", "保时捷", "路虎", "沃尔沃", "吉利", "蔚来"]
 
 NEGATIVE_LABELS = ("低落", "烦躁", "委屈", "焦虑", "疲惫")
@@ -646,8 +641,10 @@ class ScheduleEngine:
             car = self._extract_car(text)
         if not car:
             car = str(cached.get("car") or "").strip()
-        if not car:
-            car = CAR_POOL[md5_int(str(world.get("name") or "") + "|car") % len(CAR_POOL)]
+        # 2026-11-28：资产里没有车就**不写车**，也不再随机造一辆。
+        # 以前这里会兜一辆「奔驰C/高尔夫/特斯拉」，跟 lineage + household + 人格资产
+        # 这套真源冲突；没车时下游会自动按打车/地铁走（见 _expand 里的 transit 兜底）。
+        car = car or ""
         if cfg_home:
             home = cfg_home
 
@@ -1553,9 +1550,51 @@ class ScheduleEngine:
     # ------------------------------------------------------------------
     # 4. 活动文案（LLM 不可用时的真人化兜底）
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------ 活动层（软活动）
+    @staticmethod
+    def _mood_of(ctx):
+        """把七情六欲/健康折算成活动层的状态词（tired/happy/sad）。"""
+        feel = ctx.get("feel") or {}
+        health = ctx.get("health") or {}
+        tags = []
+        try:
+            if float(feel.get("energy") or 100) < 45 or float(health.get("hp") or 100) < 45:
+                tags.append("tired")
+            if float(feel.get("joy") or 50) >= 65:
+                tags.append("happy")
+            if float(feel.get("sadness") or 0) >= 60:
+                tags.append("sad")
+        except Exception:
+            pass
+        return " ".join(tags)
+
+    def _activity_history(self):
+        """前两天的「小时 → 活动」，用来避开「每天同一时刻同一件事」。"""
+        try:
+            data = self.state.db.kv_get("activity_history", {}) or {}
+        except Exception:
+            return []
+        days = sorted(key for key in data if isinstance(data.get(key), dict))
+        return [data[key] for key in days[-2:]]
+
+    def _save_activity_history(self, ctx, items):
+        try:
+            data = self.state.db.kv_get("activity_history", {}) or {}
+            day = str(ctx.get("day") or "")
+            if not day:
+                return
+            data[day] = {str(parse_hhmm(item.get("start")) // 60): str(item.get("activity") or "")
+                         for item in items}
+            keep = sorted(data)[-3:]
+            self.state.db.kv_set("activity_history", {key: data[key] for key in keep})
+        except Exception as _amo_exc:
+            _note_swallowed("schedule_engine._save_activity_history", _amo_exc)
+
     def _fill_activities(self, items, ctx):
         rng = random.Random(int(ctx.get("seed") or 0) ^ 0x9E3779B9)
         prev = ""
+        # 活动层的当天状态：最近两格、各句出现次数、前两天的同小时记录
+        ctx["_act"] = {"recent": [], "counts": {}, "history": self._activity_history()}
         for item in items:
             hour = parse_hhmm(item.get("start")) // 60
             activity = self._activity_for(item, ctx, hour, rng, prev)
@@ -1564,6 +1603,18 @@ class ScheduleEngine:
             if not item.get("detail"):
                 item["detail"] = self._detail_for(item, ctx, hour, rng)
             prev = item.get("activity", "")
+            recent = ctx["_act"]["recent"]
+            recent.append(prev)
+            del recent[:-2]
+            try:
+                try:
+                    from .activity_pool import note as _note_activity
+                except ImportError:
+                    from activity_pool import note as _note_activity  # type: ignore
+                _note_activity(ctx["_act"]["counts"], prev)
+            except Exception:
+                pass
+        self._save_activity_history(ctx, items)
         return items
 
     def _activity_for(self, item, ctx, hour, rng, prev):
@@ -1579,6 +1630,24 @@ class ScheduleEngine:
             if hour == 7 and (ctx.get("yesterday") or {}).get("late_night"):
                 return "赖床、起不来"
             return "睡觉"
+        # 软活动：在家/在公司的「这一小时做什么」从候选池挑（不写死一句 BANK）
+        if zone in ("home", "company") and category in ("rest", "life", "play", "work"):
+            act = ctx.get("_act") or {}
+            try:
+                try:
+                    from .activity_pool import pick as _pick_activity
+                except ImportError:
+                    from activity_pool import pick as _pick_activity  # type: ignore
+                picked = _pick_activity(
+                    zone, category, hour=hour, prev=prev,
+                    recent=act.get("recent") or (), counts=act.get("counts") or {},
+                    history=act.get("history") or [], mood=self._mood_of(ctx), rng=rng,
+                )
+            except Exception as _amo_exc:
+                _note_swallowed("schedule_engine._activity_for.activity_pool", _amo_exc)
+                picked = ""
+            if picked:
+                return picked
         if zone == "road":
             if transit == "drive":
                 bank = ROAD_BANK
