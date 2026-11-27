@@ -145,11 +145,6 @@ class ReplyMixin:
         system_parts.append("【别主动报日程】你在做什么、在哪只是内在状态；他明确问起才说。")
         if consult:
             system_parts.append("【回答方式】咨询/步骤类问题：先给结论，2-3 句，口语。")
-        if self._dialect_active():
-            style = self._dialect_style()
-            samples = DIALECT_SAMPLES.get(style, "")
-            if style and samples:
-                system_parts.append("【方言】你的语种设定是「" + style + "」，偶尔自然用一点当地方言口语（如" + samples + "），但不要每句都用，也不要硬替换“就是/什么/怎么”。")
         if relation == "相恋":
             # 2026-11-23：以前这里写「只会闹别扭、要哄、不冷怼」，她 anger 82 还在唯唯诺诺。
             # 现在按怒气分档授权，见 hostility.lover_anger_hint()。
