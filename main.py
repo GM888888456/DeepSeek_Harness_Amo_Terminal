@@ -2121,7 +2121,11 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 continue
             compact = part
             for prefix, replacement in replacements.items():
-                if part.startswith(prefix):
+                # 「设定不外泄」嵌在「后台不外泄」合并段里，不一定是整段首标签。
+                matched = part.startswith(prefix) or (
+                    prefix == "【设定不外泄】" and prefix in part
+                )
+                if matched:
                     compact = replacement
                     break
             out.append(compact)
