@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Amo 终端 · 人格·方言·景区知识库（PersonaMixin）
+"""Amo 终端 · 人格与景区知识库（PersonaMixin）
 
 从 main.py 的 HumanCorePlugin 整块搬出来的方法，方法体逐行未改。
 由 HumanCorePlugin(..., PersonaMixin, Star) 混入，self.* 照旧可用。
