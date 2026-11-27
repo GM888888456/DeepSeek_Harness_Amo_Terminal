@@ -432,18 +432,6 @@
     "description": "抑郁持续小时",
     "default": 24
   },
-  "dialect_enabled": {
-    "type": "bool",
-    "description": "启用方言风格",
-    "hint": "只在提示词里给模型一个方言参考，由模型自己决定用不用，不会强行替换字词",
-    "default": true
-  },
-  "create_dialect_kb": {
-    "type": "bool",
-    "description": "自动创建方言知识库",
-    "hint": "启动后把方言库同步到 AstrBot 知识库；需要先配置 Embedding 供应商",
-    "default": true
-  },
   "create_scenic_kb": {
     "type": "bool",
     "description": "自动创建景区知识库",
@@ -454,12 +442,6 @@
     "type": "string",
     "description": "景区知识库名称",
     "default": "中国景区知识库"
-  },
-  "dialect_kb_name": {
-    "type": "string",
-    "description": "方言知识库名称",
-    "hint": "默认“陪伴方言库”；改名会创建新库，旧库不会自动删除",
-    "default": "陪伴方言库"
   },
   "proactive_user_idle_minutes": {
     "type": "int",
@@ -670,7 +652,7 @@
     "type": "float",
     "description": "日程活动影响心情的强度",
     "hint": "每小时按日程类别（上班/吃饭/休息/逛街/通勤）给真实心情加/减一点，0=关掉；默认 3，越大越明显。",
-    "default": 3.0
+    "default": 3
   },
   "schedule_day_types": {
     "description": "日子类型：每天先按权重抽一种，再按类型生成日程",
@@ -976,7 +958,7 @@
   "baseline_private_money": {
     "type": "float",
     "description": "私聊花钱权重",
-    "default": 1.0,
+    "default": 1,
     "hint": "心流分 × 这个权重；1.0 = 不打折。"
   },
   "baseline_group_money": {
