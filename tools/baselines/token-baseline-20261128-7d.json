@@ -1,0 +1,174 @@
+{
+  "by_day": {
+    "2026-11-20": {
+      "calls": 27,
+      "inner": 30,
+      "messages": 240,
+      "tokens_in": 752394,
+      "tokens_out": 3708
+    },
+    "2026-11-21": {
+      "calls": 534,
+      "inner": 2529,
+      "messages": 665,
+      "tokens_in": 5729456,
+      "tokens_out": 59944
+    },
+    "2026-11-22": {
+      "calls": 216,
+      "inner": 2019,
+      "messages": 221,
+      "tokens_in": 2744804,
+      "tokens_out": 20048
+    },
+    "2026-11-23": {
+      "calls": 299,
+      "inner": 1271,
+      "messages": 309,
+      "tokens_in": 3529596,
+      "tokens_out": 21552
+    },
+    "2026-11-24": {
+      "calls": 159,
+      "inner": 238,
+      "messages": 144,
+      "tokens_in": 1663039,
+      "tokens_out": 8832
+    },
+    "2026-11-25": {
+      "calls": 531,
+      "inner": 39,
+      "messages": 330,
+      "tokens_in": 5753830,
+      "tokens_out": 35363
+    },
+    "2026-11-26": {
+      "calls": 494,
+      "inner": 84,
+      "messages": 285,
+      "tokens_in": 5096325,
+      "tokens_out": 45044
+    },
+    "2026-11-27": {
+      "calls": 765,
+      "inner": 75,
+      "messages": 434,
+      "tokens_in": 6678169,
+      "tokens_out": 74071
+    }
+  },
+  "by_kind": {
+    "diary": {
+      "calls": 101,
+      "models": {
+        "deepseek-flash": 89,
+        "deepseek-v4.1-flash": 12
+      },
+      "tokens_in": 71415,
+      "tokens_out": 91264
+    },
+    "digest": {
+      "calls": 6,
+      "models": {
+        "deepseek-flash": 4,
+        "deepseek-v4.1-flash": 2
+      },
+      "tokens_in": 4579,
+      "tokens_out": 10730
+    },
+    "judge": {
+      "calls": 5775,
+      "models": {
+        "GLM-4-flash": 5733,
+        "GLM-4.7-Flash": 1,
+        "Qwen/Qwen3-8B": 29,
+        "deepseek-v4.1-flash": 6,
+        "glm-4-flash": 6
+      },
+      "tokens_in": 12361031,
+      "tokens_out": 876956
+    },
+    "other": {
+      "calls": 334,
+      "models": {
+        "deepseek-flash": 238,
+        "deepseek-v4.1-flash": 96
+      },
+      "tokens_in": 423170,
+      "tokens_out": 171448
+    },
+    "polish": {
+      "calls": 69,
+      "models": {
+        "GLM-4-flash": 69
+      },
+      "tokens_in": 13745,
+      "tokens_out": 1105
+    }
+  },
+  "by_provider": {
+    "官方站点/deepseek-flash": {
+      "calls": 2,
+      "tokens_in": 19913,
+      "tokens_out": 203
+    },
+    "官方网站/deepseek-flash": {
+      "calls": 2562,
+      "tokens_in": 26315331,
+      "tokens_out": 232681
+    },
+    "星桥网站/deepseek-v4.1-flash": {
+      "calls": 178,
+      "tokens_in": 1875177,
+      "tokens_out": 10094
+    },
+    "星渊站点/deepseek-v4.1-flash": {
+      "calls": 279,
+      "tokens_in": 3697400,
+      "tokens_out": 25518
+    },
+    "星渊网站/deepseek-v4.1-flash": {
+      "calls": 1,
+      "tokens_in": 10967,
+      "tokens_out": 43
+    },
+    "硅基流动/Qwen/Qwen3-8B": {
+      "calls": 3,
+      "tokens_in": 28825,
+      "tokens_out": 23
+    }
+  },
+  "calls": {
+    "aborted": 1,
+    "errors": 22,
+    "tokens_in_cached": 18678791,
+    "tokens_in_other": 13268822,
+    "tokens_out": 268562,
+    "total": 3025
+  },
+  "inner": {
+    "tokens_in_cached": 92089,
+    "tokens_in_other": 12781851,
+    "tokens_out": 1151503,
+    "total": 6285
+  },
+  "latency_s": {
+    "max": 377.063,
+    "n": 3025,
+    "p50": 1.54,
+    "p95": 9.147
+  },
+  "messages": 2628,
+  "rates": {
+    "all_calls_per_message": 3.543,
+    "main_calls_per_message": 1.151,
+    "main_tokens_in_per_message": 5049.0,
+    "main_tokens_out_per_message": 102.2,
+    "messages": 2628
+  },
+  "window": {
+    "days": 7,
+    "since_utc": "2026-11-20",
+    "until_utc": "2026-11-27"
+  }
+}
