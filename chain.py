@@ -1,107 +1,159 @@
 # -*- coding: utf-8 -*-
-"""插件内部的链式步骤：每一步一行日志，同一个 trace 号串起来，方便按链排查。
+"""chain.py —— 加载入口，不是实现。
 
-用法（八个插件一致）：
+真正的实现只有一份：`<终端插件>/amo_shared/chain.py`。
 
-    from chain import Chain       # 包内加载用 from .chain import Chain
-    ch = Chain("medical.treat", event_id=幂等号)
-    ch.step("quote", cost=200, plan="门诊")
-    ch.step("pay", ok=bool(result.get("ok")), detail=结果原因, balance=余额)
-    ch.step("execute", ok=executed, detail=新状态)
-    ch.done(executed=executed)
-
-日志长这样（`docker logs … | grep '\[chain\]'` 就能把一条业务链捞全）：
-
-    [chain] medical.treat#12 quote cost=200 plan=门诊 (0ms)
-    [chain] medical.treat#12 pay ok:扣款成功 balance=7800.0 (12ms)
-    [chain] medical.treat#12 execute ok:恢复中 (14ms)
-    [chain] medical.treat#12 done executed=True (14ms)
-
-约定：
-- 步骤名用各插件固定的词表，别临时造词，否则筛不出来；
-- 失败一律 `ch.step(..., ok=False, detail=原因)`，打 warning，不抛异常；
-- 只记事实（金额、状态、幂等号、余额），不记提示词、密钥、完整聊天；
-- 一个业务动作一条链；重试沿用同一个 trace 号（传 event_id），一眼看出是同一笔。
+- 加载成功：本模块就是公共实现的转发，`from .chain import ...` / `import chain` 照旧可用；
+- 加载不到 / 版本过旧 / 缺接口：降级成文件末尾的最小实现，导入不抛异常，
+  插件照常启动，只是这条能力退化，日志里有一条 warning 说明原因；
+- 本文件由 `amo_shared/gen_shims.py` 生成，手改会被下次生成覆盖。改行为请改公共实现。
 """
 
 from __future__ import annotations
 
-import itertools
-import time
+import importlib.util as _ilu
+import logging as _logging
+import os as _os
+import sys as _sys
+import time as _time
 
-_SEQ = itertools.count(1)
-_MAX_DETAIL = 120
+_LOG = _logging.getLogger(__name__)
+
+#: 期望的公共实现版本：低于这个数就当「过旧」，降级
+NEED = 1
+#: 加载成功后必须存在的名字（公共实现缺了任何一个也降级）
+PUBLIC = ('Chain',)
+#: sys.modules 里的唯一名字，避免和别处同名模块打架
+_SHARED_NAME = "amo_shared_chain"
+#: 终端插件的目录名（改名、多版本都认）
+_TERMINAL_DIRS = (
+    "DeepSeek_Harness_Amo_Terminal", "deepseek_harness_amo_terminal",
+    "Astrbot_Amo_forever", "astrbot_plugin_amo_forever", "amo_forever",
+)
 
 
-def _fmt(value, limit=_MAX_DETAIL):
-    text = "" if value is None else str(value)
-    text = text.replace("\n", " ")
-    return text if len(text) <= limit else text[: max(0, limit - 1)] + "…"
+def _terminal_dir():
+    """找终端插件目录：从本文件往上跳，看哪一级的同级目录里有 amo_shared/ 标记。"""
+    here = _os.path.dirname(_os.path.abspath(__file__))
+    current = here
+    for _ in range(4):
+        parent = _os.path.dirname(current)
+        if not parent or parent == current:
+            break
+        current = parent
+        for name in _TERMINAL_DIRS:
+            candidate = _os.path.join(current, name)
+            if _os.path.isdir(_os.path.join(candidate, "amo_shared")):
+                return candidate
+    try:
+        for entry in sorted(_os.listdir(current)):
+            candidate = _os.path.join(current, entry)
+            if _os.path.isdir(_os.path.join(candidate, "amo_shared")):
+                return candidate
+    except OSError:
+        pass
+    return None
 
 
-class Chain:
-    """一条业务链：构造即开始计时，step 记一步，done 收尾。"""
+def _load_shared():
+    """按路径加载公共实现，返回 (模块, 失败原因)。任何异常都收敛成失败原因。"""
+    root = _terminal_dir()
+    if not root:
+        return None, "没找到终端插件目录"
+    path = _os.path.join(root, "amo_shared", "chain.py")
+    if not _os.path.isfile(path):
+        return None, "公共实现文件不存在：" + path
+    try:
+        mtime = _os.path.getmtime(path)
+    except OSError:
+        mtime = 0
+    cached = _sys.modules.get(_SHARED_NAME)
+    if cached is not None and getattr(cached, "_SHIM_MTIME", None) == mtime:
+        return cached, ""
+    if cached is not None:  # 公共实现被改过（或插件热重载）：丢掉旧的重新读
+        _sys.modules.pop(_SHARED_NAME, None)
+    spec = _ilu.spec_from_file_location(_SHARED_NAME, path)
+    if spec is None or spec.loader is None:
+        return None, "无法为公共实现建立加载器"
+    module = _ilu.module_from_spec(spec)
+    _sys.modules[_SHARED_NAME] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:  # 公共实现自己炸了：降级，不带崩插件
+        _sys.modules.pop(_SHARED_NAME, None)
+        return None, "公共实现加载失败：%s: %s" % (type(exc).__name__, exc)
+    module._SHIM_MTIME = mtime
+    return module, ""
 
-    def __init__(self, name, trace_id="", logger=None, event_id="", **fields):
-        """trace_id 与 event_id 等价：传幂等号就能把重试串成同一条链。"""
-        self.name = str(name or "task")
-        self.trace = str(trace_id or event_id or "") or "%s#%d" % (self.name, next(_SEQ))
-        self._logger = logger
-        self._t0 = time.monotonic()
-        self.steps = []
-        self.fields = dict(fields)
 
-    # ---------------------------------------------------------------- 内部
-    def _logger_obj(self):
-        if self._logger is not None:
-            return self._logger
-        try:
-            from astrbot.api import logger
-            return logger
-        except Exception:
-            return None
+def _publish(shared):
+    """转发公共实现的公开接口；下划线名字只转发 PUBLIC 里点名的那些。"""
+    names = []
+    for name in dir(shared):
+        if name.startswith("__"):
+            continue
+        if name.startswith("_") and name not in PUBLIC:
+            continue
+        value = getattr(shared, name)
+        if isinstance(value, type(_os)):  # 别把实现里的 os/json 之类转发出去
+            continue
+        globals()[name] = value
+        names.append(name)
+    globals()["SHIM_SOURCE"] = "shared"
+    globals()["__all__"] = sorted(set(names) | set(PUBLIC))
 
-    def _emit(self, line, ok):
-        log = self._logger_obj()
-        if log is None:
-            return
-        try:
-            (log.info if ok else log.warning)(line)
-        except Exception:
-            pass
 
-    # ---------------------------------------------------------------- 记一步
-    def step(self, stage, ok=True, detail="", **fields):
-        elapsed = int((time.monotonic() - self._t0) * 1000)
-        extra = " ".join(
-            "%s=%s" % (key, _fmt(value))
-            for key, value in fields.items()
-            if value not in (None, "")
-        )
-        text = "[chain] %s %s %s" % (self.trace, stage, "ok" if ok else "FAIL")
-        if detail:
-            text += ":" + _fmt(detail)
-        if extra:
-            text += " " + extra
-        text += " (%dms)" % elapsed
-        self.steps.append({
-            "stage": stage, "ok": bool(ok), "detail": _fmt(detail), "elapsed_ms": elapsed,
-        })
-        self._emit(text, ok)
-        return self
+_SHARED, _WHY = _load_shared()
+if _SHARED is not None:
+    _version = getattr(_SHARED, "SHIM_VERSION", 0)
+    _missing = [name for name in PUBLIC if not hasattr(_SHARED, name)]
+    if _version < NEED:
+        _SHARED = None
+        _WHY = "公共实现过旧（%s < %s）" % (_version, NEED)
+    elif _missing:
+        _SHARED = None
+        _WHY = "公共实现缺接口：%s" % ",".join(_missing)
 
-    def done(self, **fields):
-        return self.step("done", **fields)
+if _SHARED is not None:
+    _publish(_SHARED)
+else:
+    _LOG.warning("[%s] 公共实现不可用，降级为本地最小实现：%s",
+                 _os.path.basename(__file__), _WHY)
+    SHIM_SOURCE = "fallback"
+    def _fmt(value, limit=120):
+        text = "" if value is None else str(value)
+        text = text.replace("\n", " ")
+        return text if len(text) <= limit else text[: max(0, limit - 1)] + "…"
 
-    def fail(self, stage, reason="", **fields):
-        return self.step(stage, ok=False, detail=reason, **fields)
+    class Chain:  # 最小实现：接口一致，但不写 [chain] 日志
+        def __init__(self, name, trace_id="", logger=None, event_id="",
+                     ok_level="info", **fields):
+            self.name = str(name or "task")
+            self.trace = str(trace_id or event_id or "") or "%s#%d" % (self.name, 0)
+            self.steps = []
+            self.fields = dict(fields)
+            self._ok_level = str(ok_level or "info").lower()
 
-    @property
-    def ok(self):
-        return all(item["ok"] for item in self.steps)
+        def step(self, stage, ok=True, detail="", **fields):
+            self.steps.append({"stage": stage, "ok": bool(ok),
+                               "detail": _fmt(detail), "elapsed_ms": 0})
+            return self
 
-    def summary(self):
-        return " → ".join(
-            "%s%s" % (item["stage"], "" if item["ok"] else "(FAIL:%s)" % item["detail"])
-            for item in self.steps
-        )
+        def done(self, **fields):
+            return self.step("done", **fields)
+
+        def fail(self, stage, reason="", **fields):
+            return self.step(stage, ok=False, detail=reason, **fields)
+
+        @property
+        def ok(self):
+            return all(item["ok"] for item in self.steps)
+
+        def summary(self):
+            return " → ".join(
+                "%s%s" % (item["stage"], "" if item["ok"] else "(FAIL:%s)" % item["detail"])
+                for item in self.steps
+            )
+
+    __all__ = ["Chain"]
+
