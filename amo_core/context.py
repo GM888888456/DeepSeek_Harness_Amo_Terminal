@@ -728,11 +728,6 @@ class ContextMixin:
             pass
         if re.search(r"(怎么|如何|为什么|步骤|怎么办|该怎么做|教程|方法|建议|教我|能不能|是什么|该不该|可不可以)", event.message_str or ""):
             parts.append("【回答方式】这是咨询/步骤类问题：先给结论，最多 2-3 句，口语化，保留角色感，不要客服腔。")
-        if self._dialect_active():
-            style = self._dialect_style()
-            samples = DIALECT_SAMPLES.get(style, "")
-            if style and samples:
-                parts.append("【方言】你的语种设定是「" + style + "」，偶尔自然用一点当地方言口语（如" + samples + "），但不要每句都用，也不要硬替换“就是/什么/怎么”。")
         if is_weather_query(event.message_str or ""):
             try:
                 parts.append(await self._weather_query_context(event.message_str or ""))
@@ -804,12 +799,6 @@ class ContextMixin:
                 "【低落】你最近主动找对方多次都没得到回应，现在很抑郁、委屈，"
                 "需要对方哄你；回复会冷淡、低落，或者直接说“你是不是不想理我”。"
             )
-        try:
-            dialect_context = await self._dialect_kb_context(event.message_str or "")
-            if dialect_context:
-                parts.append("【方言参考】只在合适口语词上偶尔用，不要硬改“就是/什么/怎么”，句子要通顺。\n" + dialect_context)
-        except Exception:
-            pass
         relation_network = self._relation_network_text(uid)
         if relation_network:
             parts.append("【关系网】\n" + relation_network)
