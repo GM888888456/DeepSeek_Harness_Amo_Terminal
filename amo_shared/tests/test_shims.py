@@ -149,5 +149,63 @@ class FallbackTest(unittest.TestCase):
         self.assertEqual(self._load_image().SHIM_SOURCE, "fallback")
 
 
+class FakeConfig(dict):
+    """模拟 AstrBot 的配置对象：dict + config_path。"""
+
+    def __init__(self, path, **values):
+        super().__init__(**values)
+        self.config_path = path
+
+
+class ConfigWatchTest(unittest.TestCase):
+    """config_watch 的入口：同一份实现，行为照旧（mtime 变了才并进来）。"""
+
+    def _module(self, plugin):
+        return load(os.path.join(PLUGINS, plugin, "config_watch.py"))
+
+    def test_all_use_shared_implementation(self):
+        modules = [self._module(p) for p in (
+            "DeepSeek_Harness_Amo_Image", "DeepSeek_Harness_Amo_Finance",
+            "DeepSeek_Harness_Amo_Market", "DeepSeek_Harness_Amo_Medical")]
+        for module in modules:
+            self.assertEqual(module.SHIM_SOURCE, "shared")
+        for module in modules[1:]:
+            self.assertIs(module.reload_if_changed, modules[0].reload_if_changed)
+
+    def test_reload_merges_new_values_once(self):
+        module = self._module("DeepSeek_Harness_Amo_Finance")
+        folder = tempfile.mkdtemp(prefix="amo-cfg-")
+        self.addCleanup(shutil.rmtree, folder, True)
+        path = os.path.join(folder, "x_config.json")
+        with io.open(path, "w", encoding="utf-8") as handle:
+            handle.write(u'{"a": 1, "b": "x"}')
+        config = FakeConfig(path, a=0, b="")
+        module.reset()
+        self.assertTrue(module.reload_if_changed(config))
+        self.assertEqual(config["a"], 1)
+        self.assertEqual(config["b"], "x")
+        # mtime 没变：第二次不再并、也不重复报「已更新」
+        self.assertFalse(module.reload_if_changed(config))
+
+    def test_missing_config_path_is_noop(self):
+        module = self._module("DeepSeek_Harness_Amo_Medical")
+        self.assertFalse(module.reload_if_changed({}))
+        self.assertFalse(module.reload_if_changed(None))
+
+
+class ConfigWatchFallbackTest(unittest.TestCase):
+    def test_missing_terminal_falls_back(self):
+        root = tempfile.mkdtemp(prefix="amo-cfg-fb-")
+        self.addCleanup(shutil.rmtree, root, True)
+        plugin = os.path.join(root, "DeepSeek_Harness_Amo_Image")
+        os.makedirs(plugin)
+        shutil.copy2(os.path.join(PLUGINS, "DeepSeek_Harness_Amo_Image", "config_watch.py"),
+                     os.path.join(plugin, "config_watch.py"))
+        module = load(os.path.join(plugin, "config_watch.py"))
+        self.assertEqual(module.SHIM_SOURCE, "fallback")
+        self.assertFalse(module.reload_if_changed(FakeConfig("/nonexistent")))
+        self.assertIsNone(module.reset())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
