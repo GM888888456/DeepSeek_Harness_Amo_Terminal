@@ -1,0 +1,185 @@
+{
+ "same_sentence": [
+  [
+   "今天好累",
+   "今天好累啊",
+   false
+  ],
+  [
+   "今天好累",
+   "外面下雨",
+   false
+  ],
+  [
+   "我回来了",
+   "我回来了。",
+   true
+  ],
+  [
+   "路上堵死了",
+   "路上堵死了吧",
+   false
+  ],
+  [
+   "",
+   "",
+   false
+  ]
+ ],
+ "samples": [
+  {
+   "no_punc": [
+    "今天在公司开了一上午会，下午去贵安机房看线缆，回来路上买了杯冰水，晚上想吃点辣的"
+   ],
+   "segment_text": [
+    "今天在公司开了一上午会，下午去贵安机房看线缆，回来路上买了杯冰水，晚上想吃点辣的。"
+   ],
+   "short": [
+    "今天在公司开了一上午会，",
+    "下午去贵安机房看线缆，",
+    "回来路上买了杯冰水，",
+    "晚上想吃点辣的。"
+   ],
+   "text": "今天在公司开了一上午会，下午去贵安机房看线缆，回来路上买了杯冰水，晚上想吃点辣的。"
+  },
+  {
+   "no_punc": [
+    "你在干嘛我想你了"
+   ],
+   "segment_text": [
+    "你在干嘛？我想你了"
+   ],
+   "short": [
+    "你在干嘛？",
+    "我想你了"
+   ],
+   "text": "你在干嘛？我想你了"
+  },
+  {
+   "no_punc": [
+    "<amo_speak>我回来啦</amo_speak>今天累死了，先让我躺一会儿"
+   ],
+   "segment_text": [
+    "<amo_speak>我回来啦</amo_speak>今天累死了，先让我躺一会儿"
+   ],
+   "short": [
+    "<amo_speak>我回来啦</amo_speak>今天累死了，",
+    "先让我躺一会儿"
+   ],
+   "text": "<amo_speak>我回来啦</amo_speak>今天累死了，先让我躺一会儿"
+  },
+  {
+   "no_punc": [
+    "嗯"
+   ],
+   "segment_text": [
+    "嗯。"
+   ],
+   "short": [
+    "嗯。"
+   ],
+   "text": "嗯。"
+  },
+  {
+   "no_punc": [
+    "我跟你说个事",
+    "二婶今天又催婚了，说什么女孩子家家的别老加班；我懒得理她，直接回房间了"
+   ],
+   "segment_text": [
+    "我跟你说个事",
+    "二婶今天又催婚了，说什么女孩子家家的别老加班；我懒得理她，直接回房间了。"
+   ],
+   "short": [
+    "我跟你说个事",
+    "二婶今天又催婚了，",
+    "说什么女孩子家家的别老加班；",
+    "我懒得理她，直接回房间了。"
+   ],
+   "text": "我跟你说个事——二婶今天又催婚了，说什么女孩子家家的别老加班；我懒得理她，直接回房间了。"
+  },
+  {
+   "no_punc": [
+    "第一句第二句第三句话"
+   ],
+   "segment_text": [
+    "第一句。第二句！第三句话？"
+   ],
+   "short": [
+    "第一句。",
+    "第二句！",
+    "第三句话？"
+   ],
+   "text": "第一句。第二句！第三句话？"
+  },
+  {
+   "no_punc": [
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   ],
+   "segment_text": [
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   ],
+   "short": [
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   ],
+   "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  {
+   "no_punc": [
+    "好，好，好，你说什么都好，反正我说话你也不听，那就这样吧，我也懒得再讲一遍了"
+   ],
+   "segment_text": [
+    "好，好，好，你说什么都好，反正我说话你也不听，那就这样吧，我也懒得再讲一遍了。"
+   ],
+   "short": [
+    "好，好，好，你说什么都好，",
+    "反正我说话你也不听，",
+    "那就这样吧，",
+    "我也懒得再讲一遍了。"
+   ],
+   "text": "好，好，好，你说什么都好，反正我说话你也不听，那就这样吧，我也懒得再讲一遍了。"
+  },
+  {
+   "no_punc": [
+    "妈，我今晚不回来吃饭了，公司这边还有一堆事没弄完，你先睡吧，别等我"
+   ],
+   "segment_text": [
+    "妈，我今晚不回来吃饭了，公司这边还有一堆事没弄完，你先睡吧，别等我。"
+   ],
+   "short": [
+    "妈，我今晚不回来吃饭了，",
+    "公司这边还有一堆事没弄完，",
+    "你先睡吧，别等我。"
+   ],
+   "text": "妈，我今晚不回来吃饭了，公司这边还有一堆事没弄完，你先睡吧，别等我。"
+  },
+  {
+   "no_punc": [],
+   "segment_text": [
+    "……"
+   ],
+   "short": [
+    "……"
+   ],
+   "text": "……"
+  }
+ ],
+ "split_voice_tag": {
+  "<amo_speak>好呀</amo_speak>剩下的": [
+   "好呀",
+   "好呀剩下的"
+  ],
+  "<astrbot_speak a=\"1\">在</astrbot_speak>": [
+   "在",
+   "在"
+  ],
+  "没有标签的一句话": [
+   "",
+   "没有标签的一句话"
+  ]
+ },
+ "strip_voice_tags": {
+  "<amo_speak>好呀</amo_speak>剩下的": "好呀",
+  "<astrbot_speak a=\"1\">在</astrbot_speak>": "在",
+  "没有标签的一句话": "没有标签的一句话"
+ }
+}

@@ -28,6 +28,10 @@ except Exception:  # pragma: no cover
     logger = logging.getLogger("amo_terminal")
 
 from .deps import *  # noqa: F401,F403  用到：hashlib
+try:  # 纯数值工具单独一个模块：不让「算个数」把 astrbot 拖进来
+    from .numutil import clamp, to_float, to_int  # noqa: F401
+except ImportError:  # 直接按文件加载时
+    from numutil import clamp, to_float, to_int  # type: ignore  # noqa: F401
 from .consts import *  # noqa: F401,F403  用到：USAGE_DEFAULT_PRICES
 __all__ = [
     "clamp",
@@ -42,22 +46,6 @@ __all__ = [
     "proactive_pending_block_seconds",
 ]
 
-def clamp(value, low=0.0, high=100.0):
-    try:
-        value = float(value)
-    except Exception:
-        return float(low)
-    return max(float(low), min(float(high), value))
-def to_int(value, default=0):
-    try:
-        return int(float(value))
-    except Exception:
-        return default
-def to_float(value, default=0.0):
-    try:
-        return float(value)
-    except Exception:
-        return default
 def md5_int(text):
     return int(hashlib.md5(str(text).encode("utf-8")).hexdigest()[:8], 16)
 _CATEGORY_FEEL_CACHE = None
