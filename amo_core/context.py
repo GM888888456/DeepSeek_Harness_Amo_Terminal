@@ -810,6 +810,16 @@ class ContextMixin:
                 parts.append("【方言参考】只在合适口语词上偶尔用，不要硬改“就是/什么/怎么”，句子要通顺。\n" + dialect_context)
         except Exception:
             pass
+        # 按需检索人格档案：只在这句话真问到身份/资产/家里时才注入，闲聊不占 token。
+        try:
+            archive_line = await self.llm.persona_answer(umo, event.message_str or "")
+            if archive_line:
+                parts.append(
+                    "【档案原文】下面是她本人档案里的原文，按它说，不许改写身份、职业、资产和关系：\n"
+                    + archive_line
+                )
+        except Exception:
+            pass
         relation_network = self._relation_network_text(uid)
         if relation_network:
             parts.append("【关系网】\n" + relation_network)

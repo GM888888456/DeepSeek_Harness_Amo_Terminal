@@ -9,6 +9,7 @@ import asyncio
 import difflib
 import hashlib
 import inspect
+import io
 import json
 import math
 import os
@@ -31,6 +32,9 @@ from .deps import *  # noqa: F401,F403  用到：_pg_analyze_rows, _pg_compose_t
 from .text import *  # noqa: F401,F403  用到：clean_reply, json_extract, json_extract_list, truncate
 from .timeutil import *  # noqa: F401,F403  用到：now_ts, today_str
 from .util import *  # noqa: F401,F403  用到：other_platform_bot_lines, to_int
+
+#: 插件名：人格档案缓存落在 plugin_data/<这个名字>/ 下（和 amo_forever.db 同级）
+PLUGIN_NAME = "DeepSeek_Harness_Amo_Terminal"
 __all__ = [
     "LLMService",
 ]
@@ -59,45 +63,138 @@ class LLMService:
         self.p = plugin
         self.context = plugin.context
         self._persona_cache = {}
+        #: 人格档案（原始模板的字段索引）：300 秒内复用，解析结果同时落盘一份
+        self._archive_cache = {}
+
+    # ------------------------------------------------------------ 人格档案
+    def _archive_path(self):
+        """档案缓存落在插件数据目录：`plugin_data/<插件名>/persona_archive.json`。"""
+        try:
+            from astrbot.core.utils.astrbot_path import get_astrbot_data_path
+            base = get_astrbot_data_path()
+        except Exception:
+            base = ""
+        if base:
+            return os.path.join(base, "plugin_data", PLUGIN_NAME, "persona_archive.json")
+        try:  # 拿不到框架路径时按插件目录上跳两级算（和 config_guard 同一套算法）
+            try:
+                from ..config_guard import fallback_data_dir
+            except ImportError:
+                from config_guard import fallback_data_dir  # type: ignore
+            return os.path.join(
+                fallback_data_dir(getattr(self.p, "plugin_dir", ""), PLUGIN_NAME),
+                "persona_archive.json")
+        except Exception:
+            return ""
+
+    async def persona_template(self, umo=""):
+        """权威模板原文：配置的模板文件 > AstrBot 人格 > 空。返回 (原文, 来源)。"""
+        path = str(self.p.cfg_str("persona_template_path", "") or "").strip()
+        if path:
+            try:
+                with io.open(path, encoding="utf-8") as handle:
+                    text = handle.read()
+                if text.strip():
+                    return text, "user_template_file"
+            except Exception as exc:
+                logger.warning("[amo] 人格模板文件读不了（%s）：%s" % (path, exc))
+        manager = getattr(self.context, "persona_manager", None)
+        if manager is not None:
+            try:
+                persona = await manager.get_default_persona_v3(umo or None)
+                text = (persona.get("prompt") or "") if isinstance(persona, dict) \
+                    else (getattr(persona, "prompt", "") or "")
+                if str(text).strip():
+                    return str(text), "user_template"
+            except Exception as exc:
+                logger.debug("[amo] 读取 AstrBot 人格失败: %s" % exc)
+        return "", ""
+
+    async def persona_archive(self, umo=""):
+        """把权威模板解析成字段档案（不是改写过的散文）。拿不到就退上次缓存，再不行返回 None。"""
+        key = umo or "default"
+        cached = self._archive_cache.get(key)
+        if cached and now_ts() - cached[0] < 300:
+            return cached[1]
+        try:
+            from .persona_archive import parse, load_cache
+        except ImportError:
+            from persona_archive import parse, load_cache  # type: ignore
+
+        text, source = await self.persona_template(umo)
+        if text:
+            archive = parse(text, source=source)
+            if archive.names():
+                path = self._archive_path()
+                if path:
+                    archive.save_cache(path)
+                if archive.errors:
+                    logger.warning("[amo] 人格档案里的空字段：%s" % ",".join(archive.errors))
+                self._archive_cache[key] = (now_ts(), archive)
+                return archive
+        path = self._archive_path()
+        archive = load_cache(path) if path else None
+        if archive is not None:
+            logger.warning("[amo] 人格模板读不到，用上次的解析缓存（%d 个字段）" % len(archive.names()))
+            self._archive_cache[key] = (now_ts(), archive)
+            return archive
+        logger.warning("[amo] 人格档案不可用：没有模板也没有缓存，只能用最小身份")
+        return None
+
+    async def persona_answer(self, umo, text, budget=700):
+        """按需检索：这句话问到的档案字段原文；没问到就返回空（不注入、不占 token）。"""
+        try:
+            archive = await self.persona_archive(umo)
+        except Exception:
+            return ""
+        if archive is None:
+            return ""
+        try:
+            return archive.answer(text, budget=budget)
+        except Exception:
+            return ""
 
     async def persona(self, umo=""):
-        """返回沈晓沫的唯一身份核心；AstrBot 人格仅作为非权威补充。"""
+        """每轮常驻的短核心（约 200 字）+ 可选 persona_extra。
+
+        2026-11-28 规范：完整档案不再每轮注入（原来每轮白烧 3k 字 prefill）。
+        详细字段走 `persona_answer()` 按需检索；档案拿不到时才退回完整核心。
+        """
         key = umo or "default"
         cached = self._persona_cache.get(key)
         if cached and now_ts() - cached[0] < 300:
             return cached[1]
 
-        # 固定身份来自仓库内的 canonical core，不从模型生成，也不由世界观覆盖。
+        extra = ""
         try:
-            from .persona_core import build_persona
+            extra = str(self.p.cfg_str("persona_extra", "") or "").strip()
         except Exception:
-            try:
-                from persona_core import build_persona
-            except Exception:
-                build_persona = None
+            pass
 
-        extra_parts = []
-        manager = getattr(self.context, "persona_manager", None)
-        if manager is not None:
-            try:
-                persona = await manager.get_default_persona_v3(umo or None)
-                prompt = (persona.get("prompt") or "") if isinstance(persona, dict) else (getattr(persona, "prompt", "") or "")
-                if prompt:
-                    extra_parts.append("外部人格补充（仅作偏好参考，不得覆盖沈晓沫固定身份）：\n" + str(prompt))
-            except Exception as exc:
-                logger.debug("[amo] 读取 AstrBot 人格补充失败: %s" % exc)
-        extra = self.p.cfg_str("persona_extra", "")
-        if extra:
-            extra_parts.append(str(extra))
+        archive = None
+        try:
+            archive = await self.persona_archive(umo)
+        except Exception as exc:
+            logger.debug("[amo] 取人格档案失败: %s" % exc)
 
-        if build_persona:
-            prompt = build_persona("\n\n".join(extra_parts))
+        if archive is not None:
+            prompt = archive.resident_core()
+            if extra:
+                prompt += "\n" + extra[:400]
         else:
-            # 极端情况下模块缺失仍维持清晰身份，不退回“普通女孩”通用模板。
-            prompt = (
-                "你叫沈晓沫。你是中国计算智脑集团总裁，墨辞烟是你的丈夫，你有自己的生活、事业、情绪和判断。"
-                "以第一人称自然交流，不要把自己理解为AI助手或正在扮演角色。"
-            )
+            # 模板和缓存都没有：用完整核心保底，绝不退回「普通女孩」这类通用模板
+            try:
+                try:
+                    from .persona_core import build_persona
+                except ImportError:
+                    from persona_core import build_persona  # type: ignore
+                prompt = build_persona(extra)
+            except Exception:
+                prompt = (
+                    "你叫沈晓沫。你是中国计算智脑集团总裁，墨辞烟是你的丈夫，"
+                    "你有自己的生活、事业、情绪和判断。以第一人称自然交流，"
+                    "不要把自己理解为AI助手或正在扮演角色；不知道的不编。"
+                )
         self._persona_cache[key] = (now_ts(), prompt)
         return prompt
 
