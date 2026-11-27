@@ -58,11 +58,11 @@ def code_version():
     # duplicated as a literal in main.py. Validate that wiring, then use the
     # canonical metadata version for the cross-file consistency check.
     dynamic = re.search(
-        r'PLUGIN_VERSION\\s*=\\s*str\\(_amo_meta\\["version"\\]\\)', text
+        r'PLUGIN_VERSION\s*=\s*str\(_amo_meta\["version"\]\)', text
     )
     if dynamic:
         return metadata_version()
-    match = re.search(r"""PLUGIN_VERSION\\s*=\\s*["']([0-9]+\\.[0-9]+\\.[0-9]+)["']""", text)
+    match = re.search(r"""PLUGIN_VERSION\s*=\s*["']([0-9]+\.[0-9]+\.[0-9]+)["']""", text)
     return match.group(1) if match else ""
 
 def next_version(version, kind="test"):
