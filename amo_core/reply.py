@@ -58,7 +58,7 @@ class ReplyMixin:
         tone = self._tone_with_continuity(umo, self.state.tone_text(snap, relation))
         style = STYLE_HINTS.get(self.cfg_str("reply_style", "soft"), "")
         consult = bool(re.search(r"(怎么|如何|为什么|步骤|怎么办|该怎么做|教程|方法|建议|教我|能不能|是什么|该不该|可不可以)", text or ""))
-        recent = self._recent(umo, 10)
+        recent = self._recent(umo, 6)
         lines = []
         current_uid = self._canonical_uid(event)
         current_place = str((snap.get("activity") or {}).get("place") or "")
@@ -82,7 +82,7 @@ class ReplyMixin:
             else:
                 who = "你"
             lines.append(who + "：" + truncate(content, 100))
-        transcript = "\n".join(lines[-8:])
+        transcript = "\n".join(lines[-6:])
         self_name, self_uid, self_qq_nick, self_display = await self._self_identity(event)
         sender_nick = str(event.get_sender_name() or profile.get("name") or uid).strip()
         plat = self._platform_label(self._platform_of(event))
