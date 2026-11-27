@@ -2318,7 +2318,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         设 amo_context_keep_rounds=0 关闭；4 表示保留最近 4 轮（8 条）。
         """
         try:
-            keep = keep_rounds if keep_rounds is not None else self.cfg_int("amo_context_keep_rounds", 10)
+            keep = keep_rounds if keep_rounds is not None else self.cfg_int("amo_context_keep_rounds", 6)
             keep = int(keep)
             if keep <= 0:
                 return
