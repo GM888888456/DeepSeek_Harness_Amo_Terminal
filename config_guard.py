@@ -1,292 +1,174 @@
 # -*- coding: utf-8 -*-
-"""配置自愈：插件升级/重装之后，别让人重新填一遍 API key。
+"""config_guard.py —— 加载入口，不是实现。
 
-为什么会丢（AstrBot 侧的行为，不是我们的 bug）：
+真正的实现只有一份：`<终端插件>/amo_shared/config_guard.py`。
 
-1. 配置文件名由**插件目录名**拼成（``config/<目录名>_config.json``）。目录一改名，
-   就是一份全新的空配置，旧文件留在那儿当孤儿。
-2. 每次加载都会拿 ``_conf_schema.json`` 的默认值重建配置再覆盖回去
-   （``conf.clear(); conf.update(new_conf)``）—— schema 里没有的键会被删掉。
-3. 卸载时如果勾了「同时删除配置」，文件是直接删的。
-
-所以插件这边只能自救：**把读到过的值在「不会被升级覆盖、也不会被 schema 重写」的地方
-留一份快照**，下次启动发现某项空了就补回去。快照放插件数据目录
-（``plugin_data/<插件名>/config_snapshot.json``，0600），既不在插件目录里，也不在配置
-文件里，升级和重写都碰不到它。
-
-三条原则：
-
-1. **只补空，不覆盖。** 用户改了值以当前值为准，只有空的/缺的才从快照补。
-2. **只认本插件自己的文件。** 跨插件回填是凭据泄露的入口：旧配置只从「同名文件
-   （含它自己的 .bak 备份）／显式登记的旧目录名／本插件名 + 下划线开头的改名前缀」
-   里搬；同目录下别的插件 ``*_config.json`` 一律不读。敏感键（key / token / 密码 /
-   接口地址那一类）再加一道：只从同名文件和快照回填，改名前缀的旧文件不给。
-3. **日志只说键名，不说值。** 这些多半是 API key。
+- 加载成功：本模块就是公共实现的转发，`from .config_guard import ...` / `import config_guard` 照旧可用；
+- 加载不到 / 版本过旧 / 缺接口：降级成文件末尾的最小实现，导入不抛异常，
+  插件照常启动，只是这条能力退化，日志里有一条 warning 说明原因；
+- 本文件由 `amo_shared/gen_shims.py` 生成，手改会被下次生成覆盖。改行为请改公共实现。
 """
+
 from __future__ import annotations
 
-import glob
-import json
-import os
-import re
-from typing import Any
+import importlib.util as _ilu
+import logging as _logging
+import os as _os
+import sys as _sys
+import time as _time
 
-SNAPSHOT_NAME = "config_snapshot.json"
+_LOG = _logging.getLogger(__name__)
 
-#: 视为「没配」的值。空列表/空字典也算没配，因为 schema 默认值就是那样。
-EMPTY_VALUES = (None, "")
-
-
-def _is_empty(value: Any) -> bool:
-    if value in EMPTY_VALUES:
-        return True
-    if isinstance(value, (list, dict)) and not value:
-        return True
-    return False
-
-
-def _read_json(path: str) -> dict:
-    try:
-        with open(path, encoding="utf-8-sig") as fh:
-            data = json.load(fh)
-    except Exception:
-        return {}
-    return data if isinstance(data, dict) else {}
+#: 期望的公共实现版本：低于这个数就当「过旧」，降级
+NEED = 1
+#: 加载成功后必须存在的名字（公共实现缺了任何一个也降级）
+PUBLIC = ('heal', 'remember', 'fallback_data_dir', 'snapshot_path', 'load_snapshot', 'save_snapshot', 'schema_keys', 'config_stem', 'is_sensitive_key', 'orphan_values', 'SNAPSHOT_NAME', 'SENSITIVE_KEY_HINTS', 'EMPTY_VALUES')
+#: sys.modules 里的唯一名字，避免和别处同名模块打架
+_SHARED_NAME = "amo_shared_config_guard"
+#: 终端插件的目录名（改名、多版本都认）
+_TERMINAL_DIRS = (
+    "DeepSeek_Harness_Amo_Terminal", "deepseek_harness_amo_terminal",
+    "Astrbot_Amo_forever", "astrbot_plugin_amo_forever", "amo_forever",
+)
 
 
-def snapshot_path(data_dir: str) -> str:
-    return os.path.join(str(data_dir or ""), SNAPSHOT_NAME)
-
-
-def load_snapshot(data_dir: str) -> dict:
-    path = snapshot_path(data_dir)
-    if not os.path.exists(path):
-        return {}
-    return _read_json(path)
-
-
-def save_snapshot(data_dir: str, values: dict) -> bool:
-    """写快照。0600 —— 里面可能有 API key。"""
-    directory = str(data_dir or "")
-    if not directory:
-        return False
-    try:
-        os.makedirs(directory, exist_ok=True)
-        path = snapshot_path(directory)
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(values, fh, ensure_ascii=False, indent=2, sort_keys=True)
-        try:
-            os.chmod(tmp, 0o600)
-        except Exception:
-            pass
-        os.replace(tmp, path)
-        return True
-    except Exception:
-        return False
-
-
-def schema_keys(plugin_dir: str) -> list:
-    """插件自己的 schema 键（配置能被 AstrBot 保留的那些）。"""
-    path = os.path.join(str(plugin_dir or ""), "_conf_schema.json")
-    return list(_read_json(path).keys())
-
-
-#: 备份文件尾巴：``X_config.json.bak1`` / ``.bak.2`` / ``.backup`` 之类
-_BACKUP_SUFFIX_RE = re.compile(r"\.(bak|backup|old|save|orig|copy)[\w.-]*$", re.IGNORECASE)
-
-#: 敏感键的特征词：凭据/地址类。这类键绝不允许从「改名前缀」的旧文件里搬，
-#: 免得把别的插件（或早已作废的地址）的 key 塞进本插件、再随请求头发出去。
-SENSITIVE_KEY_HINTS = ("key", "token", "secret", "password", "passwd", "cookie",
-                       "auth", "credential", "webhook", "proxy", "api_base",
-                       "base_url", "endpoint")
-
-
-def is_sensitive_key(key: Any) -> bool:
-    """键名里带凭据/地址特征的，当作敏感键。"""
-    name = str(key or "").lower()
-    return any(hint in name for hint in SENSITIVE_KEY_HINTS)
-
-
-def config_stem(name: str) -> str:
-    """把配置文件名归一成「插件名」那一截：``X_config.json.bak1`` → ``X``。"""
-    base = os.path.basename(str(name or "").strip())
-    while True:
-        trimmed = _BACKUP_SUFFIX_RE.sub("", base)
-        if trimmed == base:
+def _terminal_dir():
+    """找终端插件目录：从本文件往上跳，看哪一级的同级目录里有 amo_shared/ 标记。"""
+    here = _os.path.dirname(_os.path.abspath(__file__))
+    current = here
+    for _ in range(4):
+        parent = _os.path.dirname(current)
+        if not parent or parent == current:
             break
-        base = trimmed
-    if base.endswith("_config.json"):
-        base = base[: -len("_config.json")]
-    elif base.endswith(".json"):
-        base = base[: -len(".json")]
-    return base
+        current = parent
+        for name in _TERMINAL_DIRS:
+            candidate = _os.path.join(current, name)
+            if _os.path.isdir(_os.path.join(candidate, "amo_shared")):
+                return candidate
+    try:
+        for entry in sorted(_os.listdir(current)):
+            candidate = _os.path.join(current, entry)
+            if _os.path.isdir(_os.path.join(candidate, "amo_shared")):
+                return candidate
+    except OSError:
+        pass
+    return None
 
 
-def _orphan_source(config_path: str, source: str, own_base: str, own_stem: str,
-                   legacy_stems: set) -> str:
-    """这份旧配置算不算「本插件自己的」：返回 ``exact`` / ``legacy`` / ``""``（不认）。
+def _load_shared():
+    """按路径加载公共实现，返回 (模块, 失败原因)。任何异常都收敛成失败原因。"""
+    root = _terminal_dir()
+    if not root:
+        return None, "没找到终端插件目录"
+    path = _os.path.join(root, "amo_shared", "config_guard.py")
+    if not _os.path.isfile(path):
+        return None, "公共实现文件不存在：" + path
+    try:
+        mtime = _os.path.getmtime(path)
+    except OSError:
+        mtime = 0
+    cached = _sys.modules.get(_SHARED_NAME)
+    if cached is not None and getattr(cached, "_SHIM_MTIME", None) == mtime:
+        return cached, ""
+    if cached is not None:  # 公共实现被改过（或插件热重载）：丢掉旧的重新读
+        _sys.modules.pop(_SHARED_NAME, None)
+    spec = _ilu.spec_from_file_location(_SHARED_NAME, path)
+    if spec is None or spec.loader is None:
+        return None, "无法为公共实现建立加载器"
+    module = _ilu.module_from_spec(spec)
+    _sys.modules[_SHARED_NAME] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:  # 公共实现自己炸了：降级，不带崩插件
+        _sys.modules.pop(_SHARED_NAME, None)
+        return None, "公共实现加载失败：%s: %s" % (type(exc).__name__, exc)
+    module._SHIM_MTIME = mtime
+    return module, ""
 
-    - ``exact``：文件名归一后就是本插件（含它自己的 .bak 备份），原样信任；
-    - ``legacy``：显式登记的旧目录名，或本插件名 + 下划线开头的改名前缀，
-      只搬非敏感键；
-    - ``""``：别的插件的配置文件，一个键都不读。
-    """
-    if os.path.abspath(str(source or "")) == os.path.abspath(str(config_path or "")):
-        return ""  # 当前这份配置本身：它就是「空」的来源，看它的 .bak 才有意义
-    stem = config_stem(source)
-    if not stem:
-        return ""
-    if own_stem and stem == own_stem:
-        return "exact"
-    if stem in legacy_stems:
-        return "legacy"
-    if own_stem and stem.startswith(own_stem + "_"):
-        return "legacy"  # 目录改名前的老名字，例如 X_old / X_v2
-    return ""
+
+def _publish(shared):
+    """转发公共实现的公开接口；下划线名字只转发 PUBLIC 里点名的那些。"""
+    names = []
+    for name in dir(shared):
+        if name.startswith("__"):
+            continue
+        if name.startswith("_") and name not in PUBLIC:
+            continue
+        value = getattr(shared, name)
+        if isinstance(value, type(_os)):  # 别把实现里的 os/json 之类转发出去
+            continue
+        globals()[name] = value
+        names.append(name)
+    globals()["SHIM_SOURCE"] = "shared"
+    globals()["__all__"] = sorted(set(names) | set(PUBLIC))
 
 
-def orphan_values(config_path: str, keys: list, own_name: str = "",
-                  legacy_names: tuple = ()) -> dict:
-    """从**本插件自己的**旧配置文件里捞同名的非空值。
+_SHARED, _WHY = _load_shared()
+if _SHARED is not None:
+    _version = getattr(_SHARED, "SHIM_VERSION", 0)
+    _missing = [name for name in PUBLIC if not hasattr(_SHARED, name)]
+    if _version < NEED:
+        _SHARED = None
+        _WHY = "公共实现过旧（%s < %s）" % (_version, NEED)
+    elif _missing:
+        _SHARED = None
+        _WHY = "公共实现缺接口：%s" % ",".join(_missing)
 
-    这就是「目录改名导致配置搬家」那一类事故的补救：新文件是空的，自己的旧文件
-    还在，键名一样，值就该搬过来。
+if _SHARED is not None:
+    _publish(_SHARED)
+else:
+    _LOG.warning("[%s] 公共实现不可用，降级为本地最小实现：%s",
+                 _os.path.basename(__file__), _WHY)
+    SHIM_SOURCE = "fallback"
+    SNAPSHOT_NAME = "config_snapshot.json"
+    EMPTY_VALUES = (None, "")
+    SENSITIVE_KEY_HINTS = ("key", "token", "secret", "password", "passwd", "cookie",
+                           "auth", "credential", "webhook", "proxy", "api_base",
+                           "base_url", "endpoint")
 
-    2026-11-18 审核打回后收紧：以前这里 glob 同目录所有 ``*_config.json`` 再按
-    键名取值，等于把别的插件的 ``api_key`` 当成本插件「改名前的配置」搬进来，
-    随后随 ``Authorization`` / ``xi-api-key`` 头发到第三方——凭据泄露。现在只认
-    本插件自己的文件（见 :func:`_orphan_source`），敏感键还额外只认同名文件。
-    """
-    if not config_path:
+    def snapshot_path(data_dir):
+        return _os.path.join(str(data_dir or ""), SNAPSHOT_NAME)
+
+    def load_snapshot(data_dir):
         return {}
-    folder = os.path.dirname(os.path.abspath(config_path))
-    own_base = os.path.basename(str(own_name or config_path))
-    own_stem = config_stem(own_base)
-    legacy_stems = {stem for stem in (config_stem(name) for name in (legacy_names or ()))
-                    if stem}
-    found: dict = {}
-    files = []
-    for pattern in ("*_config.json", "*_config.json.bak*", "*.json.bak*"):
-        files.extend(glob.glob(os.path.join(folder, pattern)))
-    # 越新的越优先：后扫到的覆盖前面
-    for path in sorted(set(files),
-                       key=lambda p: os.path.getmtime(p) if os.path.exists(p) else 0):
-        trusted = _orphan_source(config_path, path, own_base, own_stem, legacy_stems)
-        if not trusted:
-            continue
-        data = _read_json(path)
-        for key in keys:
-            value = data.get(key)
-            if _is_empty(value):
-                continue
-            # 改名前缀的旧文件只搬「非敏感」的键；凭据/地址只信同名文件和快照
-            if trusted != "exact" and is_sensitive_key(key):
-                continue
-            found[key] = value
-    return found
 
-
-def heal(config, *, plugin_name: str, plugin_dir: str, data_dir: str,
-         logger=None, extra_keys: tuple = (), legacy_names: tuple = ()) -> dict:
-    """补回空掉的配置项，然后刷新快照。返回恢复明细（只有键名）。"""
-    report = {"restored": [], "from_snapshot": [], "from_orphan": [],
-              "snapshot_written": False, "keys": 0}
-    if config is None:
-        return report
-
-    # 没有真实配置路径（测试里的裸 dict、或者 AstrBot 还没落盘）：
-    # 既没有地方补，也不该写快照——否则测试之间会互相污染。
-    config_path = str(getattr(config, "config_path", "") or "")
-    if not config_path or not callable(getattr(config, "save_config", None)):
-        return report
-
-    keys = list(schema_keys(plugin_dir))
-    for key in extra_keys:
-        if key not in keys:
-            keys.append(key)
-    # 快照里的键只认 schema 里还在的那些：
-    # schema 删掉的键＝功能已下线，绝不允许再从快照里复活（照片人设/模板那批就踩过）
-    snap = load_snapshot(data_dir)
-    allowed = set(keys)
-    snap = {key: value for key, value in snap.items() if key in allowed}
-    report["keys"] = len(keys)
-    if not keys:
-        return report
-
-    orphans = orphan_values(config_path, keys, os.path.basename(config_path),
-                             legacy_names=legacy_names)
-
-    for key in keys:
-        if not _is_empty(config.get(key)):
-            continue
-        if not _is_empty(snap.get(key)):
-            config[key] = snap[key]
-            report["restored"].append(key)
-            report["from_snapshot"].append(key)
-        elif not _is_empty(orphans.get(key)):
-            config[key] = orphans[key]
-            report["restored"].append(key)
-            report["from_orphan"].append(key)
-
-    if report["restored"]:
-        saver = getattr(config, "save_config", None)
-        if callable(saver):
-            try:
-                saver()
-            except Exception:
-                pass
-        if logger is not None:
-            try:
-                logger.warning(
-                    "[%s] 配置自愈：%d 项被补回（快照 %d / 旧配置文件 %d）：%s"
-                    % (plugin_name, len(report["restored"]),
-                       len(report["from_snapshot"]), len(report["from_orphan"]),
-                       ", ".join(report["restored"]))
-                )
-            except Exception:
-                pass
-
-    # 刷新快照：当前非空值全存一份（键用 schema 集合，避免越存越多陌生键）
-    values = {key: config.get(key) for key in keys if not _is_empty(config.get(key))}
-    report["snapshot_written"] = save_snapshot(data_dir, values)
-    return report
-
-
-def remember(config, *, plugin_dir: str, data_dir: str,
-             extra_keys: tuple = ()) -> bool:
-    """只刷新快照（配置变了以后调一次）。没有真实 config_path 时什么都不做。"""
-    if not str(getattr(config, "config_path", "") or ""):
+    def save_snapshot(data_dir, values):
         return False
-    keys = list(schema_keys(plugin_dir))
-    for key in extra_keys:
-        if key not in keys:
-            keys.append(key)
-    values = {}
-    for key in keys:
-        try:
-            value = config.get(key)
-        except Exception:
-            continue
-        if not _is_empty(value):
-            values[key] = value
-    return save_snapshot(data_dir, values)
 
+    def schema_keys(plugin_dir):
+        return []
 
-def fallback_data_dir(plugin_dir: str, plugin_name: str) -> str:
-    """算插件数据目录：``<AstrBot 数据目录>/plugin_data/<插件名>``。
+    def config_stem(name):
+        return ""
 
-    注意层级：插件目录是 ``<data>/plugins/<插件名>``，**要上跳两级**才到 ``<data>``；
-    ``plugin_data`` 和 ``plugins`` 是兄弟目录，不是它的子目录。
-    """
-    path = os.path.abspath(str(plugin_dir or ""))
-    plugins_root = os.path.dirname(path)
-    data_root = os.path.dirname(plugins_root)
-    target = os.path.join(data_root, "plugin_data", str(plugin_name or ""))
-    # 兜底：万一目录结构和预期不同，退回到旧算法里真实存在的那一个
-    if os.path.isdir(target):
+    def is_sensitive_key(key):
+        # 认不出实现时按「敏感」处理：宁可少回填，也不能把凭据搬错地方
+        return True
+
+    def orphan_values(config_path, keys, own_name="", legacy_names=()):
+        return {}
+
+    def heal(config, **kwargs):
+        return {"restored": [], "from_snapshot": [], "from_orphan": [],
+                "snapshot_written": False, "keys": 0}
+
+    def remember(config, **kwargs):
+        return False
+
+    def fallback_data_dir(plugin_dir="", plugin_name=""):
+        """算插件数据目录：<AstrBot 数据目录>/plugin_data/<插件名>（上跳两级）。"""
+        path = _os.path.abspath(str(plugin_dir or ""))
+        plugins_root = _os.path.dirname(path)
+        data_root = _os.path.dirname(plugins_root)
+        target = _os.path.join(data_root, "plugin_data", str(plugin_name or ""))
+        if _os.path.isdir(target):
+            return target
+        legacy = _os.path.join(plugins_root, "plugin_data", str(plugin_name or ""))
+        if _os.path.isdir(legacy):
+            return legacy
         return target
-    legacy = os.path.join(plugins_root, "plugin_data", str(plugin_name or ""))
-    if os.path.isdir(legacy):
-        return legacy
-    return target
+
+    __all__ = ["SNAPSHOT_NAME", "EMPTY_VALUES", "SENSITIVE_KEY_HINTS", "snapshot_path",
+               "load_snapshot", "save_snapshot", "schema_keys", "config_stem",
+               "is_sensitive_key", "orphan_values", "heal", "remember", "fallback_data_dir"]
+

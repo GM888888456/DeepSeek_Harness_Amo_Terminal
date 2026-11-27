@@ -207,5 +207,97 @@ class ConfigWatchFallbackTest(unittest.TestCase):
         self.assertIsNone(module.reset())
 
 
+class FakeSavedConfig(dict):
+    """模拟带 save_config 的配置对象。"""
+
+    def __init__(self, path, **values):
+        super().__init__(**values)
+        self.config_path = path
+        self.saves = 0
+
+    def save_config(self):
+        self.saves += 1
+        return True
+
+
+class ConfigGuardTest(unittest.TestCase):
+    """config_guard：同一份实现 + 配置自愈行为不变。"""
+
+    PLUGINS_WITH_GUARD = ("DeepSeek_Harness_Amo_Terminal", "DeepSeek_Harness_Amo_Image",
+                          "DeepSeek_Harness_Amo_Finance", "DeepSeek_Harness_Amo_Market",
+                          "DeepSeek_Harness_Amo_Medical")
+
+    def _module(self, plugin):
+        return load(os.path.join(PLUGINS, plugin, "config_guard.py"))
+
+    def test_all_use_shared_implementation(self):
+        modules = [self._module(p) for p in self.PLUGINS_WITH_GUARD]
+        for module in modules:
+            self.assertEqual(module.SHIM_SOURCE, "shared")
+        for module in modules[1:]:
+            self.assertIs(module.heal, modules[0].heal)
+            self.assertIs(module.fallback_data_dir, modules[0].fallback_data_dir)
+
+    def test_fallback_data_dir_matches_layout(self):
+        module = self._module("DeepSeek_Harness_Amo_Market")
+        root = tempfile.mkdtemp(prefix="amo-guard-")
+        self.addCleanup(shutil.rmtree, root, True)
+        plugins_root = os.path.join(root, "plugins")
+        plugin_dir = os.path.join(plugins_root, "DeepSeek_Harness_Amo_Market")
+        os.makedirs(plugin_dir)
+        expected = os.path.join(root, "plugin_data", "DeepSeek_Harness_Amo_Market")
+        self.assertEqual(module.fallback_data_dir(plugin_dir, "DeepSeek_Harness_Amo_Market"),
+                         expected)
+
+    def test_heal_restores_from_snapshot(self):
+        module = self._module("DeepSeek_Harness_Amo_Finance")
+        root = tempfile.mkdtemp(prefix="amo-heal-")
+        self.addCleanup(shutil.rmtree, root, True)
+        plugin_dir = os.path.join(root, "plugins", "X")
+        data_dir = os.path.join(root, "plugin_data", "X")
+        config_dir = os.path.join(root, "config")
+        for folder in (plugin_dir, data_dir, config_dir):
+            os.makedirs(folder)
+        with io.open(os.path.join(plugin_dir, "_conf_schema.json"), "w", encoding="utf-8") as fh:
+            fh.write(u'{"greeting": {}, "api_key": {}}')
+        cfg_path = os.path.join(config_dir, "X_config.json")
+        with io.open(cfg_path, "w", encoding="utf-8") as fh:
+            fh.write(u'{"greeting": "hi", "api_key": "k1"}')
+
+        first = FakeSavedConfig(cfg_path, greeting="hi", api_key="k1")
+        report = module.heal(first, plugin_name="X", plugin_dir=plugin_dir, data_dir=data_dir)
+        self.assertTrue(report["snapshot_written"])
+
+        second = FakeSavedConfig(cfg_path, greeting="", api_key="")
+        report2 = module.heal(second, plugin_name="X", plugin_dir=plugin_dir, data_dir=data_dir)
+        self.assertEqual(second["api_key"], "k1")
+        self.assertIn("api_key", report2["from_snapshot"])
+        self.assertEqual(second.saves, 1)
+
+    def test_bare_dict_config_is_noop(self):
+        module = self._module("DeepSeek_Harness_Amo_Medical")
+        report = module.heal({"a": ""}, plugin_name="X", plugin_dir="/tmp", data_dir="/tmp")
+        self.assertEqual(report["restored"], [])
+        self.assertFalse(report["snapshot_written"])
+
+
+class ConfigGuardFallbackTest(unittest.TestCase):
+    def test_missing_terminal_falls_back(self):
+        root = tempfile.mkdtemp(prefix="amo-guard-fb-")
+        self.addCleanup(shutil.rmtree, root, True)
+        plugin = os.path.join(root, "DeepSeek_Harness_Amo_Finance")
+        os.makedirs(plugin)
+        shutil.copy2(os.path.join(PLUGINS, "DeepSeek_Harness_Amo_Finance", "config_guard.py"),
+                     os.path.join(plugin, "config_guard.py"))
+        module = load(os.path.join(plugin, "config_guard.py"))
+        self.assertEqual(module.SHIM_SOURCE, "fallback")
+        report = module.heal({}, plugin_name="X", plugin_dir="/tmp", data_dir="/tmp")
+        self.assertEqual(report["restored"], [])
+        # 降级时仍然算得出数据目录，插件不会因为没有公共实现而拿错路径
+        self.assertTrue(module.fallback_data_dir("/a/plugins/X", "X").endswith("plugin_data/X"))
+        # 认不出实现时按敏感处理，宁可不回填
+        self.assertTrue(module.is_sensitive_key("api_key"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
