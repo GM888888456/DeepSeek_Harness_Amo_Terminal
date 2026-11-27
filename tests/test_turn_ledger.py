@@ -79,6 +79,17 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual(len(lines), 2)
         self.assertEqual(lines[0]["chars_total"], ledger.total())
 
+    def test_add_text_splits_by_marker(self):
+        ledger = TL.TurnLedger()
+        body = ("<amo_state>\n【档案原文】资产：云顶山庄\n【世界观】\n城市：贵阳\n"
+                "【此刻状态】\n在办公室\n【关于他的记忆】\n他喜欢喝茶\n</amo_state>")
+        ledger.add_text(body)
+        self.assertGreater(ledger.sections.get("archive", 0), 0)
+        self.assertGreater(ledger.sections.get("world", 0), 0)
+        self.assertGreater(ledger.sections.get("state", 0), 0)
+        self.assertGreater(ledger.sections.get("memory", 0), 0)
+        self.assertEqual(ledger.total(), len(body))
+
     def test_missing_path_is_silent(self):
         ledger = TL.TurnLedger("")
         ledger.add("persona", "x")

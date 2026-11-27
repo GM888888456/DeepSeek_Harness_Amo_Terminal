@@ -2145,6 +2145,17 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         except Exception as exc:
             logger.debug("[amo] 历史压缩失败: %s" % exc)
 
+    def _turn_ledger_path(self):
+        """注入账本路径：和人格档案缓存同一个数据目录。"""
+        try:
+            archive = self.llm._archive_path()
+        except Exception:
+            archive = ""
+        if not archive:
+            return ""
+        import os as _os
+        return _os.path.join(_os.path.dirname(archive), "turn_ledger.jsonl")
+
     @filter.on_llm_request()
     async def on_llm_request(self, event: AstrMessageEvent, req):
         try:
@@ -2297,6 +2308,17 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                     body += _action_hint(event.message_str or "")
                 except Exception as _al_exc:
                     logger.debug("[amo] 动作库注入失败: %s" % _al_exc)
+            # 每轮注入账本（规范第十一节）：这条才是真实回复路径（on_llm_request）
+            try:
+                try:
+                    from .amo_core.turn_ledger import TurnLedger
+                except Exception:
+                    from amo_core.turn_ledger import TurnLedger  # type: ignore
+                _ledger = TurnLedger(self._turn_ledger_path())
+                _ledger.add_text(body)
+                _ledger.log(logger, umo=getattr(event, "unified_msg_origin", "") or "")
+            except Exception as _lg_exc:
+                logger.debug("[amo] 注入账本失败: %s" % _lg_exc)
             parts = getattr(req, "extra_user_content_parts", None)
             if parts is None:
                 return

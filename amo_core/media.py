@@ -115,7 +115,11 @@ class MediaMixin:
                     except Exception:
                         pass
                 _chain.append(Comp.Plain(_seg))
-                await self.context.send_message(umo, MessageChain(_chain))
+                try:
+                    await self.context.send_message(umo, MessageChain(_chain))
+                except Exception as _send_exc:
+                    if not await self._send_plain_fallback(umo, _seg, _send_exc):
+                        raise
         except Exception as exc:
             logger.warning("[amo] 主动发送失败: %s" % exc)
             return False
@@ -123,6 +127,42 @@ class MediaMixin:
         logger.debug("[amo] 主动 -> %s: %s" % (umo, text[:300]))
         self._remember_bot_message(umo, text)
         return True
+
+    async def _send_plain_fallback(self, umo, text, exc):
+        """主动发送失败时的兜底：去掉引用/富消息，退到纯文本，再退到字符串。
+
+        AstrBot 在平台适配器不认某个组件时会抛 ApiNotAvailable（`str()` 常常是空的），
+        常见就是 MessageChain 里的 Reply/图片该平台不支持；纯文本通常还能发出去。
+        每次降级都写清原因，别再出现「只看到 ApiNotAvailable」这种查不下去的日志。
+        """
+        kind = "unknown"
+        try:
+            try:
+                from .provider_router import classify_error
+            except ImportError:
+                from provider_router import classify_error  # type: ignore
+            kind = classify_error(exc)
+        except Exception:
+            pass
+        tried = []
+        if Comp is not None and MessageChain is not None:
+            try:
+                await self.context.send_message(umo, MessageChain([Comp.Plain(str(text or ""))]))
+                logger.info("[amo] 主动发送降级为纯文本成功（原异常 %s/%s）"
+                            % (type(exc).__name__, kind))
+                return True
+            except Exception as exc2:
+                tried.append("纯文本失败:%s" % type(exc2).__name__)
+        try:
+            await self.context.send_message(umo, str(text or ""))
+            logger.info("[amo] 主动发送降级为字符串成功（原异常 %s/%s）"
+                        % (type(exc).__name__, kind))
+            return True
+        except Exception as exc3:
+            tried.append("字符串失败:%s" % type(exc3).__name__)
+        logger.warning("[amo] 主动发送降级也失败（原异常 %s/%s）：%s"
+                       % (type(exc).__name__, kind, "；".join(tried)))
+        return False
 
     async def _send_image_to_umo(self, umo, data, text="", quote_id="", label="照片",
                                  prompt="", scene=None):

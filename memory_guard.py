@@ -104,6 +104,17 @@ def commit(db, uid: str, text: str, now, now_ts: float | None = None) -> str:
 #: 只用来做冲突提示的地点词（宁可少报，不要误报）
 _PLACE_WORDS = ("酒店", "景区", "公司", "咖啡店", "家里", "家", "商场", "超市", "机场", "车站")
 
+#: 同一个地方的不同说法要归成一个，否则「家」和「家里」会被当成两个地点天天报警。
+#: 2026-11-28：「记忆可能对不上：地点与今天记过的『家里』不一致」就是这么来的。
+_PLACE_ALIASES = {"家里": "家", "家中": "家", "屋里": "家", "自家": "家",
+                  "办公室里": "公司", "公司里": "公司", "工位": "公司"}
+
+
+def canonical_place(word: str) -> str:
+    """把地点词归成一个规范名；认不出就原样返回。"""
+    value = str(word or "").strip()
+    return _PLACE_ALIASES.get(value, value)
+
 
 def conflict_hint(db, uid: str, text: str, now: datetime) -> str:
     """同一天里地点互相矛盾时给一句提示（只用于日志，不拦截）。"""
@@ -117,13 +128,15 @@ def conflict_hint(db, uid: str, text: str, now: datetime) -> str:
     match = None
     for word in _PLACE_WORDS:
         if word in str(text or ""):
-            match = word
+            match = canonical_place(word)
             break
     if match is None:
         return ""
-    others = [word for word in seen if word != match]
+    # 历史里也归一化：老数据里存着「家里」，不能拿它跟「家」比
+    seen_keys = [canonical_place(word) for word in seen]
+    others = [word for word in seen_keys if word != match]
     try:
-        db.kv_set("mem_places:%s:%s" % (uid, day), (seen + [match])[-6:])
+        db.kv_set("mem_places:%s:%s" % (uid, day), (seen_keys + [match])[-6:])
     except Exception:
         pass
     if others:

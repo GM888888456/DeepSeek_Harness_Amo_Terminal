@@ -627,6 +627,8 @@ class MiscMixin:
         now = __import__("time").time()
         if now - float(getattr(self, "_intent_last", 0) or 0) < 300:
             return
+        if now < float(getattr(self, "_intent_fail_until", 0) or 0):
+            return
         self._intent_last = now
         # 测试开关：kv intent_force_once=true 时，跳过睡眠时段跑一次（用完即删）
         force = False
@@ -654,6 +656,9 @@ class MiscMixin:
         except Exception as exc:
             logger.info("[amo] 意图执行失败(%s): %s" % (intent.get("id"), exc))
         logger.info("[amo] 意图执行结果 %s -> %s" % (intent.get("id"), ok))
+        if not ok:
+            # 发送失败（平台不可用之类）时退避 15 分钟，别每 5 分钟撞一次
+            self._intent_fail_until = now + 900
         if ok:
             it.mark(state, intent.get("id"), now)
             d.on_acted(state, intent.get("id"))

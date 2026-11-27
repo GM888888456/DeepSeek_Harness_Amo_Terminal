@@ -16,6 +16,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import time
 
 #: 区块名 → 中文标签（日志里好认）
@@ -74,6 +75,25 @@ class TurnLedger:
     def add_from_parts(self, parts) -> dict:
         for index, part in enumerate(list(parts or [])):
             self.add(classify(part, index), part)
+        return self.sections
+
+    #: 标记关键词 → 区块（body 里是拼成一整段的，只能按【…】拆）
+    _MARKERS = (("档案原文", "archive"), ("世界观", "world"), ("此刻状态", "state"),
+                ("记忆", "memory"), ("关系", "relation"))
+
+    def add_text(self, text) -> dict:
+        """把拼好的整段 body 按【标记】拆开分别计数。"""
+        for chunk in re.split(r"(?=【)", str(text or "")):
+            if not chunk.strip():
+                continue
+            section = "other"
+            if chunk.startswith("【") and "】" in chunk:
+                name = chunk[1:chunk.find("】")]
+                for key, target in self._MARKERS:
+                    if key in name:
+                        section = target
+                        break
+            self.add(section, chunk)
         return self.sections
 
     def total(self) -> int:
