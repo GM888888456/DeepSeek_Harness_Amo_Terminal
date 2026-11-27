@@ -42,7 +42,7 @@ def compact_parts(parts, max_chars=9000):
             out.append(value); used+=cost; continue
         remain=max_chars-used
         if remain>=120:
-            out.append(value[:remain].rstrip()+"…")
+            out.append(value[:max(0, remain - 1)].rstrip()+"…")
         break
     return out
 

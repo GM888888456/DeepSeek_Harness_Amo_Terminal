@@ -32,6 +32,15 @@ except Exception:  # pragma: no cover
 
 from .shared import *
 
+try:
+    from .context_budget import compact_parts as _compact_context_parts
+except Exception:  # pragma: no cover
+    try:
+        from context_budget import compact_parts as _compact_context_parts  # type: ignore
+    except Exception:
+        _compact_context_parts = None
+
+
 
 
 class ContextMixin:
@@ -953,6 +962,13 @@ class ContextMixin:
             "他来找你，哪怕你在上班、在忙，也先接住；"
             "禁止说“你先忙 / 你去忙 / 忙你的 / 那你先忙 / 不打扰你了 / 晚点聊”。"
         )
+        # 统一压缩最终提示词：先保留本轮动态事实，再保留固定规则；
+        # 不调用模型、不改写事实，超过预算时只截断最后一个低优先级片段。
+        if _compact_context_parts is not None:
+            try:
+                parts = _compact_context_parts(parts, max_chars=9000)
+            except Exception as exc:
+                logger.debug("[amo] 上下文预算压缩失败，保留原文: %s" % exc)
         return "\n".join(parts)
 
     async def _recall(self, uid, text, event=None):
