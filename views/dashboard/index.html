@@ -419,6 +419,25 @@
     }
     .world-overlay-box .label { font-size: 15px; }
     .world-overlay-box #worldToday div { margin-top: 4px; line-height: 1.5; }
+
+/* AMO Terminal UI v2: terminal-inspired visual skin */
+:root { --term-bg:#0b0f0d; --term-panel:#101613; --term-panel-2:#0d1210; --term-line:#26342c; --term-text:#d7e6dc; --term-muted:#7f9487; --term-accent:#67e8a5; --term-accent-2:#5eead4; }
+html[data-theme="light"] { --term-bg:#eef2ef; --term-panel:#f8faf9; --term-panel-2:#edf3ef; --term-line:#cdd8d1; --term-text:#18231d; --term-muted:#607267; --term-accent:#16794a; --term-accent-2:#087f73; }
+html,body { background:var(--term-bg)!important; color:var(--term-text)!important; }
+body { font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","PingFang SC","Microsoft YaHei",monospace!important; }
+.wrap { max-width:920px!important; gap:10px!important; }
+header { padding:8px 10px!important; border:1px solid var(--term-line)!important; background:var(--term-panel)!important; border-radius:8px!important; }
+.brand { font-size:15px!important; letter-spacing:.4px!important; } .dot { width:7px!important;height:7px!important;border-radius:2px!important;background:var(--term-accent)!important;box-shadow:none!important; }
+.clock,.label,.sub,footer,.schedule .t,.schedule .p { color:var(--term-muted)!important; }
+.card { background:var(--term-panel)!important; border:1px solid var(--term-line)!important; border-radius:8px!important; padding:13px!important; box-shadow:0 6px 18px rgba(0,0,0,.08)!important; backdrop-filter:none!important; }
+.value,.dominant,.hero-score { color:var(--term-text)!important; } .hero-score,.threshold .num { color:var(--term-accent)!important; }
+.track { background:var(--term-panel-2)!important; border:1px solid var(--term-line); } .fill { background:var(--term-accent)!important; }
+button { background:var(--term-panel-2)!important; border:1px solid var(--term-line)!important; border-radius:6px!important; color:var(--term-text)!important; }
+button:hover,.tab:hover,.tab.active { border-color:var(--term-accent)!important; color:var(--term-accent)!important; }
+input,select,textarea { background:var(--term-panel-2)!important;color:var(--term-text)!important;border-color:var(--term-line)!important;border-radius:5px!important; }
+.schedule li { background:var(--term-panel-2)!important;border:1px solid var(--term-line)!important;border-radius:5px!important; }
+.schedule li.current { background:rgba(103,232,165,.09)!important;border-color:rgba(103,232,165,.45)!important; }
+@media(max-width:680px){body{padding:8px!important}.wrap{max-width:100%!important}.card{padding:11px!important}}
 </style>
 </head>
 <body>
