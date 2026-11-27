@@ -37,12 +37,15 @@ def compact_parts(parts, max_chars=9000):
             normal.append(value)
     out=[]; used=0
     for value in dynamic+normal+low:
+        separator = 1 if out else 0  # join 时每段之间还会产生一个换行
+        available = max(0, max_chars - used - separator)
         cost=len(value)
-        if used+cost<=max_chars:
-            out.append(value); used+=cost; continue
-        remain=max_chars-used
-        if remain>=120:
-            out.append(value[:max(0, remain - 1)].rstrip()+"…")
+        if cost<=available:
+            out.append(value); used += separator + cost; continue
+        if available>=120:
+            clipped = value[:max(0, available - 1)].rstrip()
+            if clipped:
+                out.append(clipped + "…")
         break
     return out
 
