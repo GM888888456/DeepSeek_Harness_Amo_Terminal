@@ -342,13 +342,16 @@ class LLMService:
 
     async def gen_worldview(self, umo, persona):
         system = "你是一个世界观设定师。只输出 JSON，不要输出其他文字。"
+        # 2026-11-28 规范第七节：世界观生成器**只能生成可变生活补充**。
+        # 姓名/年龄/职业/资产/丈夫/家庭背景一律由人格档案提供，模型不许碰。
         prompt = (
-            "根据下面的人格设定，为这个角色生成一个真实可信的现代生活世界观。\n"
+            "根据下面的人格设定，补充这个角色**可变的生活背景**（不要写身份）。\n"
             "人格设定：\n" + truncate(persona, 1500) + "\n\n"
-            "输出 JSON 对象，字段：name(角色名), age(整数), city(城市), occupation(职业), "
-            "workplace(工作或学习地点), personality(性格一句话), hobbies(字符串数组), "
-            "daily_life(日常生活一段话), world_rules(这个世界和人设的规则一段话), "
-            "summary(50字内总结)。"
+            "输出 JSON 对象，只有这些字段：city(所在城市), hobbies(字符串数组), "
+            "daily_life(日常作息与生活习惯，一段话), summary(50字内总结), "
+            "world_rules(这个世界的基本规则，一段话)。\n"
+            "禁止输出或改写：姓名、年龄、生日、职业、工作单位、资产、车房、丈夫、家庭背景、"
+            "性格标签——这些已有权威设定，你写的一律作废。"
         )
         raw = await self.chat_raw(umo, system, prompt)
         data = json_extract(raw)
@@ -357,17 +360,14 @@ class LLMService:
         hobbies = data.get("hobbies")
         if not isinstance(hobbies, list):
             hobbies = [str(hobbies)] if hobbies else []
+        # 身份字段不从这里出（模型给的 name/occupation/personality 一律丢弃），
+        # 由 human_state.ensure_worldview() 从人格档案回填。
         return {
-            "name": str(data.get("name") or self.p.bot_name),
-            "age": to_int(data.get("age"), 22),
             "city": str(
                 data.get("city")
                 or self.p.cfg_str("weather_city_name", "")
-                or self.p.cfg_str("weather_city", "贵阳")
+                or self.p.cfg_str("weather_city", "")
             ),
-            "occupation": str(data.get("occupation") or "普通上班族"),
-            "workplace": str(data.get("workplace") or "公司"),
-            "personality": str(data.get("personality") or "温柔敏感"),
             "hobbies": [str(item)[:20] for item in hobbies[:5]],
             "daily_life": str(data.get("daily_life") or ""),
             "world_rules": str(data.get("world_rules") or ""),

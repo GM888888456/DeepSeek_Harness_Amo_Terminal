@@ -270,7 +270,7 @@ class CommandMixin:
                 await self.state.ensure_worldview(self._last_umo, force=True)
                 return "✅ 世界观已重新生成。"
             await self.state.ensure_worldview(self._last_umo)
-            return "🌍 世界观\n" + self.state.worldview_text()
+            return "🌍 世界观\n" + self.state.worldview_text(with_identity=True)
 
         if sub == "threshold" or sub == "阈值":
             data = await self._status_data()

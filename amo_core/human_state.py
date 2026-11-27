@@ -664,6 +664,44 @@ class HumanState:
             "_ts": now_ts(),
         }
 
+    async def _worldview_with_identity(self, data, umo=""):
+        """世界观里的身份字段从人格档案回填；档案没有就留空，不编。"""
+        world = dict(data or {})
+        archive = None
+        try:
+            archive = await self.p.llm.persona_archive(umo)
+        except Exception:
+            archive = None
+        if archive is not None:
+            name = (archive.field("姓名") or "").split("（")[0].strip()
+            if name:
+                world["name"] = name
+            occupation = archive.field("职业")
+            if occupation:
+                world["occupation"] = occupation.split("。")[0].strip()
+            age = self._age_from_birthday(archive.field("生日"))
+            if age:
+                world["age"] = age
+        # 性格标签不放进世界观：性子由档案的「性子」字段按需提供
+        world.pop("personality", None)
+        return world
+
+    @staticmethod
+    def _age_from_birthday(text):
+        """从「2001年5月20日」算年龄；解析不出就返回 0（不猜）。"""
+        import re as _re
+        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+        match = _re.search(r"(\d{4})\s*[年\-/]\s*(\d{1,2})\s*[月\-/]\s*(\d{1,2})", str(text or ""))
+        if not match:
+            return 0
+        try:
+            born = _dt(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+        except ValueError:
+            return 0
+        today = _dt.now(_tz(_td(hours=8)))
+        age = today.year - born.year - ((today.month, today.day) < (born.month, born.day))
+        return age if 0 < age < 120 else 0
+
     async def ensure_worldview(self, umo, force=False):
         if not force and self.worldview and now_ts() - to_float(self.worldview.get("_ts")) < 7 * 86400:
             return self.worldview
@@ -671,6 +709,11 @@ class HumanState:
         data = await self.p.llm.gen_worldview(umo, persona)
         if not data:
             data = self._fallback_world()
+        # 身份字段只认人格档案（模型/兜底给的都不算）——规范第七节
+        try:
+            data = await self._worldview_with_identity(data, umo)
+        except Exception as exc:
+            logger.debug("[amo] 世界观身份回填失败: %s" % exc)
         name = await self.p._persona_name_for(umo)
         if name:
             data["name"] = name
@@ -684,24 +727,31 @@ class HumanState:
             self.p.bot_name = data["name"]
         return data
 
-    def worldview_text(self):
+    def worldview_text(self, with_identity=False):
+        """生活背景（可变补充）。
+
+        默认**不重复注入身份**：姓名/年龄/职业/资产由人格档案负责，这里再说一遍
+        既有冲突风险，也是每轮白烧几十字。`with_identity=True` 给指令面板看全的。
+        """
         world = self.worldview or {}
         if not world:
             return "还没有生成世界观。"
         hobbies = world.get("hobbies") or []
         if isinstance(hobbies, list):
             hobbies = "、".join([str(item) for item in hobbies])
-        return "\n".join([
-            "名字：%s" % world.get("name", ""),
-            "年龄：%s" % world.get("age", ""),
-            "城市：%s" % world.get("city", ""),
-            "职业：%s" % world.get("occupation", ""),
-            "任职：%s" % world.get("workplace", ""),
-            "性格：%s" % world.get("personality", ""),
-            "爱好：%s" % hobbies,
-            "日常：%s" % world.get("daily_life", ""),
-            "规则：%s" % world.get("world_rules", ""),
-        ])
+        lines = []
+        if with_identity:
+            for label, key in (("名字", "name"), ("年龄", "age"), ("城市", "city"),
+                               ("职业", "occupation"), ("任职", "workplace")):
+                if str(world.get(key) or "").strip():
+                    lines.append("%s：%s" % (label, world.get(key)))
+        elif str(world.get("city") or "").strip():
+            lines.append("城市：%s" % world.get("city"))
+        for label, value in (("爱好", hobbies), ("日常", world.get("daily_life")),
+                             ("规则", world.get("world_rules"))):
+            if str(value or "").strip():
+                lines.append("%s：%s" % (label, value))
+        return "\n".join(lines) or "还没有生成世界观。"
 
     # ---------- 日程（主干生成 + 动态展开） ----------
     @staticmethod
