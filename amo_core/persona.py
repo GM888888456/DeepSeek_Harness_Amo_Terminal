@@ -191,11 +191,23 @@ class PersonaMixin:
         return DIALECT_REGIONS.get(style, style)
 
     def _dialect_active(self):
-        """方言是否生效：语种选「普通话」就等于关掉方言（连方言库都不查）。"""
-        style = str(self.cfg_str("dialect_style", "") or "").strip()
-        if style in ("普通话", "关闭", "off", "none"):
-            return False
-        return self.cfg_bool("dialect_enabled", True)
+        """方言是否生效。
+
+        **2026-11-28 起固定返回 False**（产品决定：方言模仿从生成链路下线）。
+
+        这里是整条链路的唯一开关：`context.py` / `reply.py` / `llm_service.py` /
+        `_dialect_kb_context` / `_ensure_dialect_kb` 全都问这一个函数，所以它一关，
+        提示词注入、方言库检索、知识库同步就同时停了，不用去改五处。
+
+        保留下来的东西（别顺手删）：
+        - `dialects` 表和 `_seed_dialects`、`DIALECT_FALLBACK_ROWS`、`_dialect_rows()`：
+          词表是数据，删了不可逆；先解耦、以后要迁移再说。
+        - `polish.py` 的出口校验不依赖这里：它有自己的 `_TIME_WORDS`（含「清早八晨」这类
+          口语时间词），跟方言开关无关，正常口语表达不受影响。
+
+        想恢复方言（不建议）就把下面这行改成原来的判断，但页面和 schema 里的入口已经删了。
+        """
+        return False
 
     def _dialect_style(self):
         """语种：配置里写了就用配置（面板可覆盖），没写就按世界观城市自动选。"""

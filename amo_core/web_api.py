@@ -417,11 +417,8 @@ class WebApiMixin:
                 continue
             meta = schema.get(key)
             if not isinstance(meta, dict):
-                # 操作页的「语种」下拉不在 schema 里，单独放行（普通话/各地方言）
-                if key == "dialect_style":
-                    meta = {"type": "string", "default": ""}
-                else:
-                    continue
+                # 2026-11-28：方言下线，`dialect_style` 不再接受写入（面板入口已删）
+                continue
             try:
                 coerced = self._coerce_config_value(meta.get("type", "string"), value)
             except Exception as exc:
@@ -1039,6 +1036,10 @@ class WebApiMixin:
 
     async def api_kb_regen(self):
         await self._ensure_ready()
+        if not self._dialect_active():
+            # 方言已下线：接口保留（老页面/脚本调用不会 404），但不再建库
+            return {"code": 0, "msg": "方言已下线（2026-11-28）：不再创建/检索方言知识库；"
+                                     "dialects 表与词表保留未删"}
         try:
             data = await self._body()
         except Exception:
