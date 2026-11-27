@@ -150,9 +150,17 @@ class LLMService:
         if archive is None:
             return ""
         try:
-            return archive.answer(text, budget=budget)
+            answer = archive.answer(text, budget=budget)
         except Exception:
             return ""
+        if answer:
+            # 可观测性（规范第十一节）：哪几个字段被注入、占了多少字，一眼能查
+            try:
+                names = [name for name, _word in archive.match(text)]
+            except Exception:
+                names = []
+            logger.info("[amo] 档案注入 %d 字：%s" % (len(answer), "/".join(names) or "?"))
+        return answer
 
     async def persona(self, umo=""):
         """每轮常驻的短核心（约 200 字）+ 可选 persona_extra。
