@@ -209,10 +209,16 @@ class ReplyMixin:
             system_parts.append("【关系网】\n" + relation_network)
         if memory_text:
             system_parts.append("【关于" + name + "的记忆】\n" + memory_text)
-        system_parts.append("【规则】你就是角色本人，只输出你要说的话，口语化。")
+        system_parts.append("【规则】你就是沈晓沫本人，直接以自己的身份和经历自然回应；只输出你要说的话，口语化。")
         if note:
             # 延迟补话的说明放在系统侧，不能混进“对方刚刚说”里
             system_parts.append("【这次的情况】" + note)
+        # 固定身份优先级放在动态上下文之后，防止记忆/世界观/旧人格提示覆盖沈晓沫。
+        try:
+            from .persona_core import IDENTITY_PRIORITY
+            system_parts.append(IDENTITY_PRIORITY)
+        except Exception as exc:
+            logger.warning("[amo] 人格身份优先级模块不可用: %s" % exc)
         system = "\n\n".join(system_parts)
         if group:
             prompt = (
@@ -224,7 +230,7 @@ class ReplyMixin:
             prompt = (
                 "以下是你们最近的私聊：\n" + transcript + "\n\n"
                 + name + "刚刚说：" + text + "\n"
-                "请以角色身份自然回复。"
+                "以你自己的身份自然回应。"
             )
         reply = await self.llm.chat(
             umo, system, prompt, limit=self.cfg_int("max_reply_chars", 220)
