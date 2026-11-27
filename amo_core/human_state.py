@@ -714,6 +714,21 @@ class HumanState:
             data = await self._worldview_with_identity(data, umo)
         except Exception as exc:
             logger.debug("[amo] 世界观身份回填失败: %s" % exc)
+        # 冲突裁决（规范 4.5/第六节）：只报告、不自动改数据，以档案为准
+        try:
+            try:
+                from .authority import scan_conflicts
+            except ImportError:
+                from authority import scan_conflicts  # type: ignore
+            archive = await self.p.llm.persona_archive(umo)
+            text = " ".join(str(data.get(key) or "") for key in
+                            ("city", "daily_life", "world_rules", "summary"))
+            for item in scan_conflicts(archive, text):
+                logger.warning(
+                    "[amo] 世界观与人格档案冲突（%s）：档案「%s」/ 文本里出现「%s」，以档案为准"
+                    % (item["field"], item["archive"][:30], item["conflict_text"]))
+        except Exception as exc:
+            logger.debug("[amo] 世界观冲突检查失败: %s" % exc)
         name = await self.p._persona_name_for(umo)
         if name:
             data["name"] = name

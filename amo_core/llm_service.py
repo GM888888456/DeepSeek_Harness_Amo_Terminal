@@ -52,6 +52,11 @@ __all__ = [
 # - 换模型、删供应商都不用改代码。
 AUX_KINDS = ("polish", "judge", "extract")
 
+#: 世界观 JSON 的字段规格（规范 5.6：不合格就丢，不写进记忆）
+WORLDVIEW_JSON_SPEC = {"city": "str?", "hobbies": "list?",
+                       "daily_life": "str?", "world_rules": "str?",
+                       "summary": "str?"}
+
 #: 只把「同一件事的不同叫法」归到上面三类，别把写作类也塞进来
 AUX_ALIASES = {
     "rewrite": "polish", "humanize": "polish", "voice": "polish",
@@ -236,13 +241,30 @@ class LLMService:
             return ()
         return tuple(x.strip() for x in conf.replace("，", ",").split(",") if x.strip())
 
+    def _router_obj(self):
+        """辅助模型路由（健康缓存 + 选择理由）；拿不到就退化成「只用配置」。"""
+        router = getattr(self, "_router", None)
+        if router is None:
+            try:
+                from .provider_router import ProviderRouter
+            except ImportError:
+                from provider_router import ProviderRouter  # type: ignore
+            router = ProviderRouter()
+            self._router = router
+        return router
+
     async def _aux_provider(self, kind):
-        """按用途挑小模型：只看 `aux_provider_<kind>` 配置，没配就返回 None（调用方用主模型）。"""
-        for pid in self._aux_ids(kind):
-            provider = await self._provider_by_id(pid)
-            if provider is not None:
-                return provider
-        return None
+        """按用途挑小模型：配置候选 → 近期失败的跳过 → 都没有就走主模型（返回 None）。
+
+        规矩见 amo_core/provider_router.py：不写死任何 id，选择/跳过都留理由。
+        """
+        try:
+            provider, reason = await self._router_obj().pick(self.p, kind, self._provider_by_id)
+        except Exception as exc:
+            logger.debug("[amo] 辅助模型路由失败（%s）: %s" % (kind, exc))
+            return None
+        logger.debug("[amo] 辅助模型 %s：%s" % (kind, reason))
+        return provider
 
     async def probe_all(self):
         """启动时探一遍辅助模型配置（缺了就在日志里说，不用等触发）。"""
@@ -298,7 +320,17 @@ class LLMService:
                 contexts=contexts or [],
             )
         except Exception as exc:
-            logger.error("[amo] LLM 调用失败: %s" % exc)
+            _kind = "unknown"
+            try:
+                try:
+                    from .provider_router import classify_error
+                except ImportError:
+                    from provider_router import classify_error  # type: ignore
+                _kind = classify_error(exc)
+            except Exception:
+                pass
+            # 规范 5.3：错误要分类，不许一律变成空字符串
+            logger.error("[amo] LLM 调用失败（%s）: %s" % (_kind, exc))
             if not using_aux:
                 return ""
             fallback = await self.provider(umo)
@@ -357,6 +389,20 @@ class LLMService:
         data = json_extract(raw)
         if not isinstance(data, dict):
             return None
+        try:
+            try:
+                from .json_guard import validate, clean
+            except ImportError:
+                from json_guard import validate, clean  # type: ignore
+            ok, problems = validate(data, WORLDVIEW_JSON_SPEC)
+            data = clean(data, WORLDVIEW_JSON_SPEC)
+            if not ok:
+                logger.warning("[amo] 世界观 JSON 不合格（%s），只留合格字段" % "；".join(problems))
+            if not data:
+                logger.warning("[amo] 世界观 JSON 全是废字段，丢弃")
+                return None
+        except Exception as exc:
+            logger.debug("[amo] 世界观 JSON 校验失败（按原样用）: %s" % exc)
         hobbies = data.get("hobbies")
         if not isinstance(hobbies, list):
             hobbies = [str(hobbies)] if hobbies else []

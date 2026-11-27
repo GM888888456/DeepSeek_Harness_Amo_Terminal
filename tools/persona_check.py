@@ -133,6 +133,57 @@ def print_ledger(limit=8):
                                      row.get("chars_total", 0)))
 
 
+def _world_text():
+    """从 kv 里拼出世界观正文（只读）；没有就返回空串。"""
+    db = os.path.join(DATA, "Astrbot_Amo_forever", "amo_forever.db")
+    if not os.path.isfile(db):
+        return ""
+    try:
+        import sqlite3
+        conn = sqlite3.connect("file:%s?mode=ro" % db, uri=True)
+        row = conn.execute("SELECT value FROM kv WHERE key='worldview'").fetchone()
+        conn.close()
+        world = json.loads(row[0]) if row and row[0] else {}
+    except Exception:
+        return ""
+    return " ".join(str(world.get(k) or "") for k in ("name", "city", "daily_life",
+                                                    "world_rules", "summary", "occupation"))
+
+
+def print_conflicts(archive):
+    print()
+    print("== 冲突检查（档案 vs 世界观，只报告不改数据）==")
+    text = _world_text()
+    if not text:
+        print("  读不到 kv.worldview，跳过")
+        return 0
+    try:
+        from amo_core.authority import scan_conflicts
+    except Exception as exc:
+        print("  冲突检查不可用：%s" % exc)
+        return 0
+    problems = scan_conflicts(archive, text)
+    if not problems:
+        print("  没有发现冲突")
+        return 0
+    for item in problems:
+        print("  ⚠️ %s：档案「%s」/ 文本里出现「%s」（以档案为准）"
+              % (item["field"], item["archive"][:30], item["conflict_text"]))
+    return len(problems)
+
+
+def print_query(archive, queries):
+    print()
+    print("== 检索诊断 ==")
+    for query in queries:
+        hits = archive.match_scored(query)
+        answer = archive.answer(query)
+        print("  %-18s 命中 %-22s 注入 %3d 字"
+              % (query, ", ".join("%s(%d)" % (n, s) for n, _w, s in hits) or "（无）", len(answer)))
+        if answer:
+            print("      %s" % answer.replace("\n", " / ")[:100])
+
+
 def print_switches():
     print()
     print("== 开关现状 ==")
@@ -164,6 +215,7 @@ def print_switches():
 
 
 def main():
+    queries = [arg.split("=", 1)[1] for arg in sys.argv[1:] if arg.startswith("--query=")]
     archive, source = load_archive()
     if archive is None:
         print("找不到人格档案，也找不到模板快照：%s" % ARCHIVE_JSON)
@@ -171,6 +223,9 @@ def main():
     print_archive(archive, source)
     print_core(archive)
     bad = print_questions(archive)
+    print_conflicts(archive)
+    if queries:
+        print_query(archive, queries)
     print_ledger()
     print_switches()
     print()
