@@ -1342,6 +1342,15 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 event.set_extra("amo_t0", time.time())
             except Exception:
                 pass
+            # 之前没发出去的主动消息：趁这条有事件上下文补发（aiocqhttp 后台发不出去）
+            try:
+                try:
+                    from .amo_core.undelivered import flush as _flush_undelivered
+                except Exception:
+                    from amo_core.undelivered import flush as _flush_undelivered  # type: ignore
+                await _flush_undelivered(self, event, log=logger)
+            except Exception as _fl_exc:
+                logger.debug("[amo] 补发积压消息失败: %s" % _fl_exc)
             # REPLY_GATE 2026-11-23：登记这是本会话最新一条，供发送前判断是否已过期
             try:
                 try:

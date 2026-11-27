@@ -162,6 +162,15 @@ class MediaMixin:
             tried.append("字符串失败:%s" % type(exc3).__name__)
         logger.warning("[amo] 主动发送降级也失败（原异常 %s/%s）：%s"
                        % (type(exc).__name__, kind, "；".join(tried)))
+        # 后台任务没有事件上下文，aiocqhttp 可能根本发不出去：存起来，等他下次说话补发
+        try:
+            try:
+                from .undelivered import queue as _queue
+            except ImportError:
+                from undelivered import queue as _queue  # type: ignore
+            _queue(self, umo, text, log=logger)
+        except Exception as _q_exc:
+            logger.debug("[amo] 入队待补发失败: %s" % _q_exc)
         return False
 
     async def _send_image_to_umo(self, umo, data, text="", quote_id="", label="照片",
