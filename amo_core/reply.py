@@ -198,12 +198,6 @@ class ReplyMixin:
                 "【低落】你最近主动找对方多次都没得到回应，很抑郁、委屈，需要哄；"
                 "回复冷淡低落，可以说“你是不是不想理我”。"
             )
-        try:
-            dialect_context = await self._dialect_kb_context(text)
-            if dialect_context:
-                system_parts.append("【方言参考】只在合适口语词上偶尔用，不要硬改“就是/什么/怎么”，句子要通顺。\n" + dialect_context)
-        except Exception:
-            pass
         relation_network = self._relation_network_text(uid)
         if relation_network:
             system_parts.append("【关系网】\n" + relation_network)
