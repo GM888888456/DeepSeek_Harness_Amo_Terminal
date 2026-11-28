@@ -192,7 +192,26 @@ class InfraMixin:
                 continue
             if key.startswith("voice_"):
                 group = "语音"
-            elif key.startswith("image_share_") or key.startswith("draw_") or key.startswith("photo_"):
+            elif (
+                key.startswith("image_share_")
+                or key.startswith("draw_")
+                or key.startswith("photo_")
+                or key in {
+                    "enable", "mount_only", "provider", "api_base", "api_key", "model",
+                    "size", "aspect_ratio", "n", "quality", "style", "chat_modalities",
+                    "timeout", "custom_url", "custom_body", "custom_response_path",
+                    "character_appearance", "core_appearance", "self_face_max_distance",
+                    "self_face_archive_max", "character_gender", "camera_mode",
+                    "character_persona", "use_memory_context", "memory_context_limit",
+                    "allow_private", "allow_group", "require_at_in_group", "quote_in_group",
+                    "keywords", "cooldown_seconds", "safe_mode", "blocked_reply",
+                    "private_daily_limit", "group_daily_limit", "reply_prefix", "error_reply",
+                    "request_style", "photo_keywords", "photo_default_prompt",
+                    "character_hairstyle", "character_outfits", "outfit_change_keywords",
+                    "outfit_change_cooldown_minutes", "lock_scene_to_schedule",
+                    "negative_prompt", "batch_max",
+                }
+            ):
                 group = "照片"
             elif key.startswith("companion_") or key.startswith("memory_") or key in ("admin_uids",):
                 group = "记忆"
