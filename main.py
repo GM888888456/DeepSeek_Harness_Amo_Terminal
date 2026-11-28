@@ -38,6 +38,7 @@ try:
     from .amo_core.media import *  # noqa: F401,F403
     from .amo_core.shared import *  # noqa: F401,F403
     from .amo_core.relations import *  # noqa: F401,F403
+    from .amo_core.relationship_store import RelationshipStore  # noqa: F401
     from .amo_core.presence import *  # noqa: F401,F403
     from .amo_core.outfit import *  # noqa: F401,F403
     from .amo_core.weather import *  # noqa: F401,F403
@@ -74,6 +75,7 @@ except ImportError:  # 非包方式加载时的回退
     from amo_core.media import *  # noqa: F401,F403
     from amo_core.shared import *  # noqa: F401,F403
     from amo_core.relations import *  # noqa: F401,F403
+    from amo_core.relationship_store import RelationshipStore  # noqa: F401
     from amo_core.presence import *  # noqa: F401,F403
     from amo_core.outfit import *  # noqa: F401,F403
     from amo_core.weather import *  # noqa: F401,F403
@@ -469,6 +471,29 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             if item.strip():
                 self.admin_uids.add(item.strip())
         self.db = AmoDB(self.plugin_dir)
+        # Relationship 与 Terminal 共用独立关系数据库；日程、人格和用户私密状态仍留在 AmoDB。
+        self.relationship_store = None
+        try:
+            try:
+                from astrbot.core.utils.astrbot_path import get_astrbot_data_path
+                _relationship_dir = os.path.join(
+                    get_astrbot_data_path(), "plugin_data", "DeepSeek_Harness_Amo_Relationship"
+                )
+            except Exception:
+                try:
+                    from .config_guard import fallback_data_dir as _relationship_fallback
+                except Exception:
+                    from config_guard import fallback_data_dir as _relationship_fallback
+                _relationship_dir = _relationship_fallback(self.plugin_dir, "DeepSeek_Harness_Amo_Relationship")
+            self.relationship_store = RelationshipStore(_relationship_dir)
+            _legacy_profiles = self.db.list_profiles(limit=5000)
+            _legacy_relations = self.db.list_relations()
+            _migrated = self.relationship_store.import_legacy(_legacy_profiles, _legacy_relations)
+            if _migrated.get("people_imported") or _migrated.get("relationships_imported"):
+                logger.info("[relationship] 旧关系数据已幂等迁移：%s", _migrated)
+        except Exception as _relationship_exc:
+            logger.error("[relationship] 关系库连接/迁移失败，旧关系逻辑暂时保留：%s", _relationship_exc)
+            self.relationship_store = None
         # 配置里没写名字时先用上次记住的（人格要等第一条消息才解析得出来）
         if not str(self.cfg_str("bot_name", "") or "").strip():
             try:
