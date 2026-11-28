@@ -164,7 +164,7 @@ class SyncMixin:
         if not migrated:
             pushed = {"relations": 0, "cache": 0}
             try:
-                for edge in self.db.list_relations():
+                for edge in self._relationship_edges_legacy():
                     await self._push_relation_to_data(
                         edge.get("a_uid"), edge.get("b_uid"),
                         edge.get("relation"), edge.get("note"),
@@ -192,7 +192,7 @@ class SyncMixin:
             rows = await self._data_call("list_relations", bot_id) or []
             for edge in rows:
                 try:
-                    self.db.upsert_relation(
+                    self._relationship_write_edge(
                         edge.get("a_uid"), edge.get("b_uid"),
                         edge.get("relation") or "朋友", edge.get("note") or "",
                     )
