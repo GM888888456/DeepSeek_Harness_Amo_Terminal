@@ -684,6 +684,11 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 await self._maybe_push_salary()
             except Exception as exc:
                 logger.debug("[amo] 加载完成推月薪失败: %s" % exc)
+            # 语音由终端持有：加载完成即创建实例并注册 /sp 面板 API。
+            try:
+                self._speech()
+            except Exception as exc:
+                logger.warning("[amo_voice] 启动内置语音失败: %s" % exc)
 
 
 
