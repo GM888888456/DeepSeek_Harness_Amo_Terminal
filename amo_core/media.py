@@ -92,9 +92,10 @@ class MediaMixin:
     # 语音：由 Terminal 持有实例与事件钩子，不再依赖 Relationship 插件代管。
     # ------------------------------------------------------------------
     VOICE_TUNING_KEYS = (
-        "group_enable", "auto_fallback", "daily_quota",
-        "private_cooldown_seconds", "max_chars", "max_segments",
-        "speak_threshold", "timeout", "speed",
+        "group_enable", "auto_fallback", "read_relation", "schedule_aware",
+        "daily_quota", "cooldown_seconds", "private_cooldown_seconds",
+        "max_chars", "max_segments", "speak_threshold", "timeout",
+        "speed", "volume",
     )
 
     def _speech_config(self):
@@ -121,6 +122,20 @@ class MediaMixin:
                     continue
                 if isinstance(loaded, dict) and loaded:
                     data = dict(loaded)
+                    break
+        # 旧版这些行为开关保存在 Relationship 插件配置中；迁移期先读旧值，
+        # 再由 Terminal 自己的配置覆盖，避免升级后群聊语音突然开关/额度重置。
+        if base:
+            for legacy_name in ("DeepSeek_Harness_Amo_Relationship", "DeepSeek_Harness_Amo_Image"):
+                try:
+                    with open(os.path.join(base, legacy_name + "_config.json"), "r", encoding="utf-8") as fh:
+                        legacy_panel = json.load(fh)
+                except Exception:
+                    continue
+                if isinstance(legacy_panel, dict):
+                    for key in self.VOICE_TUNING_KEYS:
+                        if key in legacy_panel and legacy_panel[key] is not None:
+                            data[key] = legacy_panel[key]
                     break
         data["web_prefix"] = "/sp"
         try:
