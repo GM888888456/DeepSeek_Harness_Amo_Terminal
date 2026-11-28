@@ -98,15 +98,24 @@ class MediaMixin:
     # ------------------------------------------------------------------
     # 语音：由 Terminal 持有实例与事件钩子，不再依赖 Relationship 插件代管。
     # ------------------------------------------------------------------
-    VOICE_TUNING_KEYS = (
-        "group_enable", "auto_fallback", "read_relation", "schedule_aware",
-        "daily_quota", "cooldown_seconds", "private_cooldown_seconds",
-        "max_chars", "max_segments", "speak_threshold", "timeout",
-        "speed", "volume",
-    )
+    VOICE_CONFIG_MAP = {
+        "voice_enable": "enable",
+        "voice_group_enable": "group_enable",
+        "voice_auto_fallback": "auto_fallback",
+        "voice_read_relation": "read_relation",
+        "voice_schedule_aware": "schedule_aware",
+        "voice_speak_threshold": "speak_threshold",
+        "voice_daily_quota": "daily_quota",
+        "voice_cooldown_seconds": "cooldown_seconds",
+        "voice_private_cooldown_seconds": "private_cooldown_seconds",
+        "voice_max_chars": "max_chars",
+        "voice_max_segments": "max_segments",
+        "voice_speed": "speed",
+        "voice_volume": "volume",
+    }
 
     def _speech_config(self):
-        """沿用旧语音配置文件与数据目录，迁移不丢 API Key、音色和额度。"""
+        """将 Terminal 的 voice_* 设置映射到语音引擎旧配置键，兼容旧 Relationship 配置。"""
         names = (
             "DeepSeek_Harness_Amo_Speech",
             "Astrbot_Amo_Speechsound",
@@ -130,9 +139,7 @@ class MediaMixin:
                 if isinstance(loaded, dict) and loaded:
                     data = dict(loaded)
                     break
-        # 旧版这些行为开关保存在 Relationship 插件配置中；迁移期先读旧值，
-        # 再由 Terminal 自己的配置覆盖，避免升级后群聊语音突然开关/额度重置。
-        if base:
+            # 迁移期读取旧媒体插件配置，只补充独立语音配置中不存在的键。
             for legacy_name in ("DeepSeek_Harness_Amo_Relationship", "DeepSeek_Harness_Amo_Image"):
                 try:
                     with open(os.path.join(base, legacy_name + "_config.json"), "r", encoding="utf-8") as fh:
@@ -140,51 +147,31 @@ class MediaMixin:
                 except Exception:
                     continue
                 if isinstance(legacy_panel, dict):
-                    for key in self.VOICE_TUNING_KEYS:
-                        if key in legacy_panel and legacy_panel[key] is not None:
-                            data[key] = legacy_panel[key]
+                    for engine_key in self.VOICE_CONFIG_MAP.values():
+                        if engine_key not in data and engine_key in legacy_panel:
+                            data[engine_key] = legacy_panel[engine_key]
                     break
-        # Terminal 内置语音独立配置：优先使用已迁移/面板保存的版本。
-        # 首次升级时从旧语音插件配置复制，保留 API Key、音色、服务商与额度。
-        voice_config_path = ""
-        if base:
-            voice_config_path = os.path.join(base, "DeepSeek_Harness_Amo_Terminal_voice_config.json")
-        if voice_config_path and os.path.isfile(voice_config_path):
+        panel = self.config if isinstance(self.config, dict) or hasattr(self.config, "get") else {}
+        for terminal_key, engine_key in self.VOICE_CONFIG_MAP.items():
             try:
-                with open(voice_config_path, "r", encoding="utf-8") as fh:
-                    saved_voice = json.load(fh)
-                if isinstance(saved_voice, dict):
-                    data.update(saved_voice)
-            except Exception as exc:
-                logger.warning("[amo_voice] 读取内置语音配置失败: %s" % exc)
-        elif voice_config_path:
-            try:
-                os.makedirs(os.path.dirname(voice_config_path), exist_ok=True)
-                tmp = voice_config_path + ".tmp"
-                with open(tmp, "w", encoding="utf-8") as fh:
-                    json.dump(data, fh, ensure_ascii=False, indent=2)
-                try:
-                    os.chmod(tmp, 0o600)
-                except Exception:
-                    pass
-                os.replace(tmp, voice_config_path)
-                logger.info("[amo_voice] 已将旧语音配置迁入 Terminal")
-            except Exception as exc:
-                logger.warning("[amo_voice] 旧语音配置迁移失败，下次启动会重试: %s" % exc)
+                value = panel.get(terminal_key)
+            except Exception:
+                value = None
+            if value is not None:
+                data[engine_key] = value
         data["web_prefix"] = "/sp"
-        try:
-            panel = self.config if isinstance(self.config, dict) else {}
-            for key in self.VOICE_TUNING_KEYS:
-                if key in panel and panel[key] is not None:
-                    data[key] = panel[key]
-        except Exception as exc:
-            logger.debug("[amo_voice] 终端配置覆盖失败: %s" % exc)
         return data
 
     def _speech(self):
-        """惰性创建语音实例；重复调用复用同一实例。"""
+        """惰性创建并复用 Terminal 自己持有的语音实例。"""
         cached = getattr(self, "_speech_instance", None)
         if cached is not None:
+            try:
+                cached_config = getattr(cached, "config", None)
+                if isinstance(cached_config, dict):
+                    cached_config.update(self._speech_config())
+            except Exception as exc:
+                logger.debug("[amo_voice] 同步语音运行时配置失败: %s" % exc)
             return cached
         if getattr(self, "_speech_failed", False) or SpeechSoundPlugin is None:
             return None
