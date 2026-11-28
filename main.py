@@ -2750,7 +2750,28 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                     def _run(_pairs, _trade_list, _spend_list):
                         for _a, _t in _pairs:
                             try:
+                                _before_cash = None
+                                try:
+                                    _b = _mk.office("live") or {}
+                                    _before_cash = float(((_b.get("live") or {}).get("operating_cash")))
+                                except Exception:
+                                    pass
                                 _r = _mk.office(_a, _t) or {}
+                                _after_cash = None
+                                try:
+                                    _b = _mk.office("live") or {}
+                                    _after_cash = float(((_b.get("live") or {}).get("operating_cash")))
+                                except Exception:
+                                    pass
+                                if _fin is not None and _before_cash is not None and _after_cash is not None:
+                                    _delta = round(_after_cash - _before_cash, 2)
+                                    if abs(_delta) >= 0.01:
+                                        if _delta < 0:
+                                            _fin.charge(abs(_delta), reason="集团经营：%s %s" % (_a, _t),
+                                                        payee="中国计算智脑集团")
+                                        else:
+                                            _fin.income(_delta, reason="集团经营回款：%s %s" % (_a, _t),
+                                                        source="中国计算智脑集团")
                                 logger.info("[amo] 按她的意思办了：%s %s → %s"
                                             % (_a, _t, _r.get("msg") or "ok"))
                             except Exception as _e:
