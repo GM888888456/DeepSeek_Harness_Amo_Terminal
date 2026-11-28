@@ -1942,6 +1942,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
     #: 他已经醒着/在场时，这些问法一律不许出现（13.3.0）。
     WAKE_ASK_RE = re.compile(
         r"醒了没|醒没醒|还没起来|起来了吗|起来了没|起床了没|起床了吗|睡醒了吗|"
+        r"快醒|醒啦|醒醒|该起了|别赖床|小懒虫|太阳.{0,3}晒屁股|"
         r"在吗|在不在|人呢|睡着了吗")
 
 
@@ -3068,9 +3069,11 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             # 2026-11-26（用户口径：根治八股）：空评价句 → 重写一次，点出具体东西 + 给态度。
             try:
                 try:
-                    from .amo_core.polish import check_broken as _cb2, is_vague as _vague
+                    from .amo_core.polish import (check_broken as _cb2, is_vague as _vague,
+                                                  drifts as _drift)
                 except Exception:
-                    from amo_core.polish import check_broken as _cb2, is_vague as _vague  # type: ignore
+                    from amo_core.polish import (check_broken as _cb2, is_vague as _vague,  # type: ignore
+                                                 drifts as _drift)
                 _src_in = ""
                 try:
                     _src_in = str(getattr(event, "message_str", "") or "")
@@ -3088,18 +3091,22 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                     except Exception:
                         pass
                     _sys = "你是中文口语改写器。只输出一句改写后的中文，不要解释，不要引号。"
+                    # 2026-11-28（用户：「他好像不理解上下文」）：以前把「她现在正在」
+                    # 连同「必须点出对方没提过的那件事」一起塞进去，模型就从日程
+                    # 早餐里抠出「鲍鱼燕窝粥」，回了一句跟他说的话无关的话。现在日程不写进
+                    # 提示词，只留双方原话，并要求只许从这两句里取具体的东西。
                     _ask = (
                         "她刚才要说的是：「%s」\n"
                         "对方说的是：「%s」\n"
-                        "她现在正在：%s（%s）——只用来判断这句合不合情境，"
-                        "不要写进回话，更别拿它当开场白\n"
-                        "这句只是空评价，没指到任何具体东西。改写成正常人会说的一句："
-                        "必须点出一样具体的东西（她在做的事、对方提到的那个东西、时间、地点、数字），"
-                        "并且把她自己的态度说清楚（喜欢/嫌烦/想要/不想）。"
+                        "要改的只是口吻，话题不能换：改完仍然必须是回对方那句话。"
+                        "具体的东西只能从对方这句话、或她自己这句里已经有的字里取；"
+                        "他没提的（日程、吃喝、天气、她自己在哪、在吃什么）一律不许写进去。"
+                        "这句现在只剩一个空态度，改写成正常人会说的一句："
+                        "点出那样具体的东西，并且把她自己的态度说清楚（喜欢/嫌烦/想要/不想）。"
                         "不许用「这」「那」开头，不许只是评价，20 字以内，只输出这一句。"
                         "这是她当面跟对方说的一句话：用第一人称，不许出现「她」，"
                         "不铺场景、不描写环境和动作、不加引号和书名号。"
-                        % (truncate(text, 40), truncate(_src_in, 60), _act or "待着", _plc or "家")
+                        % (truncate(text, 40), truncate(_src_in, 60))
                     )
                     _new = await self.llm.chat(event.unified_msg_origin, _sys, _ask,
                                                limit=40, kind="polish")
@@ -3121,6 +3128,8 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                     elif re.match(r"(今天|清早|大早|早上|上午|中午|下午|晚上|夜里|半夜)"
                                   r"[^。！？]{0,10}[，,]", _new):
                         _bad_new = "铺场景不像回话"
+                    elif _drift(_new, _src_in, _act):
+                        _bad_new = "跑题（%s）" % _drift(_new, _src_in, _act)
                     elif _cb2(_new, _src_in) or _vague(_new, _src_in):
                         _bad_new = "还是烂句"
                     if not _bad_new:

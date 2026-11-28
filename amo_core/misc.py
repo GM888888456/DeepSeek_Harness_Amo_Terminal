@@ -667,8 +667,6 @@ class MiscMixin:
 
     async def _intent_execute(self, intent):
         iid = str(intent.get("id") or "")
-        if iid == "look_online":
-            return await self._intent_look_online()
         if iid == "go_outside":
             return await self._intent_go_outside()
         if iid == "push_company":
@@ -738,33 +736,6 @@ class MiscMixin:
             logger.debug("[amo] 意图说话生成失败: %s" % exc)
             return False
         return await self._intent_send(profile, umo, text, kind=str(intent.get("id") or "intent"))
-
-    async def _intent_look_online(self):
-        try:
-            from ..world import trends as _tr
-        except Exception:
-            from world import trends as _tr  # type: ignore
-        try:
-            import asyncio as _aio
-            await _aio.to_thread(_tr.refresh, True)
-        except Exception:
-            pass
-        block = ""
-        try:
-            block = _tr.block(2) or ""
-        except Exception:
-            block = ""
-        if not block:
-            return False
-        lines = [l.strip() for l in block.splitlines() if l.strip().startswith("-")]
-        title = lines[0].lstrip("- ").split("·")[0].strip() if lines else ""
-        profile, umo = await self._intent_profile()
-        logger.info("[amo] 看热榜：title=%s profile=%s umo=%s"
-                    % (bool(title), bool(profile), bool(umo)))
-        if not title or not profile:
-            return False
-        return await self._intent_send(
-            profile, umo, "刚刷到一个：%s（我就看了个标题）" % title, kind="look_online")
 
     async def _intent_go_outside(self):
         """在庄园里走两圈：写进记忆，不打扰他。"""

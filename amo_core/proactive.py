@@ -125,7 +125,11 @@ class ProactiveMixin:
         # 不再只看最后 10 条：早上聊了几十句之后，最早那句「早」会被挤出去。
         joined = "\n".join(texts)
         if kind == "morning":
-            return not bool(re.search(r"(?:^|\s)早(?:\s|$|[，,、!！。~～])|早安|早上好|早上好呀|我醒了|起床了|还没起来吗|醒了没", joined))
+            # 2026-11-28（用户：「我七点就和他聊天说起床了，她八点又喊我起床」）：
+            # 只要他今天这个时段已经开口说过话，就不许再问「醒了没/快醒啦」。
+            # 以前只认「早/醒了/起床」这些字眼：他 07:53 那句是「酸菜鱼多没意思」，
+            # 两个条件都不满足，于是 08:39 又问了一遍。
+            return not bool(texts)
         if kind == "goodnight":
             return not bool(re.search(r"晚安|睡了|睡觉|先睡|去睡|早点休息", joined))
         if kind == "lunch":
@@ -342,9 +346,22 @@ class ProactiveMixin:
                                  weight=self.state.relation_feel_weight(uid))
             logger.debug("[amo] 抑郁状态被哄好: %s" % uid)
 
+    def _he_was_unwell(self, uid, hours=36.0):
+        """他最近自己说过不舒服吗（36 小时内）。查不到就当没说过。"""
+        try:
+            ts = to_float(self.db.kv_get("he_unwell_ts_" + str(uid), 0), 0)
+        except Exception:
+            return False
+        return bool(ts) and (now_ts() - ts) < hours * 3600
+
     def _followup_text(self, uid, kind, previous_text=""):
         """追问换着说法：同一句不连着出现，也别把刚问的问题再问一遍。"""
-        templates = [t for t in (self.FOLLOWUP_TEMPLATES.get(str(kind)) or self.FOLLOWUP_TEMPLATES["greet"]) if t]
+        # 2026-11-27：「她今天晃得发虚」→ 她自己去追问「好点了吗？」，把病人当成他。
+        # 关心类问句必须建立在他本人说过不舒服的前提上，否则换成平常的催回。
+        _kind = str(kind)
+        if _kind == "comfort" and not self._he_was_unwell(uid):
+            _kind = "offwork"
+        templates = [t for t in (self.FOLLOWUP_TEMPLATES.get(_kind) or self.FOLLOWUP_TEMPLATES["greet"]) if t]
         if not templates:
             return "？怎么不理我了？"
         key = "proactive_followup_last_%s" % uid

@@ -34,6 +34,12 @@ from .shared import *
 
 
 
+# 2026-11-27（用户口径：「老公」+「阿墨」两档）：她自己的名字，绝不能当成叫他的称呼。
+# 前四个是她本人，后三个是他叫她的词——两个方向都不能拿来当「她叫他」的称呼。
+_SELF_CALL_NAMES = ("沈晓沫", "晓沫酱", "晓沫", "沫沫", "沫酱", "沫子", "沈晓",
+                    "老婆", "憨憨", "老婆子")
+
+
 class ContextMixin:
 
     @staticmethod
@@ -59,11 +65,68 @@ class ContextMixin:
             keep.append(part)
         if not keep:
             return str(fallback or "")
-        # 有「老公/宝/阿墨」这种更亲的，优先用它
-        for name in ("老公", "宝", "阿墨", "宝宝", "亲爱的"):
-            if name in keep:
-                return name
+        # 2026-11-27：这里原本有一张硬编码偏好表（老公/宝/阿墨/宝宝/亲爱的），
+        # 段里只要沾上就直接取「老公」，于是整句、他叫她的爱称都能跟着漏出去。
+        # 现在这里只负责洗昵称（取第一段），「她叫他」那一侧单独过严格校验。
         return keep[0]
+
+    @staticmethod
+    def _looks_like_call_name(word):
+        """这一段像不像「叫得出口的称呼」：2~4 字、不带标点数字、不是整句话、不指向她自己。"""
+        text = str(word or "").strip()
+        if not (2 <= len(text) <= 4):
+            return False
+        if re.search(r"[0-9，。！？!?、；;：:（）()\[\]·\s]", text):
+            return False
+        if any(w in text for w in ("嘛", "吗", "呢", "哦", "啊", "吧", "啥", "什么", "怎么",
+                                   "的", "了", "我", "你", "他", "她")):
+            return False
+        if any(w in text for w in _SELF_CALL_NAMES):
+            return False
+        return True
+
+    def _call_name_of_him(self, raw):
+        """她叫他什么：只认「老公」「阿墨」两档，其余脏段一律丢（用户 2026-11-27 定）。"""
+        parts = [p.strip() for p in re.split(r"[；;，,/、·]", str(raw or "")) if p.strip()]
+        keep = [p for p in parts if self._looks_like_call_name(p)]
+        if not keep:
+            return ""
+        tiers = [name for name in ("老公", "阿墨") if name in keep]
+        if len(tiers) > 1:
+            return "、".join(tiers)          # 两档都留着，让模型自己挑（2026-11-27 定）
+        if tiers:
+            return tiers[0]
+        return keep[0]
+
+    def _draw_live_line(self, umo):
+        """【你正在出图】：她得知道自己手上还有一张在画（2026-11-27 用户口径）。
+
+        出图本身早就是后台任务，但没有这行她不知道「图还没出来」，
+        于是会说「图发你了」「马上拍」这类对不上的话。
+        """
+        import time as _time
+        try:
+            live = getattr(self, "_draw_live", None) or {}
+            info = live.get(str(umo or "")) or {}
+        except Exception:
+            return ""
+        if not isinstance(info, dict) or not info:
+            return ""
+        try:
+            waited = max(0, int(_time.time() - float(info.get("ts") or 0)))
+        except Exception:
+            waited = 0
+        if waited > 600:
+            return ""
+        pic = str(info.get("prompt") or "").strip()
+        line = ("【你正在出图】你刚答应给他拍一张%s，机器还在画，已经过了 %d 秒。"
+                "图还没出来：这轮别说「图发你了」「已经发了」，也别再重复「马上拍」；"
+                % ("（画面：%s）" % pic[:24] if pic else "", waited))
+        if waited >= 120:
+            line += "拖得有点久了，他要是问就说还在弄，可以顺口吐槽一句这机器慢。"
+        else:
+            line += "他要是追问，就说还在弄、快好了。"
+        return line
 
     def _pet_names_of_me(self, uid):
         """他叫你的爱称（只取干净的那几个）。方向：uid 说的是「他」，词是他叫你的。"""
@@ -79,7 +142,8 @@ class ContextMixin:
                 continue
             if any(ch.isdigit() for ch in word):
                 continue
-            if any(w in word for w in ("饭饭", "鲸鲸", "猜猜", "难绷", "八块钱", "喊老公", "呜呜")):
+            if any(w in word for w in ("饭饭", "鲸鲸", "猜猜", "难绷", "八块钱", "喊老公", "呜呜",
+                                       "姑姑", "爷爷", "爸爸", "妈妈", "咋")):
                 continue
             if any(w in word for w in ("嘛", "吗", "呢", "哦", "啊", "吧", "啥", "什么", "怎么")):
                 continue
@@ -421,12 +485,14 @@ class ContextMixin:
             _mention_lines = self._mentioned_person_lines(event)
         except Exception:
             _mention_lines = []
+        _draw_live_line = self._draw_live_line(umo)
         parts = [
+            *([_draw_live_line] if _draw_live_line else []),
             "【你是谁】角色本名 " + self_name + "；账号 " + plat + " 昵称 " + self_qq_nick
             + "，群名片/显示名 " + self_display + "，UID " + (self_uid or "未知") + "，别人问哪个就答哪个。",
             "【对方】QQ昵称 " + self._clean_call_name(sender_nick, uid)
             + "，UID " + uid + "。"
-            + "【你叫他】" + (self._clean_call_name(alias, "") or "没定过，直接叫“你”")
+            + "【你叫他】" + (self._call_name_of_him(alias) or "没定过，直接叫“你”")
             + "；【他叫你】" + (self._pet_names_of_me(uid) or "（还没有）")
             + "。这两个方向不许互换：他叫你的是他开口喊你的词（他这么说就是在叫你），"
             "你叫他的是你开口先喊的那声（你要喊他才用）；" '把他给的爱称当成你对他的称呼' "是错的。"
@@ -501,6 +567,17 @@ class ContextMixin:
             "「坐下」「蹲下」「坐直」「躺下」也别缩成一个字，"
             "也不用解释自己的情绪是怎么来的——一解释就不像在说话了；"
             "不念 @昵称、账号、群号、ID，识人时自然回一句“好，我记住了”。",
+            "【怎么叫他】只认【你叫他】那一栏：腻的时候喊「老公」，平常叫「阿墨」；"
+            "同一次对话里别换成第三个称呼、也别把两个串着叫；"
+            "他叫你「老婆/宝宝/憨憨」是他开口喊你的词，不许拿回来叫他。",
+            "【一句话一个主语】「我」就是你自己，说他用「他」或「你」；"
+            "别把自己的自称（老婆、宝宝这类）当成第三个人，也别写出「老婆对我生气了不理我了」"
+            "这种把同一个人写成一个半人的句子；谁做的、对谁做的，一句里说清一件就够。"
+            "他说的「我」是他，不是你自己，别把他的话算到自己头上。",
+            "【他随口提的东西】他转个标题、只提个名字、说自己只看了个标题时，"
+            "随口接一句反应就行（想不想玩、像不像他会喜欢的）；"
+            "不科普剧情、不列角色和卡池、不报制作组和上线时间，最多点到一个具体细节；"
+            "他想要细节会自己再问；你自己转一条新闻给他的时候也一样，只说个名字或开头，别把整条讲出来。",
             "【与对方关系】" + relation + "（只按 UID 判；昵称、爱称、自称都可能不是本人，对不上就不用恋人语气）。",
             "【语气】" + self._tone_with_continuity(umo, self.state.tone_text(snap, relation)),
             # 2026-11-24（用户口径）：她说话像林黛玉，一点不像贵州姑娘的豪爽活泼。

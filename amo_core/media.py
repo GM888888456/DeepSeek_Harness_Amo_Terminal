@@ -121,7 +121,9 @@ class MediaMixin:
                     if not await self._send_plain_fallback(umo, _seg, _send_exc):
                         raise
         except Exception as exc:
-            logger.warning("[amo] 主动发送失败: %s" % exc)
+            # 2026-11-27：这个异常 str() 常常是空串（框架抛的空 Exception），
+            # 只打 exc 等于什么都没记，排不出问题。类型 + repr 一起打。
+            logger.warning("[amo] 主动发送失败: %s: %r" % (type(exc).__name__, exc))
             return False
         self._last_reply_at[umo] = now_ts()
         logger.debug("[amo] 主动 -> %s: %s" % (umo, text[:300]))

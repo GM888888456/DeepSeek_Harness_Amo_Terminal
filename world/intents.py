@@ -7,7 +7,6 @@
 
 意图清单（drives 里哪个越线就只有哪几个候选）：
 - go_outside    出门/在庄园走走   ← boredom
-- look_online   上网看看（热榜）  ← curiosity
 - talk_to_him   找他说话          ← social
 - send_photo    发张自拍          ← social / valued
 - push_company  催一下公司的事     ← control
@@ -23,8 +22,6 @@ import time as _time
 INTENTS = [
     {"id": "go_outside", "name": "出门走走", "drives": ("boredom",),
      "min": 58, "weight": 3.0, "cooldown": 1500},
-    {"id": "look_online", "name": "上网看看", "drives": ("curiosity",),
-     "min": 58, "weight": 4.0, "cooldown": 2100},
     {"id": "talk_to_him", "name": "找他说话", "drives": ("social",),
      "min": 60, "weight": 5.0, "cooldown": 1200},
     {"id": "send_photo", "name": "发张照片", "drives": ("social", "valued"),

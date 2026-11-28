@@ -716,7 +716,9 @@ class TickerMixin:
             logger.debug("[amo] 想买东西失败: %s" % exc)
         try:
             self._money_pressure_tick()
-            self._invest_tick()
+            # 2026-11-27：这里原来直接调同步方法，里面是 urllib 抓行情（market.quotes），
+            # 在事件循环里跑 → 整只 bot 卡 3 秒以上（watchdog 抓到过 3.226s）。
+            await asyncio.to_thread(self._invest_tick)
             self._earn_tick()
         except Exception as exc:
             logger.debug("[amo] 钱的节奏失败: %s" % exc)
@@ -1232,6 +1234,11 @@ class TickerMixin:
                         "lunch": name + "，今天中午吃啥子哦？",
                     }.get(kind, "")
                 if not text:
+                    continue
+                if kind == "morning" and not await self._ritual_should_send_async(umos, "morning", uid):
+                    # 2026-11-28：生成这几秒里他可能刚发过消息。08:39:00 他发「在上班啊」，
+                    # 08:39:01 她还在问「小懒虫快醒啦」——两个条件都过期，只差一秒。
+                    logger.info("[amo] 早间问候作废：他已经开口过了")
                     continue
                 if self.WAKE_ASK_RE.search(text) and self._his_presence_line(uid, home_umo):
                     # 他已经醒着、刚在群里说过话，这条还在问「醒没」→ 这次不发。

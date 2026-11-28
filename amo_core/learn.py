@@ -34,6 +34,31 @@ from .shared import *
 
 
 
+# 2026-11-27（用户口径：「老公」+「阿墨」两档）：称呼入库只收「像称呼」的。
+_ALIAS_SELF_NAMES = ("沈晓沫", "晓沫酱", "晓沫", "沫沫", "沫酱", "沫子", "沈晓")
+_ALIAS_JUNK = ("嘛", "吗", "呢", "哦", "啊", "吧", "啥", "什么", "怎么", "的", "了",
+               "我", "你", "他", "她", "猜猜", "姑姑", "爷爷", "爸爸", "妈妈", "咋",
+               "饭饭", "鲸鲸")
+
+
+def _alias_ok(word):
+    """称呼入库前的统一校验。
+
+    以前「叫我XX」这一支几乎不校验（只挡 8 个词、限长 12 字），于是整句
+    「老婆对我生气了不理我了」被当成称呼学了进去；现在三条分支共用这一道。
+    """
+    text = str(word or "").strip()
+    if not (2 <= len(text) <= 4):
+        return False
+    if re.search(r"[0-9，。！？!?、；;：:（）()\[\]·\s]", text):
+        return False
+    if any(w in text for w in _ALIAS_JUNK):
+        return False
+    if any(w in text for w in _ALIAS_SELF_NAMES):
+        return False
+    return True
+
+
 class LearnMixin:
 
     async def _learn(self, event, text):
@@ -79,6 +104,15 @@ class LearnMixin:
         if match:
             self.db.update_profile(uid, birthday="%02d-%02d" % (to_int(match.group(1)), to_int(match.group(2))))
 
+        # 2026-11-27（用户：「自问自答」）：她自己说难受 → 追问模板却问他「好点了吗」。
+        # 只有他本人说过不舒服，才允许问这种话，所以把他的时间点记下来。
+        try:
+            if re.search(r"(感冒|发烧|咳嗽|头疼|头痛|肚子疼|牙疼|不舒服|难受|疼得|病了|吃药|打针|输液)",
+                         str(text or "")):
+                self.db.kv_set("he_unwell_ts_" + str(uid), now_ts())
+        except Exception:
+            pass
+
         fields = {"affection": affection}
         relation = profile.get("relation", "普通")
         if relation == "普通" and to_int(profile.get("msg_count"), 0) >= self.cfg_int("familiar_msg_count", 30):
@@ -110,7 +144,7 @@ class LearnMixin:
             match = re.search(pattern, str(text or ""))
             if match:
                 candidate = match.group(1).strip()
-                if candidate and candidate not in blocked:
+                if candidate and candidate not in blocked and _alias_ok(candidate):
                     alias = candidate
                     break
         if alias:
@@ -145,7 +179,7 @@ class LearnMixin:
                 if not match:
                     continue
                 candidate = match.group(1).strip()
-                if not candidate or candidate in blocked:
+                if not candidate or candidate in blocked or not _alias_ok(candidate):
                     continue
                 target_profile = self.db.get_profile(target)
                 if not target_profile:
@@ -178,7 +212,7 @@ class LearnMixin:
                 and not re.search(r"[0-9]", plain)
                 and not any(word in plain for word in _junk)
             )
-            if _looks_like_name and plain not in common and not re.search(r"[，。！？!?、；;：:]", plain):
+            if _looks_like_name and _alias_ok(plain) and plain not in common and not re.search(r"[，。！？!?、；;：:]", plain):
                 seen_key = "alias_seen_" + target + "_" + plain
                 seen = to_int(self.db.kv_get(seen_key, 0), 0) + 1
                 self.db.kv_set(seen_key, seen)

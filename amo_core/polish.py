@@ -106,7 +106,10 @@ _EVAL_WORDS = ("真", "挺", "够", "太", "怪", "倒是", "还行", "不错", 
 #: 时间词：有它就算有指涉。
 _TIME_WORDS = ("今天", "明天", "昨天", "早上", "上午", "中午", "下午", "晚上",
                "半夜", "刚才", "现在", "一会儿", "待会", "等会", "分钟", "小时",
-               "今儿", "明儿", "周末")
+               "今儿", "明儿", "周末",
+               # 2026-11-27：方言/口语的说法没进表，害得「清早八晨的…」被判成零指涉
+               "清早", "大清早", "清早八晨", "大早", "一早", "天亮", "天黑",
+               "傍晚", "凌晨", "礼拜")
 
 #: 虚字：不能当“具体东西”算。
 _STOP_CHARS = set("的了是在就也都很我你他她它们这那个不没有和跟把被给让说吗呢吧啊呀嘛呗哦哈么啥一会能可就要")
@@ -130,12 +133,51 @@ def is_vague(text, incoming=""):
     if any(w in core for w in _TIME_WORDS):
         return False
     inc = _core(incoming)
+    # 2026-11-27：对方只发了一个字（「早」「好」）时，共用实词无从谈起，
+    # 这时候判「零指涉」就是误杀——实测把「你倒是醒得比我还早」判成了八股。
+    if len(inc) < 2:
+        return False
+    # 句子里点了对方或第三人，本身就有指涉，不算空评价。
+    if re.search(r"[你他]", core):
+        return False
+    # 2026-11-28（用户：「他好像不理解上下文」）：反问句本身就是在回应对方。
+    # 「真会挑时候，大忙人还盯着我呢？」被判成空评价，重写成「吃着鲍鱼燕窝粥
+    # 还要被你抓包」——跟他说的话毫无关系。
+    if re.search(r"[？?]\s*$", str(text or "").strip()):
+        return False
     if inc:
         shared = _bigrams(core) & _bigrams(inc)
         shared = {g for g in shared if not (set(g) & _STOP_CHARS)}
         if shared:
             return False
     return any(w in core for w in _EVAL_WORDS)
+
+
+_FOOD_WORDS = ("吃", "喝", "早餐", "早饭", "午饭", "晚饭", "粥", "面", "饭", "咖啡", "茶", "杯")
+
+
+def drifts(new, incoming="", activity=""):
+    """改写后的这句是不是跑了题（2026-11-28）。
+
+    事例：他 08:39 说「在上班啊」，她原本回「真会挑时候，大忙人还盯着我呢？」，
+    被重写成「吃着鲍鱼燕窝粥还要被你抓包」——粥是她日程早餐里的，跟他那句话
+    没关系。两个判据：跟对方原话一个实词都不共用；或者把日程里的吃喝搬来回话，
+    而他压根没提过吃喝。
+    """
+    src = str(new or "").strip()
+    if not src:
+        return "空"
+    inc = _core(incoming)
+    if len(inc) >= 6:
+        shared = _bigrams(_core(src)) & _bigrams(inc)
+        shared = {g for g in shared if not (set(g) & _STOP_CHARS)}
+        if not shared:
+            return "跟对方说的没有共同话题"
+    act = str(activity or "")
+    if act and any(w in act for w in _FOOD_WORDS) and not any(w in inc for w in _FOOD_WORDS):
+        if any(w in src for w in _FOOD_WORDS):
+            return "拿日程里的吃喝当回话"
+    return ""
 
 
 if __name__ == "__main__":       # 离线自测

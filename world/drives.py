@@ -145,7 +145,6 @@ def on_acted(state, intent="", cost=None):
     """做了点事（出门/说话/拍照）：对应驱动回落。"""
     table = {
         "go_outside": (("boredom", -16), ("curiosity", -6)),
-        "look_online": (("curiosity", -20), ("boredom", -10)),
         "talk_to_him": (("social", -20), ("valued", 2)),
         "send_photo": (("social", -12), ("valued", 3)),
         "push_company": (("control", -22),),

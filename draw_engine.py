@@ -769,6 +769,17 @@ class DrawEngine:
         umo = str(getattr(event, "unified_msg_origin", "") or "")
         if umo:
             self._inflight.add(umo)
+        # 2026-11-27（用户口径：她得知道自己正在生图）：只登记，不阻塞
+        try:
+            live = getattr(self.plugin, "_draw_live", None)
+            if not isinstance(live, dict):
+                live = {}
+                self.plugin._draw_live = live
+            if umo:
+                live[umo] = {"ts": time.time(), "prompt": str(prompt or "")[:60],
+                             "selfie": bool(selfie), "reason": str(reason or "")}
+        except Exception as _amo_exc:
+            _note_swallowed("draw_engine.DrawEngine._schedule", _amo_exc)
         self._last_prompt[uid] = (prompt, time.monotonic())
         self._stats["scheduled"] += 1
         logger.debug("[审批] 画图放行（%s%s）：%s"
@@ -820,6 +831,12 @@ class DrawEngine:
         finally:
             if umo:
                 self._inflight.discard(umo)
+                try:
+                    live = getattr(self.plugin, "_draw_live", None)
+                    if isinstance(live, dict):
+                        live.pop(umo, None)
+                except Exception as _amo_exc:
+                    _note_swallowed("draw_engine.DrawEngine._run", _amo_exc)
 
     # ---------- OmniDraw ----------
 
