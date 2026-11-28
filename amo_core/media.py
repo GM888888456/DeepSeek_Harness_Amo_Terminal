@@ -148,6 +148,9 @@ class MediaMixin:
                     continue
                 if isinstance(legacy_panel, dict):
                     for engine_key in self.VOICE_CONFIG_MAP.values():
+                        # 旧 Relationship 的 enable/cooldown_seconds 属于生图配置，不能当作语音值。
+                        if engine_key in ("enable", "cooldown_seconds"):
+                            continue
                         if engine_key not in data and engine_key in legacy_panel:
                             data[engine_key] = legacy_panel[engine_key]
                     break
