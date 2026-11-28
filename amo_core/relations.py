@@ -41,20 +41,30 @@ class RelationsMixin:
         store = getattr(self, "relationship_store", None)
         if store is None:
             return self.db.list_relations()
-        return [{
+        rows = [{
             "a_uid": str(x.get("subject_id") or ""),
             "b_uid": str(x.get("object_id") or ""),
             "relation": str(x.get("relation_type") or "朋友"),
             "note": str(x.get("note") or ""),
             "status": str(x.get("status") or "active"),
         } for x in store.list_relationships(include_inactive=False)]
+        # Amo 自身与用户的亲密阶段属于 Terminal 私有状态，不迁移到社会关系库。
+        try:
+            rows.extend(e for e in self.db.list_relations()
+                        if str(e.get("a_uid") or "") in INTERNAL_RELATION_NODES
+                        or str(e.get("b_uid") or "") in INTERNAL_RELATION_NODES)
+        except Exception:
+            pass
+        return rows
 
     def _relationship_write_edge(self, a_uid, b_uid, relation, note="", source="automatic"):
         """统一关系写入口；AmoDB 仅保留为 Relationship 不可用时的回退。"""
         store = getattr(self, "relationship_store", None)
-        if store is None:
+        if (store is None
+                or str(a_uid or "") in INTERNAL_RELATION_NODES
+                or str(b_uid or "") in INTERNAL_RELATION_NODES):
             return self.db.upsert_relation(a_uid, b_uid, relation, note)
-        profiles = {}
+        profiles = {};
         try:
             profiles = {str(x.get("uid")): x for x in self.db.list_profiles(limit=500)}
         except Exception:
@@ -199,6 +209,14 @@ class RelationsMixin:
                     })
                 names = {str(p.get("person_id")): str(p.get("display_name") or p.get("person_id"))
                          for p in store.find_people("", 200)}
+                # 机器人自身的关系/好感阶段仍保留在 Terminal 的 AmoDB。
+                try:
+                    for edge in self.db.list_relations():
+                        if (str(edge.get("a_uid") or "") in INTERNAL_RELATION_NODES
+                                or str(edge.get("b_uid") or "") in INTERNAL_RELATION_NODES):
+                            edges.append(edge)
+                except Exception:
+                    pass
                 names["bot"] = str(getattr(self, "bot_name", "") or "你")
             except Exception as exc:
                 logger.debug("[relationship] 读取关系图失败，回退旧库: %s", exc)
