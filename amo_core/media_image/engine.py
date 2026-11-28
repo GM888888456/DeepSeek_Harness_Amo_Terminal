@@ -1354,8 +1354,12 @@ class AmoImageEngine:
                     if os.path.isfile(src) and not os.path.exists(dst):
                         shutil.copy2(src, dst)
                 src_dir, dst_dir = os.path.join(legacy, "photo_cache"), os.path.join(target, "photo_cache")
-                if os.path.isdir(src_dir) and not os.path.exists(dst_dir):
-                    shutil.copytree(src_dir, dst_dir)
+                if os.path.isdir(src_dir):
+                    def _copy_missing(src, dst):
+                        if os.path.exists(dst):
+                            return dst
+                        return shutil.copy2(src, dst)
+                    shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True, copy_function=_copy_missing)
                 with open(marker, "w", encoding="utf-8") as fh:
                     fh.write(str(int(time.time())))
                 logger.info("[amo_image] 已迁移旧自拍/参考图资产到 Terminal 媒体目录")
