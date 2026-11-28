@@ -2756,7 +2756,10 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                                     _before_cash = float(((_b.get("live") or {}).get("operating_cash")))
                                 except Exception:
                                     pass
-                                _r = _mk.office(_a, _t) or {}
+                                if _a in ("loan_apply", "loan", "loan_disburse", "loan_receive", "loan_repay", "repay_loan"):
+                                    _r = self._company_bank_action(_a, _t) or {}
+                                else:
+                                    _r = _mk.office(_a, _t) or {}
                                 _after_cash = None
                                 try:
                                     _b = _mk.office("live") or {}
@@ -3867,6 +3870,82 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
 
     FINANCE_PLUGIN_NAMES = ("DeepSeek_Harness_Amo_Finance",)
 
+
+    def _company_bank_action(self, action: str, target: str = "") -> dict:
+        """公司↔银行窄桥：Terminal 是唯一协调者，Market/Finance 不互相 import。"""
+        mk = self._market_plugin() if hasattr(self, "_market_plugin") else None
+        fin = self._finance() if hasattr(self, "_finance") else None
+        if mk is None or fin is None:
+            return {"ok": False, "reason": "公司或银行模块未加载"}
+        try:
+            cl = mk._company_live()
+            company_dir = mk.data_dir
+            bl = fin._bank_live()
+            bank_dir = fin._data_dir()
+        except Exception as exc:
+            return {"ok": False, "reason": "融资桥加载失败：%s" % exc}
+        if cl is None or bl is None:
+            return {"ok": False, "reason": "实时公司/银行层未加载"}
+
+        snap = cl.snapshot(company_dir)
+        text_value = str(target or "").strip()
+        nums = re.findall(r"(?<![A-Za-z])(?:\d+(?:\.\d+)?)", text_value)
+        amount = float(nums[0]) if nums else 0.0
+        months = int(float(nums[1])) if len(nums) > 1 else 12
+
+        if action in ("loan_apply", "loan"):
+            if amount <= 0:
+                return {"ok": False, "reason": "请给出贷款金额（万元）"}
+            cash = float(snap.get("operating_cash") or 0)
+            receivable = float(snap.get("receivable") or 0)
+            debt = float(snap.get("debt") or 0)
+            asset_base = max(1.0, cash + receivable)
+            debt_ratio = min(95.0, max(0.0, debt / (asset_base + debt) * 100.0))
+            collateral = max(1.2, receivable / amount if amount else 1.2)
+            res = bl.apply_loan(bank_dir, "中国计算智脑集团", amount, months,
+                                "流动资金贷款", debt_ratio, collateral)
+            return {"ok": bool(res.get("ok")), "stage": "approval", "data": res,
+                    "company": cl.snapshot(company_dir)}
+
+        if action in ("loan_disburse", "loan_receive"):
+            loan_id = text_value.split()[0] if text_value else ""
+            if not loan_id:
+                return {"ok": False, "reason": "缺少 loan_id"}
+            res = bl.disburse(bank_dir, loan_id)
+            if not res.get("ok"):
+                return {"ok": False, "stage": "disbursement", "data": res}
+            loan = res.get("loan") or {}
+            received = cl.loan_received(company_dir, loan_id, float(loan.get("principal") or 0),
+                                        int(loan.get("months") or 12), float(loan.get("rate") or 0),
+                                        "邮储银行")
+            if not received.get("ok"):
+                return {"ok": False, "stage": "company_posting", "data": received,
+                        "loan": loan}
+            return {"ok": True, "stage": "disbursement", "loan": loan,
+                    "company": received}
+
+        if action in ("loan_repay", "repay_loan"):
+            parts = text_value.split()
+            loan_id = parts[0] if parts else ""
+            if len(parts) > 1:
+                try:
+                    amount = float(re.findall(r"\d+(?:\.\d+)?", parts[1])[0])
+                except Exception:
+                    amount = 0.0
+            if not loan_id or amount <= 0:
+                return {"ok": False, "reason": "需要 loan_id 和还款金额"}
+            if float(snap.get("operating_cash") or 0) < amount:
+                return {"ok": False, "stage": "company", "reason": "公司经营现金不足"}
+            res = bl.repay(bank_dir, loan_id, amount)
+            if not res.get("ok"):
+                return {"ok": False, "stage": "bank", "data": res}
+            paid = float(res.get("paid") or amount)
+            posted = cl.loan_repaid(company_dir, loan_id, paid)
+            if not posted.get("ok"):
+                return {"ok": False, "stage": "company_posting", "data": posted}
+            return {"ok": True, "stage": "repayment", "bank": res, "company": posted}
+
+        return {"ok": False, "reason": "不认识的融资动作：" + action}
 
     @staticmethod
     def _finance_instance(meta):
