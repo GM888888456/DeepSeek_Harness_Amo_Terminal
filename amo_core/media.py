@@ -165,34 +165,6 @@ class MediaMixin:
             logger.error("[amo_voice] 终端内置语音启动失败: %s" % exc)
             return None
 
-    @filter.command("speak", alias={"语音"})
-    async def cmd_speak(self, event: AstrMessageEvent):
-        speech = self._speech()
-        if speech is None:
-            yield event.plain_result("语音模块没加载起来")
-            return
-        async for item in speech.cmd_speak(event):
-            yield item
-
-    @filter.on_llm_response()
-    async def on_media_llm_response(self, event: AstrMessageEvent, resp):
-        speech = self._speech()
-        if speech is not None:
-            await speech.on_llm_response(event, resp)
-
-    @filter.on_decorating_result()
-    async def on_media_decorating_result(self, event: AstrMessageEvent):
-        speech = self._speech()
-        if speech is not None:
-            await speech.on_decorating_result(event)
-
-    @filter.on_llm_request()
-    async def on_media_llm_request(self, event: AstrMessageEvent, req):
-        speech = self._speech()
-        if speech is not None:
-            await speech.on_llm_request(event, req)
-
-
     async def _send_to_umo(self, umo, text, quote_id=None, group=False):
         text = clean_reply(text, self.cfg_int("max_reply_chars", 220))
         if looks_like_model_leak(text):
