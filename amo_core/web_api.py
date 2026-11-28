@@ -385,12 +385,14 @@ class WebApiMixin:
         try:
             for key, value in applied.items():
                 self.config[key] = value
+            persisted = False
             if hasattr(self.config, "save_config"):
                 self.config.save_config()
+                persisted = True
             speech = self._speech()
             if speech is not None:
                 speech.config.update(self._speech_config())
-            return {"code": 0, "data": {"saved": applied, "persisted": True}}
+            return {"code": 0, "data": {"saved": applied, "persisted": persisted}}
         except Exception as exc:
             logger.error("[amo] 保存 Terminal 语音设置失败: %s" % exc)
             return {"code": 1, "msg": "保存语音设置失败：" + str(exc)}
