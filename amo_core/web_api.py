@@ -1172,9 +1172,9 @@ class WebApiMixin:
     async def api_photo_self(self):
         await self._ensure_ready()
         data = await self._body()
-        star = self._photo_star()
-        if star is None or not hasattr(star, "photo_self"):
-            return {"code": 1, "msg": "生图插件没加载，暂时拍不了"}
+        star = self._image_plugin()
+        if star is None or not callable(getattr(star, "photo_self", None)):
+            return {"code": 1, "msg": "Terminal 内置生图引擎不可用，检查图片模块启动日志"}
         try:
             return await star.photo_self(data if isinstance(data, dict) else {})
         except Exception as exc:
@@ -1185,8 +1185,8 @@ class WebApiMixin:
         await self._ensure_ready()
         data = await self._body()
         star = self._photo_star()
-        if star is None or not hasattr(star, "photo_job"):
-            return {"code": 1, "msg": "生图插件没加载，暂时拍不了"}
+        if star is None or not callable(getattr(star, "photo_job", None)):
+            return {"code": 1, "msg": "Terminal 内置生图引擎不可用，检查图片模块启动日志"}
         try:
             return star.photo_job(str((data or {}).get("id") or ""))
         except Exception as exc:
@@ -1196,8 +1196,8 @@ class WebApiMixin:
     async def api_photo_last(self):
         await self._ensure_ready()
         star = self._photo_star()
-        if star is None or not hasattr(star, "photo_last"):
-            return {"code": 1, "msg": "生图插件没加载，暂时拍不了"}
+        if star is None or not callable(getattr(star, "photo_last", None)):
+            return {"code": 1, "msg": "Terminal 内置生图引擎不可用，检查图片模块启动日志"}
         try:
             return star.photo_last()
         except Exception as exc:
@@ -1207,8 +1207,8 @@ class WebApiMixin:
     async def api_photo_clear(self):
         await self._ensure_ready()
         star = self._photo_star()
-        if star is None or not hasattr(star, "photo_clear"):
-            return {"code": 1, "msg": "生图插件没加载，暂时拍不了"}
+        if star is None or not callable(getattr(star, "photo_clear", None)):
+            return {"code": 1, "msg": "Terminal 内置生图引擎不可用，检查图片模块启动日志"}
         try:
             return star.photo_clear()
         except Exception as exc:
