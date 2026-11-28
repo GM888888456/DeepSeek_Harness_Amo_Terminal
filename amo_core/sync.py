@@ -187,19 +187,7 @@ class SyncMixin:
             await self._sync_profiles_to_data()
         except Exception as exc:
             logger.warning("[amo] 画像同步失败: %s" % exc)
-        # 插件里有、本地没有的，补回本地
-        try:
-            rows = await self._data_call("list_relations", bot_id) or []
-            for edge in rows:
-                try:
-                    self._relationship_write_edge(
-                        edge.get("a_uid"), edge.get("b_uid"),
-                        edge.get("relation") or "朋友", edge.get("note") or "",
-                    )
-                except Exception:
-                    continue
-        except Exception as exc:
-            logger.debug("[amo] 拉取关系网失败: %s" % exc)
+        # 关系主库已迁移到 Relationship；记忆插件不再反向覆盖，避免双主冲突。
         try:
             rows = await self._data_call("list_profiles", bot_id, "", 500) or []
             for row in rows:
