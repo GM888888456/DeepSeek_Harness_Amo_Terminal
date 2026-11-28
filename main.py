@@ -3835,8 +3835,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
 
 
     VOICE_PLUGIN_NAMES = ("DeepSeek_Harness_Amo_Relationship", "DeepSeek_Harness_Amo_Image", "astrbot_plugin_speechsound", "amo_speechsound")
-    # 语音插件（我想永远陪着你-语音）的设置：key, 类型, 标题, 说明, 默认值
-    # 只放行为类开关；后端 / key / 音色仍然在语音插件自己的配置页填。
+    # Terminal 内置语音的设置：voice_* 键与图片配置隔离，统一由终端设置页维护。
     VOICE_SETTING_KEYS = (
         ("voice_enable", "bool", "启用语音", "语音总开关；不影响图片生成。", True),
         ("voice_group_enable", "bool", "允许群聊发语音", "默认关闭；群聊还受每天条数和最小间隔限制。", False),
