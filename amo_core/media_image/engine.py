@@ -524,7 +524,7 @@ class AmoImageEngine:
         self._started_at = time.time()
         self.plugin_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         self._cfg_sync_at = 0.0          # 配置热同步的节流时间戳
-        self._register_web_apis()
+        # Web API 由 Terminal 的 WebApiMixin 统一注册，避免重复占用 /photo、/config 等路由。
 
     # ---------- 配置 ----------
 
