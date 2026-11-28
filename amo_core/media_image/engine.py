@@ -122,7 +122,8 @@ class EmptyBackendResponse(RuntimeError):
     """后端返回 200 但响应体为空 / 不是 JSON（网关限流、CDN 空包都长这样）。EmptyBackendResponse 的诊断 见 _json_or_empty。"""
 
 
-PLUGIN_NAME = "DeepSeek_Harness_Amo_Terminal"
+PLUGIN_NAME = "Astrbot_Amo_forever"
+CONFIG_PLUGIN_NAME = "DeepSeek_Harness_Amo_Terminal"
 PLUGIN_VERSION = "1.0.0"
 try:  # 版本号以 metadata.yaml 为准，避免两处不一致
     import yaml as _amo_meta_yaml
@@ -503,9 +504,9 @@ class AmoImageEngine:
         if _cfg_heal is not None:
             try:
                 _guard_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-                _healed = _cfg_heal(self.config, plugin_name=PLUGIN_NAME,
+                _healed = _cfg_heal(self.config, plugin_name=CONFIG_PLUGIN_NAME,
                                     plugin_dir=_guard_dir,
-                                    data_dir=_cfg_data_dir(_guard_dir, PLUGIN_NAME),
+                                    data_dir=_cfg_data_dir(_guard_dir, CONFIG_PLUGIN_NAME),
                                     logger=logger)
                 if _healed.get("restored"):
                     logger.info("[config] 本次启动补回 %d 项配置（%s）"
