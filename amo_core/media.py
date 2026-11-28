@@ -153,7 +153,6 @@ class MediaMixin:
                             continue
                         if engine_key not in data and engine_key in legacy_panel:
                             data[engine_key] = legacy_panel[engine_key]
-                    break
         panel = self.config if isinstance(self.config, dict) or hasattr(self.config, "get") else {}
         for terminal_key, engine_key in self.VOICE_CONFIG_MAP.items():
             try:
