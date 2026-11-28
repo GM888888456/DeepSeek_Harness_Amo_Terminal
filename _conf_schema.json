@@ -1145,72 +1145,6 @@
     "hint": "规范第八节：输出润色默认不应每轮调用。只在本地判定为「空评价/八股」时才可能触发，1.0=每次重写，0.5=抽一半，0=完全不调模型（用原文）。",
     "default": 1
   },
-  "group_enable": {
-    "type": "bool",
-    "description": "允许群聊发语音",
-    "hint": "语音插件的开关，和终端面板「语音」分组是同一个值。默认关；群聊里还受每天条数与最小间隔限制。",
-    "default": false
-  },
-  "auto_fallback": {
-    "type": "bool",
-    "description": "兜底转语音",
-    "hint": "明说要语音但只回了文字时，补一条语音。",
-    "default": true
-  },
-  "read_relation": {
-    "type": "bool",
-    "description": "参考关系度决定语气",
-    "hint": "从陪伴这边读关系阶段，越亲近越容易开口。",
-    "default": true
-  },
-  "schedule_aware": {
-    "type": "bool",
-    "description": "参考日程决定场景",
-    "hint": "按在家/在外/睡觉切到对应场景音色。",
-    "default": true
-  },
-  "speak_threshold": {
-    "type": "float",
-    "description": "语音开口阈值（0-1）",
-    "hint": "兜底规则用的及格线，越高越少开口。",
-    "default": 0.6
-  },
-  "daily_quota": {
-    "type": "int",
-    "description": "群聊每天语音条数上限",
-    "hint": "所有群共用，0 = 不限。私聊不占。",
-    "default": 10
-  },
-  "private_cooldown_seconds": {
-    "type": "int",
-    "description": "私聊两条语音最小间隔（秒）",
-    "hint": "0 = 私聊不冷却。",
-    "default": 0
-  },
-  "max_chars": {
-    "type": "int",
-    "description": "每段语音字数上限",
-    "hint": "整条语音总长 = 这个数 × 最多分段数。",
-    "default": 80
-  },
-  "max_segments": {
-    "type": "int",
-    "description": "最多分段数",
-    "hint": "长句按标点切段。",
-    "default": 2
-  },
-  "speed": {
-    "type": "float",
-    "description": "语音语速（0.5-2.0）",
-    "hint": "1.0 是正常语速。",
-    "default": 1
-  },
-  "volume": {
-    "type": "float",
-    "description": "语音音量（0.1-2.0）",
-    "hint": "1.0 是正常音量。",
-    "default": 1
-  },
   "enable": {
     "type": "bool",
     "description": "启用生图",
@@ -1536,5 +1470,83 @@
     "description": "一条指令最多几张",
     "default": 4,
     "hint": "用换行、分号或竖线分隔多个提示词，一次画完一次性发出。设 1 = 关闭批量。"
+  },
+  "voice_enable": {
+    "type": "bool",
+    "description": "启用语音",
+    "hint": "语音总开关；不影响图片生成。",
+    "default": true
+  },
+  "voice_group_enable": {
+    "type": "bool",
+    "description": "允许群聊发语音",
+    "hint": "默认关闭；群聊还受每天条数和最小间隔限制。",
+    "default": false
+  },
+  "voice_auto_fallback": {
+    "type": "bool",
+    "description": "兜底转语音",
+    "hint": "明确要求语音但只收到文字时，补发语音。",
+    "default": true
+  },
+  "voice_read_relation": {
+    "type": "bool",
+    "description": "参考关系度决定语气",
+    "hint": "参考终端内的关系阶段调整开口与语气。",
+    "default": true
+  },
+  "voice_schedule_aware": {
+    "type": "bool",
+    "description": "参考日程决定场景",
+    "hint": "按在家、外出、睡觉等场景选择音色。",
+    "default": true
+  },
+  "voice_speak_threshold": {
+    "type": "float",
+    "description": "语音开口阈值（0-1）",
+    "hint": "兜底规则使用；越高越少自动开口。",
+    "default": 0.6
+  },
+  "voice_daily_quota": {
+    "type": "int",
+    "description": "群聊每天语音条数上限",
+    "hint": "所有群共用；0 表示不限，私聊不占额度。",
+    "default": 10
+  },
+  "voice_cooldown_seconds": {
+    "type": "int",
+    "description": "群聊语音最小间隔（秒）",
+    "hint": "只限制群聊，防止连续刷屏。",
+    "default": 240
+  },
+  "voice_private_cooldown_seconds": {
+    "type": "int",
+    "description": "私聊语音最小间隔（秒）",
+    "hint": "0 表示私聊不冷却。",
+    "default": 0
+  },
+  "voice_max_chars": {
+    "type": "int",
+    "description": "每段语音字数上限",
+    "hint": "整条语音总长约为该值乘最多分段数。",
+    "default": 80
+  },
+  "voice_max_segments": {
+    "type": "int",
+    "description": "最多语音分段数",
+    "hint": "长句按标点切分，最多分几段。",
+    "default": 2
+  },
+  "voice_speed": {
+    "type": "float",
+    "description": "语音语速（0.5-2.0）",
+    "hint": "1.0 为正常语速。",
+    "default": 1
+  },
+  "voice_volume": {
+    "type": "float",
+    "description": "语音音量（0.1-2.0）",
+    "hint": "1.0 为正常音量。",
+    "default": 1
   }
 }
