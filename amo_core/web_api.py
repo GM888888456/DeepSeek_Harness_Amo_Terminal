@@ -267,17 +267,8 @@ class WebApiMixin:
         except Exception as exc:
             logger.debug("[amo] 读取配置前重载失败: %s" % exc)
         items = self._config_schema_items()
-        notes = {}
-        try:
-            voice_items = self._voice_panel_items()
-            items.extend(voice_items)
-            if not voice_items:
-                notes["语音"] = ("没找到「我想永远陪着你-语音」（未安装或未启用）。"
-                                  "装好并启用它，语音设置才会出现在这里；key、后端、音色仍在它自己的配置页填。")
-        except Exception as exc:
-            logger.warning("[amo] 读取语音设置失败: %s" % exc)
-            notes["语音"] = "读取语音设置失败：%s" % exc
-        return {"code": 0, "data": {"items": items, "groupNotes": notes}}
+        # 语音配置已纳入 Terminal 自己的 voice_* schema，不再依赖独立语音插件。
+        return {"code": 0, "data": {"items": items, "groupNotes": {}}}
 
     async def api_providers(self):
         """面板下拉用：列出已配置的模型供应商（脱敏），并标注心流判定/主对话模型。"""
@@ -365,17 +356,11 @@ class WebApiMixin:
         return {"code": 0, "data": data}
 
     async def api_voice_save(self):
-        """把「语音」分组里的设置写进语音插件（内存立即生效 + 落盘）。"""
+        """兼容旧面板：语音设置写入 Terminal voice_* 配置，不再写回独立插件。"""
         await self._ensure_ready()
         data = await self._body()
         changes = data.get("changes") if isinstance(data.get("changes"), dict) else data
-        plugin = self._voice_plugin()
-        if plugin is None:
-            return {"code": 1, "msg": "没找到「我想永远陪着你-语音」（未安装或未启用）"}
-        config = getattr(plugin, "config", None)
-        if config is None or not hasattr(config, "update"):
-            return {"code": 1, "msg": "语音插件的配置对象不可写"}
-        kinds = {key: kind for key, kind, _t, _h, _d in self.VOICE_SETTING_KEYS}
+        kinds = {key: kind for key, kind, _title, _hint, _default in self.VOICE_SETTING_KEYS}
         applied = {}
         for key, value in (changes or {}).items():
             kind = kinds.get(key)
@@ -385,26 +370,20 @@ class WebApiMixin:
                 applied[key] = self._coerce_config_value(kind, value)
             except Exception as exc:
                 logger.warning("[amo] 语音设置 %s 值无效: %s" % (key, exc))
-                continue
         if not applied:
             return {"code": 0, "data": {"saved": {}, "persisted": False}}
         try:
-            config.update(applied)
+            for key, value in applied.items():
+                self.config[key] = value
+            if hasattr(self.config, "save_config"):
+                self.config.save_config()
+            speech = self._speech()
+            if speech is not None:
+                speech.config.update(self._speech_config())
+            return {"code": 0, "data": {"saved": applied, "persisted": True}}
         except Exception as exc:
-            logger.error("[amo] 写入语音插件配置失败: %s" % exc)
-            return {"code": 1, "msg": "写入失败：" + str(exc)}
-        persisted = False
-        saver = getattr(plugin, "_persist_config", None)
-        if callable(saver):
-            try:
-                result = saver()
-                if hasattr(result, "__await__"):
-                    result = await result
-                persisted = bool(result)
-            except Exception as exc:
-                logger.warning("[amo] 语音设置落盘失败（内存已生效）: %s" % exc)
-        logger.debug("[amo] 语音设置已更新: %s" % ", ".join(sorted(applied)))
-        return {"code": 0, "data": {"saved": applied, "persisted": persisted}}
+            logger.error("[amo] 保存 Terminal 语音设置失败: %s" % exc)
+            return {"code": 1, "msg": "保存语音设置失败：" + str(exc)}
 
     async def api_config_save(self):
         await self._ensure_ready()
@@ -443,6 +422,10 @@ class WebApiMixin:
                 await self._apply_runtime_config()
             except Exception as exc:
                 logger.error("[amo] 应用配置失败: %s" % exc)
+            try:
+                self._speech()
+            except Exception as exc:
+                logger.debug("[amo_voice] 配置保存后同步语音运行时失败: %s" % exc)
         return {"code": 0, "data": {"saved": saved}}
 
     async def api_profiles_sync(self):
