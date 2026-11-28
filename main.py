@@ -2781,7 +2781,8 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                                     _after_cash = float(((_b.get("live") or {}).get("operating_cash")))
                                 except Exception:
                                     pass
-                                if _fin is not None and _before_cash is not None and _after_cash is not None:
+                                if (_a not in ("loan_apply", "loan", "loan_disburse", "loan_receive", "loan_repay", "repay_loan")
+                                        and _fin is not None and _before_cash is not None and _after_cash is not None):
                                     _delta = round(_after_cash - _before_cash, 2)
                                     if abs(_delta) >= 0.01:
                                         if _delta < 0:
