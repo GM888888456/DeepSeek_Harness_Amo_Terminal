@@ -1210,5 +1210,331 @@
     "description": "语音音量（0.1-2.0）",
     "hint": "1.0 是正常音量。",
     "default": 1
+  },
+  "enable": {
+    "type": "bool",
+    "description": "启用生图",
+    "default": true,
+    "hint": "总开关。关掉后任何触发词和 /amoimage 都不响应。"
+  },
+  "mount_only": {
+    "type": "bool",
+    "description": "只当执行者（中央集权）",
+    "default": true,
+    "hint": "开着：聊天里的生图/拍照/换装都由陪伴插件 Amo 判定并下发，本插件只管出图和造型，不抢答、不自己发消息。关掉：本插件自己认关键词（Amo 没装时才需要）。"
+  },
+  "provider": {
+    "type": "string",
+    "description": "生图后端类型",
+    "default": "openai",
+    "options": [
+      "openai",
+      "openai_chat",
+      "gemini",
+      "custom"
+    ],
+    "hint": "openai=OpenAI 兼容 /images/generations（硅基流动、智谱、百炼、one-api 都选它）；openai_chat=只开了 Chat 通道的代理；gemini=Google 原生；custom=自己填 URL 和请求体。"
+  },
+  "api_base": {
+    "type": "string",
+    "description": "生图后端地址",
+    "default": "https://api.openai.com/v1",
+    "hint": "OpenAI 兼容接口的根地址，插件会请求 {api_base}/images/generations。自建（one-api / new-api / SD WebUI 兼容层）填自己的地址，不要带结尾斜杠。"
+  },
+  "api_key": {
+    "type": "string",
+    "description": "生图后端密钥",
+    "default": "",
+    "hint": "只存在本机配置里，不会写进日志。留空则只用不需要鉴权的自建后端。"
+  },
+  "model": {
+    "type": "string",
+    "description": "生图模型",
+    "default": "",
+    "hint": "填后端自己的模型名（各家不同，例如 gpt-image-1 / Kwai-Kolors/Kolors / black-forest-labs/FLUX.1-schnell）。留空则不发送 model 字段，交给后端默认。",
+    "options": [
+      "gpt-image-2.6-sunburst",
+      "gpt-image-2.5-flare",
+      "gpt-image-2.5-sunburst",
+      "gpt-image-2.6-flare"
+    ]
+  },
+  "size": {
+    "type": "string",
+    "description": "图片尺寸",
+    "default": "1024x1024",
+    "hint": "常见值 1024x1024 / 1024x1536 / 1536x1024。不同后端支持范围不同，报错时先查这里。"
+  },
+  "aspect_ratio": {
+    "type": "string",
+    "description": "宽高比（可选）",
+    "default": "",
+    "hint": "Gemini 用 1:1 / 3:4 / 16:9 这类；留空按 size 自动换算。OpenAI 兼容后端忽略。"
+  },
+  "n": {
+    "type": "int",
+    "description": "每次张数",
+    "default": 1,
+    "hint": "建议 1，多张会明显变慢也更费额度。"
+  },
+  "quality": {
+    "type": "string",
+    "description": "质量",
+    "default": "",
+    "hint": "可选 auto / low / medium / high，留空就不发这个字段（兼容不支持的后端）。"
+  },
+  "style": {
+    "type": "string",
+    "description": "风格",
+    "default": "",
+    "hint": "可选 vivid / natural，留空就不发这个字段。"
+  },
+  "chat_modalities": {
+    "type": "bool",
+    "description": "Chat 通道要求图片模态",
+    "default": false,
+    "hint": "只有 openai_chat 且后端要求 modalities=[image,text] 时才打开；普通 Chat 代理不要开。"
+  },
+  "timeout": {
+    "type": "float",
+    "description": "超时秒数",
+    "default": 90,
+    "hint": "生图比聊天慢，建议不低于 60；超时会回一句人设化的失败话术。"
+  },
+  "custom_url": {
+    "type": "string",
+    "description": "自定义后端完整 URL",
+    "default": "",
+    "hint": "provider=custom 时必填，例如 https://api.example.com/v1/draw。不会自动拼路径。"
+  },
+  "custom_body": {
+    "type": "string",
+    "description": "自定义请求体模板",
+    "default": "{\"prompt\": \"{prompt}\", \"model\": \"{model}\", \"size\": \"{size}\", \"n\": {n}}",
+    "hint": "合法 JSON；{prompt}/{model}/{size} 会替换成转义后的值，{n} 是数字。"
+  },
+  "custom_response_path": {
+    "type": "string",
+    "description": "自定义响应路径",
+    "default": "",
+    "hint": "例如 data.images[0].url 或 candidates[0].content.parts[0].inlineData.data；留空走通用解析。"
+  },
+  "character_appearance": {
+    "type": "string",
+    "description": "人物外观",
+    "default": "",
+    "hint": "拼在提示词最前面，保证每次画出来是同一个人。例如「银灰长发、琥珀色眼睛、米色开衫」。留空只画提示词本身。"
+  },
+  "core_appearance": {
+    "type": "string",
+    "description": "核心外貌（Core_Appearance）",
+    "default": "",
+    "hint": "她自己认人的依据，也是生图提示词最前面那段。格式：年龄，身高，体重，脸型，发色发型，瞳色，体型，标志性特征（例：25岁，165cm，50kg，圆脸，黑色长直发，深棕色眼睛，体型匀称，皮肤干净）。改了等于换脸；留空则用通用默认长相。"
+  },
+  "self_face_max_distance": {
+    "type": "int",
+    "description": "自我形象比对容差",
+    "default": 12,
+    "hint": "64 位感知哈希允许多少位不同。重新压缩通常 0~8；调大到 14~16 能认更花的裁剪，但误判风险上升。"
+  },
+  "self_face_archive_max": {
+    "type": "int",
+    "description": "自我形象档案最大张数",
+    "default": 1500,
+    "hint": "每张约 0.5MB。超了只按时间删最老的，绝不覆盖。"
+  },
+  "character_gender": {
+    "type": "string",
+    "description": "角色性别",
+    "default": "自动",
+    "options": [
+      "自动",
+      "女",
+      "男"
+    ],
+    "hint": "不写性别时模型容易画成男生；自动=看外观/角色描述，判断不出按女生。"
+  },
+  "camera_mode": {
+    "type": "string",
+    "description": "拍摄角度",
+    "default": "自动",
+    "options": [
+      "自动",
+      "自拍",
+      "他拍"
+    ],
+    "hint": "自动=拍自己用前置自拍、拍别人/别的东西用第三人称他拍；也可以强制一种。"
+  },
+  "character_persona": {
+    "type": "string",
+    "description": "角色名 / 一句话人设",
+    "default": "",
+    "hint": "写进提示词「角色：…」，把画面和人格接上；留空自动用陪伴的人格名。"
+  },
+  "use_memory_context": {
+    "type": "bool",
+    "description": "接记忆上下文",
+    "default": true,
+    "hint": "打开后会用数据插件（Astr_Amo_data）最近的对话补提示词，让画面接得上剧情；数据插件没装或报错就静默跳过。"
+  },
+  "memory_context_limit": {
+    "type": "int",
+    "description": "上下文条数",
+    "default": 6,
+    "hint": "取最近几条对话做画面参考，太多会把提示词挤爆。"
+  },
+  "allow_private": {
+    "type": "bool",
+    "description": "私聊可用",
+    "default": true,
+    "hint": "关掉后私聊不响应生图。"
+  },
+  "allow_group": {
+    "type": "bool",
+    "description": "群聊可用",
+    "default": true,
+    "hint": "关掉后群里不响应生图。"
+  },
+  "require_at_in_group": {
+    "type": "bool",
+    "description": "群里必须 @ 才响应",
+    "default": true,
+    "hint": "群聊必须真正 @ 机器人才响应（唤醒词不算）；默认开启，避免陌生人刷图。"
+  },
+  "quote_in_group": {
+    "type": "bool",
+    "description": "群里引用原消息",
+    "default": true,
+    "hint": "群里发图时引用触发它的那条消息，方便对上是在画什么；私聊永远不引用。"
+  },
+  "keywords": {
+    "type": "list",
+    "description": "触发词",
+    "default": [
+      "画一张",
+      "画个",
+      "帮我画",
+      "生成图片",
+      "来张图",
+      "画张"
+    ],
+    "hint": "消息里出现这些词就尝试生图；后面跟的内容当作提示词。"
+  },
+  "cooldown_seconds": {
+    "type": "int",
+    "description": "冷却秒数",
+    "default": 30,
+    "hint": "同一个人两次生图之间的最小间隔，0 表示不限制。"
+  },
+  "safe_mode": {
+    "type": "bool",
+    "description": "内容边界",
+    "default": true,
+    "hint": "私聊只拦露骨裸体 / 性器官 / 性行为 / 未成年相关；群聊额外拦「只穿内衣 / 比基尼 / 情趣内衣」。关闭后不拦，不建议。"
+  },
+  "blocked_reply": {
+    "type": "string",
+    "description": "被拦时的回复",
+    "default": "",
+    "hint": "留空 = 用内置的人话（「这个不拍」这类）。命中内容边界时回一句，不透露具体原因。"
+  },
+  "private_daily_limit": {
+    "type": "int",
+    "description": "私聊每日次数",
+    "default": 0,
+    "hint": "0=不限量，按人算；私聊仍受「冷却秒数」限制。"
+  },
+  "group_daily_limit": {
+    "type": "int",
+    "description": "群聊每日次数",
+    "default": 5,
+    "hint": "按群算，每个群每天最多几张；0=不限。"
+  },
+  "reply_prefix": {
+    "type": "string",
+    "description": "发送前缀",
+    "default": "",
+    "hint": "发图前带一句话，例如「画好啦」。留空就只发图。"
+  },
+  "error_reply": {
+    "type": "string",
+    "description": "失败话术",
+    "default": "",
+    "hint": "留空 = 用内置的人话（「等我一下，晚点拍给你」这类，随机一条）。不建议写「画不出来」，那不像人说话。"
+  },
+  "request_style": {
+    "type": "string",
+    "description": "请求参数风格",
+    "default": "auto",
+    "hint": "auto=先用 OpenAI 的 size/n，400 时自动换 image_size/batch_size 再试一次并把成功的记下来；也可强制 openai 或 aliases。"
+  },
+  "photo_keywords": {
+    "type": "list",
+    "description": "拍照触发词",
+    "default": [
+      "拍张照",
+      "拍一张",
+      "拍个照",
+      "拍张照片",
+      "拍一张照片",
+      "自拍",
+      "来张自拍",
+      "发张照片"
+    ],
+    "hint": "说这些话也会触发，但不带具体描述时用下面的默认提示词。"
+  },
+  "photo_default_prompt": {
+    "type": "string",
+    "description": "拍照默认提示词",
+    "default": "自拍，日常光线，自然表情，看向镜头",
+    "hint": "「给我拍张照」这种没内容的请求，用它来生成。"
+  },
+  "character_hairstyle": {
+    "type": "string",
+    "description": "发型（固定）",
+    "default": "",
+    "hint": "每天都一样的发型，例如「黑色长直发，齐刘海」。不填就只靠 character_appearance。"
+  },
+  "character_outfits": {
+    "type": "list",
+    "description": "服装池（按天固定）",
+    "default": [],
+    "hint": "每行一套。同一天固定穿其中一套；日程里出现「换衣服 / 洗澡」这类事件、且和上一次换装隔了冷却时间，才会换下一套。留空则用内置保底服装池，保证服装不随机。"
+  },
+  "outfit_change_keywords": {
+    "type": "list",
+    "description": "换装触发词",
+    "default": [
+      "换衣服",
+      "换装",
+      "洗澡",
+      "换上",
+      "换一身"
+    ],
+    "hint": "日程活动里出现这些词，算一次换装，当天造型往后挪一套。"
+  },
+  "outfit_change_cooldown_minutes": {
+    "type": "int",
+    "description": "换装冷却（分钟）",
+    "default": 60,
+    "hint": "日程里两条换装事件至少隔这么久才算两次；避免「换裙子」「换外套」连着跳好几套。"
+  },
+  "lock_scene_to_schedule": {
+    "type": "bool",
+    "description": "场景锁定日程地点",
+    "default": true,
+    "hint": "打开后，画出来的场景就是她日程里此刻所在地点，不会上一秒景区下一秒别处；关掉则不限制。"
+  },
+  "negative_prompt": {
+    "type": "string",
+    "description": "负面提示词",
+    "default": "different face, different hairstyle, different clothes, different person, change location, other scenic spot, blurry, low quality, extra fingers",
+    "hint": "支持 negative_prompt 的后端（Kolors / SiliconFlow 等）会带上；不支持的会自动去掉重试，不会报错。留空则不传。"
+  },
+  "batch_max": {
+    "type": "int",
+    "description": "一条指令最多几张",
+    "default": 4,
+    "hint": "用换行、分号或竖线分隔多个提示词，一次画完一次性发出。设 1 = 关闭批量。"
   }
 }
