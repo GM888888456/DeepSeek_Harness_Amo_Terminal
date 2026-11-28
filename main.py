@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import threading as _threading
+
 
 # 统一时区：容器/服务器常在 UTC 跑，直接取服务器本地时间会把北京时间 10 点算成凌晨 2 点
 # （「大晚上的」就是这么来的）。clock.now() 返回目标时区下的 naive 本地时间，
@@ -442,6 +444,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             except Exception as exc:
                 logger.debug("[config] 配置自愈失败: %s" % exc)
         self.plugin_dir = os.path.dirname(os.path.abspath(__file__))
+        self._image_engine_lock = _threading.RLock()
         self._migrate_legacy_config()
         self.bot_name = self.cfg_str("bot_name", "") or "陪伴"
         # 时区：服务器常在 UTC 跑，必须按用户时区算（否则北京时间早上 10 点会被当成凌晨 2 点）
@@ -954,34 +957,35 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 pass
 
     def _image_plugin(self):
-        """Terminal 自己持有生图引擎；旧 Relationship 插件只作为迁移期回退。"""
-        cached = getattr(self, "_image_engine", None)
-        if cached is not None and callable(getattr(cached, "draw_for", None)):
-            return cached
-        try:
-            self._migrate_legacy_image_config()
-            if AmoImageEngine is not None:
-                engine = AmoImageEngine(self.context, self.config)
-                self._image_engine = engine
-                self._image_star = engine
-                logger.info("[amo_image] 生图、自拍与自我形象档案已由 Terminal 内置接管")
-                return engine
-        except Exception as exc:
-            logger.error("[amo_image] Terminal 内置图片引擎启动失败：%s" % exc)
-        # 回退只为避免升级窗口内立即断图；正常运行不应走到这里。
-        try:
-            for name in self.IMAGE_PLUGIN_NAMES:
-                try:
-                    meta = self.context.get_registered_star(name)
-                except Exception:
-                    meta = None
-                plugin = self._image_instance(meta)
-                if plugin is not None:
-                    self._image_star = plugin
-                    return plugin
-        except Exception as exc:
-            logger.debug("[amo] 旧生图插件回退解析失败: %s" % exc)
-        return None
+        """Terminal 单例图片引擎；锁住初始化，避免并发首条消息创建多个额度/档案实例。"""
+        with self._image_engine_lock:
+            cached = getattr(self, "_image_engine", None)
+            if cached is not None and callable(getattr(cached, "draw_for", None)):
+                return cached
+            try:
+                self._migrate_legacy_image_config()
+                if AmoImageEngine is not None:
+                    engine = AmoImageEngine(self.context, self.config)
+                    self._image_engine = engine
+                    self._image_star = engine
+                    logger.info("[amo_image] 生图、自拍与自我形象档案已由 Terminal 内置接管")
+                    return engine
+            except Exception as exc:
+                logger.error("[amo_image] Terminal 内置图片引擎启动失败：%s" % exc)
+            # 回退只为避免升级窗口内立即断图；正常运行不应走到这里。
+            try:
+                for name in self.IMAGE_PLUGIN_NAMES:
+                    try:
+                        meta = self.context.get_registered_star(name)
+                    except Exception:
+                        meta = None
+                    plugin = self._image_instance(meta)
+                    if plugin is not None:
+                        self._image_star = plugin
+                        return plugin
+            except Exception as exc:
+                logger.debug("[amo] 旧生图插件回退解析失败: %s" % exc)
+            return None
 
     #: 活动 → 发图概率桶（对应配置 image_share_prob_<桶>）
     SHARE_BUCKET_WORDS = {
