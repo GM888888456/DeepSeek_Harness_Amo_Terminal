@@ -36,6 +36,7 @@ try:
     from .amo_core.vitals import *  # noqa: F401,F403
     from .amo_core.memory_ops import *  # noqa: F401,F403
     from .amo_core.media import *  # noqa: F401,F403
+    from .amo_core.media_image import AmoImageEngine  # noqa: F401
     from .amo_core.shared import *  # noqa: F401,F403
     from .amo_core.relations import *  # noqa: F401,F403
     from .amo_core.relationship_store import RelationshipStore  # noqa: F401
@@ -73,6 +74,7 @@ except ImportError:  # 非包方式加载时的回退
     from amo_core.vitals import *  # noqa: F401,F403
     from amo_core.memory_ops import *  # noqa: F401,F403
     from amo_core.media import *  # noqa: F401,F403
+    from amo_core.media_image import AmoImageEngine  # noqa: F401
     from amo_core.shared import *  # noqa: F401,F403
     from amo_core.relations import *  # noqa: F401,F403
     from amo_core.relationship_store import RelationshipStore  # noqa: F401
@@ -879,7 +881,16 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         if not data_root:
             return
         config_dir = os.path.join(data_root, "config")
-        legacy_path = os.path.join(config_dir, "DeepSeek_Harness_Amo_Relationship_config.json")
+        legacy_paths = [
+            os.path.join(config_dir, name + "_config.json")
+            for name in (
+                "DeepSeek_Harness_Amo_Relationship",
+                "DeepSeek_Harness_Amo_Image",
+                "Astrbot_Amo_Image",
+                "astrbot_plugin_amo_image",
+            )
+        ]
+        legacy_path = next((item for item in legacy_paths if os.path.isfile(item)), "")
         marker_dir = os.path.join(data_root, "plugin_data", "DeepSeek_Harness_Amo_Terminal")
         marker_path = os.path.join(marker_dir, "image_config_migrated.json")
         if os.path.isfile(marker_path):
