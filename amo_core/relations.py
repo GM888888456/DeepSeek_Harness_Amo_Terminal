@@ -135,131 +135,145 @@ class RelationsMixin:
             logger.debug("[amo] 自我形象永久记忆没写进去（守门人拦下），下轮再试")
 
     def _relation_network_text(self, uid):
-        """给当前用户生成两跳内的关系网摘要；只读。
-
-        「陌生人」只在面板图谱里出现，不进提示词——不然每句都带一串「小明和小满是陌生人」。
-        """
-        try:
-            edges = [edge for edge in self.db.list_relations()
-                     if str(edge.get("relation") or "") != "陌生人"]
-        except Exception:
-            return ""
+        """从 Relationship 读取两跳关系摘要；旧 AmoDB 仅作为升级失败时的兼容回退。"""
         uid = str(uid or "")
+        store = getattr(self, "relationship_store", None)
+        if store is None:
+            try:
+                edges = [e for e in self.db.list_relations()
+                         if str(e.get("relation") or "") != "陌生人"]
+                names = {str(p.get("uid")): p.get("alias") or p.get("name") or str(p.get("uid"))
+                         for p in self.db.list_profiles(limit=500)}
+                names["bot"] = str(getattr(self, "bot_name", "") or "你")
+            except Exception:
+                return ""
+        else:
+            try:
+                edges = []
+                for row in store.list_relationships(include_inactive=False):
+                    if row.get("status") == "inactive":
+                        continue
+                    edges.append({
+                        "a_uid": str(row.get("subject_id") or ""),
+                        "b_uid": str(row.get("object_id") or ""),
+                        "relation": str(row.get("relation_type") or "朋友"),
+                        "note": str(row.get("note") or ""),
+                    })
+                names = {str(p.get("person_id")): str(p.get("display_name") or p.get("person_id"))
+                         for p in store.find_people("", 200)}
+                names["bot"] = str(getattr(self, "bot_name", "") or "你")
+            except Exception as exc:
+                logger.debug("[relationship] 读取关系图失败，回退旧库: %s", exc)
+                return ""
         if not edges:
             return ""
-        names = {}
-        try:
-            for item in self.db.list_profiles(limit=500):
-                names[str(item.get("uid"))] = item.get("alias") or item.get("name") or str(item.get("uid"))
-        except Exception:
-            pass
-        names["bot"] = str(getattr(self, "bot_name", "") or "你")
         picked = []
         if _rank_edges is not None:
             try:
-                # 图小的时候放宽到三跳，图大了只走两跳，避免噪声和 token 膨胀
-                hops = 3 if len(edges) <= 40 else 2
-                picked = _rank_edges(edges, uid, 12, hops)
+                picked = _rank_edges(edges, uid, 12, 3 if len(edges) <= 40 else 2)
             except Exception:
                 picked = []
         if not picked:
-            direct = []
-            neighbors = set()
+            direct, neighbors, second = [], set(), []
             for edge in edges:
                 a, b = str(edge.get("a_uid")), str(edge.get("b_uid"))
                 if uid in (a, b):
                     direct.append(edge)
                     neighbors.add(b if a == uid else a)
-            second = []
             for edge in edges:
-                if edge in direct:
-                    continue
-                a, b = str(edge.get("a_uid")), str(edge.get("b_uid"))
-                if a in neighbors or b in neighbors:
+                if edge not in direct and (str(edge.get("a_uid")) in neighbors or str(edge.get("b_uid")) in neighbors):
                     second.append(edge)
             picked = (direct + second)[:12]
         def _label(edge):
             relation = str(edge.get("relation") or "朋友")
             note = str(edge.get("note") or "")
             if "推断" in note or "推测" in note:
-                return relation + "（你自己推出来的，别当成铁关系）"
+                return relation + "（推测关系，别当成确定事实）"
             return relation
-
-        lines = []
         direct, second = [], []
         for edge in picked[:12]:
             a, b = str(edge.get("a_uid")), str(edge.get("b_uid"))
             (direct if uid in (a, b) else second).append(edge)
-        # 图小的时候也至少给他几条二跳，别让「通过谁认识谁」永远读不到
-        if not second and edges:
+        if not second:
             known = {str(e.get("a_uid")) for e in direct} | {str(e.get("b_uid")) for e in direct}
-            for edge in edges:
-                if str(edge.get("a_uid")) in known or str(edge.get("b_uid")) in known:
-                    second.append(edge)
-                if len(second) >= 4:
-                    break
+            second = [e for e in edges if str(e.get("a_uid")) in known or str(e.get("b_uid")) in known][:4]
+        lines = []
         for edge in direct + second[:6]:
             a, b = str(edge.get("a_uid")), str(edge.get("b_uid"))
             na, nb = names.get(a, a), names.get(b, b)
-            if uid in (a, b):
-                lines.append("%s和%s是%s" % (na, nb, _label(edge)))
-            else:
-                lines.append("（隔一层的）%s和%s是%s" % (na, nb, _label(edge)))
+            lines.append(("%s和%s是%s" if uid in (a, b) else "（隔一层的）%s和%s是%s")
+                         % (na, nb, _label(edge)))
         if lines:
             lines.append("这些是背景，心里有数就行，不用主动拿出来说。")
         return "\n".join(lines)
 
     async def _learn_relations(self, event, text, uid):
-        """从对话里认关系：他说「小明是我同事」就记一条边。
-
-        只认明确陈述 + 能在画像里唯一定位到人；管理员手动设过的不覆盖。
-        """
+        """只从明确陈述学习关系；写入 Relationship，保留管理员手工关系。"""
         if parse_relations is None or not text or not uid:
             return
+        store = getattr(self, "relationship_store", None)
         try:
             pairs = parse_relations(text)
         except Exception:
             return
         if not pairs:
             return
-        name_map = {}
+        name_map, profile_map = {}, {}
         try:
-            for item in self.db.list_profiles(limit=500):
+            for item in self.db.list_profiles(limit=5000):
+                pid = str(item.get("uid") or "")
+                if not pid:
+                    continue
+                profile_map[pid] = item
                 for key in ("name", "alias"):
                     raw = str(item.get(key) or "").strip()
-                    if not raw:
-                        continue
-                    for piece in re.split(r"[;；,，、/|]", raw):
-                        name = piece.strip()
+                    for name in re.split(r"[;；,，、/|]", raw):
+                        name = name.strip()
                         if len(name) >= 2:
-                            name_map.setdefault(name, set()).add(str(item.get("uid") or ""))
+                            name_map.setdefault(name, set()).add(pid)
         except Exception:
             return
-        try:
-            existing = {}
-            for edge in self.db.list_relations():
-                pair = tuple(sorted([str(edge.get("a_uid") or ""), str(edge.get("b_uid") or "")]))
-                existing[pair] = str(edge.get("note") or "")
-        except Exception:
-            existing = {}
+        if store is not None:
+            try:
+                existing_rows = store.list_relationships(include_inactive=True)
+                existing = {tuple(sorted((str(x.get("subject_id")), str(x.get("object_id"))))): x
+                            for x in existing_rows}
+            except Exception:
+                existing = {}
+        else:
+            try:
+                existing = {tuple(sorted((str(x.get("a_uid")), str(x.get("b_uid"))))): x
+                            for x in self.db.list_relations()}
+            except Exception:
+                existing = {}
         for who, relation, evidence in pairs:
-            targets = [item for item in name_map.get(who, set()) if item and item != str(uid)]
+            targets = [pid for pid in name_map.get(who, set()) if pid and pid != str(uid)]
             if len(targets) != 1:
                 continue
             target = targets[0]
-            pair = tuple(sorted([str(uid), target]))
-            old_note = existing.get(pair, "")
+            pair = tuple(sorted((str(uid), target)))
+            old = existing.get(pair)
+            old_note = str((old or {}).get("note") or "")
             if old_note and not old_note.startswith("对话："):
-                # 管理员手动设过的关系，不拿聊天内容覆盖
                 continue
             note = "对话：" + truncate(evidence, 24)
             try:
-                if not self.db.upsert_relation(uid, target, relation, note):
+                if store is not None:
+                    for pid in (str(uid), target):
+                        if not store.get_person(pid):
+                            profile = profile_map.get(pid) or {}
+                            display = str(profile.get("alias") or profile.get("name") or pid)
+                            aliases = [profile.get("name"), profile.get("alias")]
+                            store.upsert_person(display, person_id=pid, aliases=aliases,
+                                                attributes={"legacy_uid": pid})
+                    store.set_relationship(str(uid), target, relation, source="conversation",
+                                           note=note, confidence=0.8)
+                elif not self.db.upsert_relation(uid, target, relation, note):
                     continue
-                logger.debug("[amo] 关系网自动记录: %s --%s--> %s" % (uid, relation, target))
+                logger.debug("[relationship] 自动记录关系: %s --%s--> %s" % (uid, relation, target))
                 await self._push_relation_to_data(uid, target, relation, note)
             except Exception as exc:
-                logger.debug("[amo] 自动关系写入失败: %s" % exc)
+                logger.debug("[relationship] 自动关系写入失败: %s" % exc)
 
     async def _sync_relations_from_data(self):
         """把记忆终端里的关系网拉回本地（面板改过的也能生效，不用重启）。"""
