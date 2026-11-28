@@ -361,8 +361,18 @@ class WebApiMixin:
         data = await self._body()
         changes = data.get("changes") if isinstance(data.get("changes"), dict) else data
         kinds = {key: kind for key, kind, _title, _hint, _default in self.VOICE_SETTING_KEYS}
+        legacy_keys = {
+            "enable": "voice_enable", "group_enable": "voice_group_enable",
+            "auto_fallback": "voice_auto_fallback", "read_relation": "voice_read_relation",
+            "schedule_aware": "voice_schedule_aware", "speak_threshold": "voice_speak_threshold",
+            "daily_quota": "voice_daily_quota", "cooldown_seconds": "voice_cooldown_seconds",
+            "private_cooldown_seconds": "voice_private_cooldown_seconds",
+            "max_chars": "voice_max_chars", "max_segments": "voice_max_segments",
+            "speed": "voice_speed", "volume": "voice_volume",
+        }
         applied = {}
-        for key, value in (changes or {}).items():
+        for raw_key, value in (changes or {}).items():
+            key = legacy_keys.get(raw_key, raw_key)
             kind = kinds.get(key)
             if not kind:
                 continue
