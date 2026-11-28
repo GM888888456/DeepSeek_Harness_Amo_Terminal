@@ -307,6 +307,61 @@ class ContextMixin:
         except Exception:
             return ""
 
+    def _gemini35_context_card(self, event, snap, profile, relation, sender_nick, uid,
+                               self_name, is_group, addressed, memory_text, recent_text):
+        """Gemini 3.5 FL 专用上下文卡：固定人称、关系、状态和当前任务。"""
+        try:
+            text = str(getattr(event, "message_str", "") or "").strip()
+        except Exception:
+            text = ""
+        target = str(getattr(event, "heartflow_target", "") or "")
+        mode = str(getattr(event, "heartflow_mode_hint", "") or "")
+        if not is_group:
+            intent, reply_to = "private_reply", (sender_nick or uid or "对方")
+        elif addressed or target == "bot" or mode == "direct":
+            intent, reply_to = "group_direct_reply", (sender_nick or "群友")
+        elif mode == "interject" or target:
+            intent, reply_to = "group_interject", "群聊当前话题"
+        else:
+            intent, reply_to = "group_not_directed", "群聊当前话题"
+        activity = snap.get("activity") or {}
+        period = snap.get("period") or {}
+        health = snap.get("health") or {}
+        lines = [
+            "[GEMINI35_CONTEXT]",
+            "这是已经整理好的上下文卡。不要重新猜测说话人和前后关系。",
+            "[WHO]",
+            "你=" + str(self_name or "角色本人") + "；对方=" + str(sender_nick or uid or "对方") +
+            "；UID=" + str(uid or "未知") + "；关系=" + str(relation or "普通"),
+            "人称：对方说‘我’=对方本人；对方说‘你’=你。你说‘我’=你自己。",
+            "[STATE]",
+            "时间=" + str(snap.get("datetime_text") or "未知") +
+            "；地点=" + str(activity.get("place") or "未知") +
+            "；正在做=" + str(activity.get("activity") or "未知") +
+            "；忙碌度=" + str(snap.get("busy") if snap.get("busy") is not None else "未知"),
+            "心情=" + str(snap.get("feel") or "未知") +
+            "；身体=" + str(health.get("status") or "正常") +
+            "；生理状态=" + str(period.get("phase") or "未知") + "第" + str(period.get("day") or "") + "天",
+            "以上是角色自己的状态；除非当前话题需要，不要主动汇报。",
+            "[CONVERSATION]",
+            "场景=" + ("群聊" if is_group else "私聊") + "；任务=" + intent + "；回应对象=" + reply_to,
+            "当前消息是否明确在对你说话=" + ("是" if (not is_group or addressed or target == "bot" or mode == "direct") else "否/不确定"),
+            "当前消息=" + (text or "（空）"),
+        ]
+        if is_group:
+            lines.append("群聊：别人之间的对话不是对你说的；提到你的名字但没有对你说，也不要抢答。")
+        if recent_text:
+            lines.extend(["[RECENT_RELEVANT_MESSAGES]", str(recent_text).strip()[:2600]])
+        if memory_text:
+            lines.extend(["[RELEVANT_MEMORY]", str(memory_text).strip()[:1200]])
+        lines.extend([
+            "[TASK]",
+            "先理解当前消息在说什么，再直接回复。不要复述这张卡，不要解释推理过程。",
+            "如果当前消息只是延续上一句话，就接着上一句话说，不要重新开题。",
+            "[/GEMINI35_CONTEXT]",
+        ])
+        return "\\n".join(lines)
+
     def _route_lines(self, snap=None, limit=2):
         """今天要开的每一段路多少分钟——只给事实，她算时间才有依据。
 
@@ -962,11 +1017,21 @@ class ContextMixin:
             "他来找你，哪怕你在上班、在忙，也先接住；"
             "禁止说“你先忙 / 你去忙 / 忙你的 / 那你先忙 / 不打扰你了 / 晚点聊”。"
         )
-        # 统一压缩最终提示词：先保留本轮动态事实，再保留固定规则；
-        # 不调用模型、不改写事实，超过预算时只截断最后一个低优先级片段。
+        # Gemini 3.5 FL：把最重要的语境放到固定卡片最前面。
+        # 旧规则继续保留，但 FL 不再需要从长历史里自己推导“谁/谁在说/为什么”。
+        try:
+            if self.cfg_bool("gemini35_context_mode", True):
+                card = self._gemini35_context_card(
+                    event, snap, profile, relation, sender_nick, uid, self_name,
+                    is_group, addressed, memory_text, locals().get("recent_text", ""),
+                )
+                parts = [card] + parts
+        except Exception as exc:
+            logger.debug("[amo] Gemini 3.5 上下文卡生成失败，使用原上下文: %s" % exc)
+        # 上下文卡优先，其次才是旧规则和低优先级事实。
         if _compact_context_parts is not None:
             try:
-                parts = _compact_context_parts(parts, max_chars=9000)
+                parts = _compact_context_parts(parts, max_chars=7200)
             except Exception as exc:
                 logger.debug("[amo] 上下文预算压缩失败，保留原文: %s" % exc)
         return "\n".join(parts)
