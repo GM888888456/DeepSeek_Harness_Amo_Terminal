@@ -575,7 +575,7 @@ class AmoImageEngine:
             return None
         for attr in ("star_cls", "instance", "star", "plugin"):
             value = getattr(meta, attr, None)
-            if value is None:
+            if value is None or isinstance(value, type):
                 continue
             if not require_mem or hasattr(value, "mem"):
                 return value
