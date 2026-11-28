@@ -3956,7 +3956,9 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             if not res.get("ok"):
                 return {"ok": False, "stage": "bank", "data": res}
             paid = float(res.get("paid") or amount)
-            posted = cl.loan_repaid(company_dir, loan_id, paid)
+            principal_paid = float(res.get("principal_paid") or 0)
+            interest_paid = float(res.get("interest_paid") or 0)
+            posted = cl.loan_repaid(company_dir, loan_id, paid, principal_paid, interest_paid)
             if not posted.get("ok"):
                 return {"ok": False, "stage": "company_posting", "data": posted}
             return {"ok": True, "stage": "repayment", "bank": res, "company": posted}
