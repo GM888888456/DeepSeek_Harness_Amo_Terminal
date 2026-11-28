@@ -1184,7 +1184,7 @@ class WebApiMixin:
     async def api_photo_job(self):
         await self._ensure_ready()
         data = await self._body()
-        star = self._photo_star()
+        star = self._image_plugin()
         if star is None or not callable(getattr(star, "photo_job", None)):
             return {"code": 1, "msg": "Terminal 内置生图引擎不可用，检查图片模块启动日志"}
         try:
@@ -1195,7 +1195,7 @@ class WebApiMixin:
 
     async def api_photo_last(self):
         await self._ensure_ready()
-        star = self._photo_star()
+        star = self._image_plugin()
         if star is None or not callable(getattr(star, "photo_last", None)):
             return {"code": 1, "msg": "Terminal 内置生图引擎不可用，检查图片模块启动日志"}
         try:
@@ -1206,7 +1206,7 @@ class WebApiMixin:
 
     async def api_photo_clear(self):
         await self._ensure_ready()
-        star = self._photo_star()
+        star = self._image_plugin()
         if star is None or not callable(getattr(star, "photo_clear", None)):
             return {"code": 1, "msg": "Terminal 内置生图引擎不可用，检查图片模块启动日志"}
         try:
