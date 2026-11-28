@@ -41,7 +41,6 @@ try:
     from . import self_face
 except ImportError:  # pragma: no cover
     import self_face  # type: ignore
-from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context
 
 try:  # AstrBot 4.x
@@ -2549,17 +2548,6 @@ class AmoImageEngine:
             return
         logger.info("[amo_image] 已把后端 %d 个模型写进 _conf_schema.json；"
                     "重载插件后原生设置页「生图模型」就是下拉" % len(ordered))
-
-    _amo_loaded_hook = getattr(filter, "on_astrbot_loaded", None)
-
-    if _amo_loaded_hook is not None:
-        @_amo_loaded_hook()
-        async def on_astrbot_loaded(self):
-            """所有插件加载完：顺手把模型下拉的文件刷新一遍。"""
-            try:
-                await self._sync_model_options()
-            except Exception as exc:
-                logger.debug("[amo_image] 同步模型下拉失败: %s" % exc)
 
     async def api_models(self):
         """拉当前后端的模型列表，面板里只让选、不让手填。"""
