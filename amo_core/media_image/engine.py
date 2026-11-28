@@ -2313,10 +2313,10 @@ class AmoImageEngine:
         ]
         for path, handler, methods in routes:
             try:
-                self.context.register_web_api("/" + PLUGIN_NAME + path, handler, methods, path)
+                self.context.register_web_api("/" + PLUGIN_NAME + "/media/image" + path, handler, methods, path)
             except TypeError:
                 try:
-                    self.context.register_web_api("/" + PLUGIN_NAME + path, methods, path, handler)
+                    self.context.register_web_api("/" + PLUGIN_NAME + "/media/image" + path, methods, path, handler)
                 except Exception as exc:
                     logger.warning("[amo_image] 面板接口 %s 兼容注册失败: %s" % (path, exc))
             except Exception as exc:
