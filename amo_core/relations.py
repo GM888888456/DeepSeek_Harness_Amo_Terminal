@@ -297,6 +297,14 @@ class RelationsMixin:
             remote.add(tuple(sorted([a_uid, b_uid])))
             try:
                 self.db.upsert_relation(a_uid, b_uid, edge.get("relation") or "朋友", edge.get("note") or "")
+                store = getattr(self, "relationship_store", None)
+                if store is not None:
+                    for _pid in (a_uid, b_uid):
+                        if not store.get_person(_pid):
+                            store.upsert_person(_pid, person_id=_pid,
+                                                attributes={"legacy_uid": _pid})
+                    store.set_relationship(a_uid, b_uid, edge.get("relation") or "朋友",
+                                           source="memory_sync", note=edge.get("note") or "")
                 count += 1
             except Exception:
                 continue
