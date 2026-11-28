@@ -2620,6 +2620,68 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
 
     @filter.on_llm_response()
     async def on_llm_response(self, event: AstrMessageEvent, resp):
+        # LLM_ERROR_GUARD：模型网关/供应商失败时，禁止把框架错误文本当成角色回复发给用户。
+        # 常见形式："All chat models failed: InternalServerError: Error code: 502"。
+        # 这类错误不是聊天内容，直接吞掉本轮响应；下一轮正常消息继续工作。
+        try:
+            def _err_text(value, depth=0):
+                if depth > 3 or value is None:
+                    return ""
+                if isinstance(value, str):
+                    return value
+                if isinstance(value, (int, float, bool)):
+                    return str(value)
+                if isinstance(value, dict):
+                    return " ".join(_err_text(v, depth + 1) for v in value.values())
+                if isinstance(value, (list, tuple, set)):
+                    return " ".join(_err_text(v, depth + 1) for v in value)
+                return str(value)
+
+            _raw_parts = []
+            for _attr in ("completion_text", "text", "content", "error", "message", "detail", "result"):
+                try:
+                    _v = getattr(resp, _attr, None)
+                except Exception:
+                    _v = None
+                if _v is not None:
+                    _raw_parts.append(_err_text(_v))
+            try:
+                _raw_parts.append(_err_text(vars(resp)))
+            except Exception:
+                pass
+            _err_blob = " ".join(_raw_parts)
+            _err_low = _err_blob.lower()
+            _error_markers = (
+                "all chat models failed",
+                "internalservererror",
+                "error code: 502",
+                "error code 502",
+                "bad gateway",
+                "llm 响应错误",
+                "llm response error",
+            )
+            if any(_m in _err_low for _m in _error_markers):
+                _res = getattr(resp, "result", None)
+                if _res is not None and hasattr(_res, "chain"):
+                    try:
+                        _res.chain = []
+                    except Exception:
+                        pass
+                for _attr in ("completion_text", "text", "content", "error", "message", "detail"):
+                    try:
+                        if hasattr(resp, _attr) and isinstance(getattr(resp, _attr), str):
+                            setattr(resp, _attr, "")
+                    except Exception:
+                        pass
+                try:
+                    event.set_extra("amo_llm_error_blocked", True)
+                except Exception:
+                    pass
+                logger.warning("[amo] 🛑 拦截模型网关错误响应：%s" % _err_blob[:240])
+                return
+        except Exception as _guard_exc:
+            logger.debug("[amo] LLM 错误响应拦截器自身失败: %s" % _guard_exc)
+
         # SPEAK 协议就地抹掉：这是存库前最后一个钩子。不清掉的话，
         # 「SPEAK 1」会跟着 assistant 消息进历史，她下一轮照着学，越学越脏。
         _speak_dec = ""
