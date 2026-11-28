@@ -91,9 +91,9 @@ try:
 except Exception:  # pragma: no cover
     from sp_link import probe as _link_probe  # type: ignore
 
-PLUGIN_NAME = "DeepSeek_Harness_Amo_Image"
-PLUGIN_VERSION = "1.9.2"
-DISPLAY_NAME = "我想永远陪着你-语音"
+PLUGIN_NAME = "DeepSeek_Harness_Amo_Terminal"
+PLUGIN_VERSION = "2.0.0"
+DISPLAY_NAME = "我想永远陪着你-终端语音"
 
 #: 面板可以改的字段（白名单）。加字段时两边一起改。
 WEB_EDITABLE = (
@@ -225,6 +225,24 @@ class SpeechSoundPlugin(Star):
                 return True
             except Exception as exc:
                 logger.warning("[amo_voice] 配置落盘失败: %s" % exc)
+        # 内嵌实例使用独立字典，不再拥有 AstrBot Config 对象；语音设置单独落盘，
+        # 不覆盖 Terminal 主配置，也不把 API Key 写回 Relationship。
+        try:
+            from astrbot.core.utils.astrbot_path import get_astrbot_data_path
+            config_dir = os.path.join(str(get_astrbot_data_path()), "config")
+            os.makedirs(config_dir, exist_ok=True)
+            target = os.path.join(config_dir, PLUGIN_NAME + "_voice_config.json")
+            tmp = target + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(dict(cfg or {}), fh, ensure_ascii=False, indent=2)
+            try:
+                os.chmod(tmp, 0o600)
+            except Exception:
+                pass
+            os.replace(tmp, target)
+            return True
+        except Exception as exc:
+            logger.warning("[amo_voice] 内置语音配置落盘失败: %s" % exc)
         return False
 
     # ------------------------------------------------------------------
@@ -245,11 +263,33 @@ class SpeechSoundPlugin(Star):
                 continue
         if not base:
             base = os.path.join(os.getcwd(), "data", "plugin_data")
-        path = os.path.join(base, PLUGIN_NAME)
+        path = os.path.join(base, PLUGIN_NAME, "media_voice")
         try:
             os.makedirs(path, exist_ok=True)
-        except Exception:
-            pass
+            marker = os.path.join(path, ".legacy_voice_data_migrated")
+            if not os.path.isfile(marker):
+                # 只迁移语音自身的状态、音色缓存和音频，不移动图片或关系数据。
+                roots = [
+                    os.path.join(base, "DeepSeek_Harness_Amo_Image"),
+                    os.path.join(base, "DeepSeek_Harness_Amo_Relationship"),
+                    os.path.join(base, "DeepSeek_Harness_Amo_Speech"),
+                ]
+                for old_root in roots:
+                    for filename in ("state.json", "voices.json"):
+                        src = os.path.join(old_root, filename)
+                        dst = os.path.join(path, filename)
+                        if os.path.isfile(src) and not os.path.exists(dst):
+                            import shutil
+                            shutil.copy2(src, dst)
+                    src_audio = os.path.join(old_root, "audio")
+                    dst_audio = os.path.join(path, "audio")
+                    if os.path.isdir(src_audio):
+                        import shutil
+                        shutil.copytree(src_audio, dst_audio, dirs_exist_ok=True)
+                with open(marker, "w", encoding="utf-8") as fh:
+                    json.dump({"migrated_at": int(_now())}, fh)
+        except Exception as exc:
+            logger.warning("[amo_voice] 旧语音数据迁移失败，保留旧目录供回退: %s" % exc)
         return path
 
     def _audio_dir(self) -> str:
@@ -1153,6 +1193,7 @@ class SpeechSoundPlugin(Star):
             ("/voices/pull", self.api_pull_voices, ["POST"]),
             ("/voices/scene", self.api_set_scene_voice, ["POST"]),
             ("/history", self.api_history, ["GET"]),
+            ("/test", self.api_test, ["POST"]),
         ]
         for path, handler, methods in routes:
             try:
@@ -1174,11 +1215,19 @@ class SpeechSoundPlugin(Star):
         )
 
     def _sync_config(self) -> None:
-        """AstrBot 原生设置页改完，把配置文件的新值并进内存（面板与接口立刻一致）。"""
+        """同步 Terminal 内置语音专属配置文件。"""
         try:
-            _config_watch.reload_if_changed(self.config, logger)
+            from astrbot.core.utils.astrbot_path import get_astrbot_data_path
+            path = os.path.join(str(get_astrbot_data_path()), "config",
+                                PLUGIN_NAME + "_voice_config.json")
+            if os.path.isfile(path):
+                with open(path, "r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+                if isinstance(data, dict):
+                    self.config.update(data)
+                    self._drop_provider_cache()
         except Exception as exc:
-            logger.debug("[config] 同步配置文件失败: %s" % exc)
+            logger.debug("[amo_voice] 同步内置语音配置失败: %s" % exc)
 
     async def api_health(self):
         """我自己连没连上终端/记忆库。面板顶部那一行就看这个。"""
