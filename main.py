@@ -2145,6 +2145,67 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
 
 
 
+    async def _ensure_self_identity_memory(self):
+        """把生图侧的 Core_Appearance 同步成 Terminal 持久事实，聊天时不依赖短期记忆。"""
+        try:
+            engine = self._image_plugin()
+            identity = engine.self_face_identity() if engine is not None else ""
+            if not identity:
+                return ""
+            current = str(self.db.kv_get("self_identity_memory", "") or "")
+            if current != identity:
+                self.db.kv_set("self_identity_memory", identity)
+            return identity
+        except Exception as exc:
+            logger.debug("[amo] 自我形象事实同步失败: %s" % exc)
+            return ""
+
+    async def _incoming_self_lines(self, req):
+        """识别入站图片是否来自自己的自拍档案；认出后给出时间/穿搭事实。"""
+        try:
+            engine = self._image_plugin()
+            if engine is None:
+                return ""
+            identity = str(self.db.kv_get("self_identity_memory", "") or "")
+            if not identity:
+                identity = engine.self_face_identity()
+            lines = [identity] if identity else []
+            urls = list(getattr(req, "image_urls", None) or [])
+            matched = []
+            if urls:
+                import asyncio as _asyncio
+                for source in urls[:4]:
+                    try:
+                        row = await _asyncio.to_thread(engine.self_face_match, source)
+                    except Exception:
+                        row = {}
+                    if isinstance(row, dict) and row:
+                        sentence = engine.self_face_remember(row)
+                        if sentence and sentence not in matched:
+                            matched.append(sentence)
+            if matched:
+                lines.extend(matched)
+            elif urls:
+                recent = engine.self_face_recent(3)
+                if recent:
+                    items = []
+                    for row in recent:
+                        bits = [str(row.get("age") or row.get("date") or "").strip()]
+                        if row.get("outfit"):
+                            bits.append("穿着" + str(row.get("outfit")))
+                        if row.get("place"):
+                            bits.append("在" + str(row.get("place")))
+                        item = "，".join(x for x in bits if x)
+                        if item:
+                            items.append(item)
+                    if items:
+                        lines.append("【最近拍过的照片】" + "；".join(items)
+                                     + "。如果这次图片不是档案里的原图，不要把它认成自己。")
+            return "\n".join(x for x in lines if x)
+        except Exception as exc:
+            logger.debug("[amo] 入站照片身份识别失败: %s" % exc)
+            return ""
+
     def _strip_context_images(self, req):
         """把历史里残留的 base64 换成 [图片]，只影响本轮请求。"""
         try:
