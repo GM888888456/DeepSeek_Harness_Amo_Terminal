@@ -598,6 +598,33 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         logger.debug("[amo] 我想永远陪着你-终端 %s loaded; stale web routes purged" % PLUGIN_VERSION)
         self._boot_task = self._spawn(self._ensure_ready())
 
+    @filter.command("speak", alias={"语音"})
+    async def cmd_speak(self, event: AstrMessageEvent):
+        speech = self._speech()
+        if speech is None:
+            yield event.plain_result("语音模块没加载起来")
+            return
+        async for item in speech.cmd_speak(event):
+            yield item
+
+    @filter.on_llm_response()
+    async def on_media_llm_response(self, event: AstrMessageEvent, resp):
+        speech = self._speech()
+        if speech is not None:
+            await speech.on_llm_response(event, resp)
+
+    @filter.on_decorating_result()
+    async def on_media_decorating_result(self, event: AstrMessageEvent):
+        speech = self._speech()
+        if speech is not None:
+            await speech.on_decorating_result(event)
+
+    @filter.on_llm_request()
+    async def on_media_llm_request(self, event: AstrMessageEvent, req):
+        speech = self._speech()
+        if speech is not None:
+            await speech.on_llm_request(event, req)
+
     # ---------- 配置 ----------
 
 
