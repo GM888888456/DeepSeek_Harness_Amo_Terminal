@@ -144,6 +144,33 @@ class MediaMixin:
                         if key in legacy_panel and legacy_panel[key] is not None:
                             data[key] = legacy_panel[key]
                     break
+        # Terminal 内置语音独立配置：优先使用已迁移/面板保存的版本。
+        # 首次升级时从旧语音插件配置复制，保留 API Key、音色、服务商与额度。
+        voice_config_path = ""
+        if base:
+            voice_config_path = os.path.join(base, "DeepSeek_Harness_Amo_Terminal_voice_config.json")
+        if voice_config_path and os.path.isfile(voice_config_path):
+            try:
+                with open(voice_config_path, "r", encoding="utf-8") as fh:
+                    saved_voice = json.load(fh)
+                if isinstance(saved_voice, dict):
+                    data.update(saved_voice)
+            except Exception as exc:
+                logger.warning("[amo_voice] 读取内置语音配置失败: %s" % exc)
+        elif voice_config_path:
+            try:
+                os.makedirs(os.path.dirname(voice_config_path), exist_ok=True)
+                tmp = voice_config_path + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    json.dump(data, fh, ensure_ascii=False, indent=2)
+                try:
+                    os.chmod(tmp, 0o600)
+                except Exception:
+                    pass
+                os.replace(tmp, voice_config_path)
+                logger.info("[amo_voice] 已将旧语音配置迁入 Terminal")
+            except Exception as exc:
+                logger.warning("[amo_voice] 旧语音配置迁移失败，下次启动会重试: %s" % exc)
         data["web_prefix"] = "/sp"
         try:
             panel = self.config if isinstance(self.config, dict) else {}
