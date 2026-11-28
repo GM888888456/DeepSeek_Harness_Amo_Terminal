@@ -33,6 +33,13 @@ except Exception:  # pragma: no cover
 from .shared import *
 
 try:
+    from .media_image import AmoImageEngine
+except Exception as _image_import_error:  # pragma: no cover
+    AmoImageEngine = None
+    logger.warning("[amo_image] 终端内置图片引擎导入失败: %s" % _image_import_error)
+
+
+try:
     from .media_voice.main import SpeechSoundPlugin
 except Exception as _speech_import_error:  # pragma: no cover
     SpeechSoundPlugin = None
