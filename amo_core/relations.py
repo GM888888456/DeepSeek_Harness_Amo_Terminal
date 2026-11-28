@@ -332,15 +332,12 @@ class RelationsMixin:
                 logger.debug("[relationship] 自动关系写入失败: %s" % exc)
 
     async def _sync_relations_from_data(self):
-        """把记忆终端里的关系网拉回本地（面板改过的也能生效，不用重启）。"""
+        """Relationship 是关系图唯一来源；向记忆插件镜像，不再反向覆盖关系主库。"""
         try:
-            rows = await self._data_call("list_relations", self._data_bot_id())
-        except Exception:
+            rows = self._relationship_edges_legacy()
+        except Exception as exc:
+            logger.debug("[relationship] 读取关系主库失败: %s", exc)
             return 0
-        if rows is None:
-            # 终端不可用时不要动本地，避免把关系网清空
-            return 0
-        remote = set()
         count = 0
         for edge in rows:
             a_uid = str(edge.get("a_uid") or "")
@@ -348,50 +345,14 @@ class RelationsMixin:
             if not a_uid or not b_uid:
                 continue
             if a_uid in INTERNAL_RELATION_NODES or b_uid in INTERNAL_RELATION_NODES:
-                # 老版本可能推过 bot 边：不参与比较，也不动本地
                 continue
-            remote.add(tuple(sorted([a_uid, b_uid])))
             try:
-                self.db.upsert_relation(a_uid, b_uid, edge.get("relation") or "朋友", edge.get("note") or "")
-                store = getattr(self, "relationship_store", None)
-                if store is not None:
-                    for _pid in (a_uid, b_uid):
-                        if not store.get_person(_pid):
-                            store.upsert_person(_pid, person_id=_pid,
-                                                attributes={"legacy_uid": _pid})
-                    store.set_relationship(a_uid, b_uid, edge.get("relation") or "朋友",
-                                           source="memory_sync", note=edge.get("note") or "")
-                count += 1
-            except Exception:
-                continue
-        # 面板上删掉的关系，本地也同步删掉（终端为准）；
-        # 终端返回空、或远端的边比本地还少时都不删——那多半是换库/重装/恢复残缺备份，
-        # 照删一次就能把本地关系网清空（之后还得靠聊天慢慢沉淀）。
-        try:
-            local_rows = self.db.list_relations()
-        except Exception:
-            local_rows = []
-        # bot/self 边推不到远端，比较前先排掉：不然远端永远"比本地少"，
-        # 这条 warning 会每轮都响，而且下面"终端删了本地也删"永远不会执行。
-        local_rows = [
-            item for item in local_rows
-            if str(item.get("a_uid") or "") not in INTERNAL_RELATION_NODES
-            and str(item.get("b_uid") or "") not in INTERNAL_RELATION_NODES
-        ]
-        if not remote or len(remote) < len(local_rows):
-            if remote:
-                logger.warning(
-                    "[amo] 关系网不同步：远端 %d 条 < 本地 %d 条，先不删本地"
-                    % (len(remote), len(local_rows))
+                await self._push_relation_to_data(
+                    a_uid, b_uid, edge.get("relation") or "朋友", edge.get("note") or ""
                 )
-            return count
-        try:
-            for item in local_rows:
-                pair = tuple(sorted([str(item.get("a_uid") or ""), str(item.get("b_uid") or "")]))
-                if pair not in remote:
-                    self.db.delete_relation(pair[0], pair[1])
-        except Exception:
-            pass
+                count += 1
+            except Exception as exc:
+                logger.debug("[relationship] 关系镜像失败: %s", exc)
         return count
 
     def _detect_impersonation(self, event):
