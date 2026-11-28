@@ -482,9 +482,9 @@ def build_prompt(appearance: str, prompt: str, context_lines=None, look: str = "
 
 
 class AmoImageEngine:
-    """生图插件：认人设、接上下文、只画图。"""
+    """Terminal 内置图片引擎：生图、自拍、照片档案与图片面板。"""
 
-    # 语音运行时与事件钩子已迁入 Terminal；本插件只保留社会关系数据与关系面板。
+    # 关系图谱由 Relationship 插件持有；本引擎不读写关系数据库。
 
     def __init__(self, context: Context, config: dict = None):
         self.context = context
