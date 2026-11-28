@@ -3648,7 +3648,14 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         return None
 
     def _voice_plugin(self):
-        """解析内嵌语音实例或旧版独立语音插件，供终端语音桥接使用。"""
+        """优先返回 Terminal 自己持有的语音实例；兼容旧版独立插件。"""
+        try:
+            embedded = self._speech()
+        except Exception:
+            embedded = None
+        if embedded is not None:
+            self._voice_star = embedded
+            return embedded
         cached = getattr(self, "_voice_star", None)
         if cached is not None:
             return cached
