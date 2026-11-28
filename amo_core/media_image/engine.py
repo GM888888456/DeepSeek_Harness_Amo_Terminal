@@ -2291,40 +2291,6 @@ class AmoImageEngine:
     async def api_photo_clear(self):
         return self.photo_clear()
 
-    # ---------- 面板 Web API ----------
-
-    def _register_web_apis(self):
-        """把媒体面板接口挂到 Terminal 命名空间；注册失败只记日志，不影响生图。"""
-        routes = [
-            ("/status", self.api_status, ["GET"]),
-            ("/health", self.api_health, ["GET"]),
-            ("/history", self.api_history, ["GET"]),
-            ("/config", self.api_config, ["GET"]),
-            ("/config/save", self.api_save_config, ["POST"]),
-            ("/presets", self.api_presets, ["GET"]),
-            ("/models", self.api_models, ["GET"]),
-            ("/persona/extract", self.api_persona_extract, ["POST"]),
-            ("/wardrobe", self.api_wardrobe, ["GET", "POST"]),
-            ("/wardrobe/save", self.api_wardrobe_save, ["POST"]),
-            ("/wardrobe/delete", self.api_wardrobe_delete, ["POST"]),
-            ("/wardrobe/wear", self.api_wardrobe_wear, ["POST"]),
-            ("/test", self.api_test, ["POST"]),
-            ("/photo/self", self.api_photo_self, ["GET", "POST"]),
-            ("/photo/job", self.api_photo_job, ["GET", "POST"]),
-            ("/photo/last", self.api_photo_last, ["GET", "POST"]),
-            ("/photo/clear", self.api_photo_clear, ["GET", "POST"]),
-        ]
-        for path, handler, methods in routes:
-            try:
-                self.context.register_web_api("/" + PLUGIN_NAME + "/media/image" + path, handler, methods, path)
-            except TypeError:
-                try:
-                    self.context.register_web_api("/" + PLUGIN_NAME + "/media/image" + path, methods, path, handler)
-                except Exception as exc:
-                    logger.warning("[amo_image] 面板接口 %s 兼容注册失败: %s" % (path, exc))
-            except Exception as exc:
-                logger.warning("[amo_image] 面板接口 %s 注册失败: %s" % (path, exc))
-
     @staticmethod
     def _json(payload):
         if json_response is not None:
