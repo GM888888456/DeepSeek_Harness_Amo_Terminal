@@ -716,6 +716,11 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 self._speech()
             except Exception as exc:
                 logger.warning("[amo_voice] 启动内置语音失败: %s" % exc)
+            # 图片引擎也由 Terminal 持有；加载完成后注册 /photo/* 与生图面板 API。
+            try:
+                self._image_plugin()
+            except Exception as exc:
+                logger.warning("[amo_image] 启动内置图片引擎失败: %s" % exc)
 
 
 
