@@ -2706,6 +2706,21 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                         _jobs.append(("direction", _arg))
                     else:
                         _jobs.append(("policy", _arg))
+                # 公司融资总线：模型只提出业务意图，Terminal 负责实际审批/放款/还款。
+                _finance_jobs = []
+                for _fm in _re_d.finditer(
+                        r"(?mi)^\s*\**\s*FINANCE\s*\**\s*[:：]?\s*(apply|loan|disburse|receive|repay|还款|申请|放款)\s*(.*?)\s*$",
+                        _raw2):
+                    _op = (_fm.group(1) or "").lower()
+                    _arg = (_fm.group(2) or "").strip()
+                    if _op in ("apply", "loan", "申请"):
+                        _finance_jobs.append(("loan_apply", _arg))
+                    elif _op in ("disburse", "receive", "放款"):
+                        _finance_jobs.append(("loan_disburse", _arg))
+                    else:
+                        _finance_jobs.append(("loan_repay", _arg))
+                if _finance_jobs:
+                    _jobs.extend(_finance_jobs)
                 for _tm in _re_d.finditer(
                         r"(?m)^\s*\**\s*TRADE\s*\**\s*[:：]?\s*(buy|sell|买|卖)\s*"
                         r"([\u4e00-\u9fffA-Za-z]{1,8})\s*(\d{1,6})?", _raw2):
@@ -2734,7 +2749,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                         logger.info("[amo] 报价不合理，没扣：%s" % _chk.get("reason"))
                 if _jobs or _trades or _spends:
                     _body2 = _re_d.sub(
-                        r"(?m)^\s*\**\s*(DECIDE|DIRECTION|POLICY|TRADE)\s*\**.*$", "", _raw2).strip()
+                        r"(?m)^\s*\**\s*(DECIDE|DIRECTION|POLICY|TRADE|FINANCE)\s*\**.*$", "", _raw2).strip()
                     for _attr in ("completion_text", "text", "content"):
                         if isinstance(getattr(resp, _attr, None), str):
                             setattr(resp, _attr, _body2)
