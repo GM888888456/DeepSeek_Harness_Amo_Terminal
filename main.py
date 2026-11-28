@@ -806,6 +806,51 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 return value
         return None
 
+    IMAGE_PLUGIN_NAMES = (
+        "DeepSeek_Harness_Amo_Relationship",
+        "DeepSeek_Harness_Amo_Image",
+        "Astrbot_Amo_Image",
+        "astrbot_plugin_amo_image",
+    )
+
+    def _image_plugin(self):
+        """解析真正提供 draw_for() 的媒体引擎；兼容旧 Image 插件名。
+
+        MediaMixin 只依赖 draw_for/quota/change_outfit_for 等公开接口，
+        不直接依赖具体插件类。实例失效时由调用方清空 _image_star 后重试。
+        """
+        cached = getattr(self, "_image_star", None)
+        if cached is not None and callable(getattr(cached, "draw_for", None)):
+            return cached
+        try:
+            for name in self.IMAGE_PLUGIN_NAMES:
+                try:
+                    meta = self.context.get_registered_star(name)
+                except Exception:
+                    meta = None
+                plugin = self._image_instance(meta)
+                if plugin is not None:
+                    self._image_star = plugin
+                    return plugin
+        except Exception as exc:
+            logger.debug("[amo] 按插件名解析生图引擎失败: %s" % exc)
+        try:
+            for meta in self.context.get_all_stars():
+                plugin = self._image_instance(meta)
+                if plugin is None:
+                    continue
+                marker = (
+                    str(getattr(meta, "name", "") or "") + " " +
+                    str(getattr(meta, "module_path", "") or "")
+                ).lower()
+                if "amo_image" in marker or "amo_relationship" in marker:
+                    self._image_star = plugin
+                    return plugin
+        except Exception as exc:
+            logger.debug("[amo] 扫描已加载插件寻找生图引擎失败: %s" % exc)
+        return None
+
+
 
     #: 活动 → 发图概率桶（对应配置 image_share_prob_<桶>）
     SHARE_BUCKET_WORDS = {
@@ -3589,8 +3634,46 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             value = getattr(meta, attr, None)
             if value is None or isinstance(value, type):
                 continue
+            # 新架构：语音是 Relationship 媒体插件内的惰性实例。
+            speech_factory = getattr(value, "_speech", None)
+            if callable(speech_factory):
+                try:
+                    speech = speech_factory()
+                except Exception:
+                    speech = getattr(value, "speech", None)
+                if speech is not None:
+                    return speech
             if callable(getattr(value, "_persist_config", None)) and hasattr(value, "config"):
                 return value
+        return None
+
+    def _voice_plugin(self):
+        """解析内嵌语音实例或旧版独立语音插件，供终端语音桥接使用。"""
+        cached = getattr(self, "_voice_star", None)
+        if cached is not None:
+            return cached
+        for name in self.VOICE_PLUGIN_NAMES:
+            try:
+                meta = self.context.get_registered_star(name)
+            except Exception:
+                meta = None
+            plugin = self._voice_instance(meta)
+            if plugin is not None:
+                self._voice_star = plugin
+                return plugin
+        try:
+            for meta in self.context.get_all_stars():
+                plugin = self._voice_instance(meta)
+                if plugin is not None:
+                    marker = (
+                        str(getattr(meta, "name", "") or "") + " " +
+                        str(getattr(meta, "module_path", "") or "")
+                    ).lower()
+                    if "speech" in marker or "amo_relationship" in marker or "amo_image" in marker:
+                        self._voice_star = plugin
+                        return plugin
+        except Exception as exc:
+            logger.debug("[amo] 扫描已加载插件寻找语音实例失败: %s" % exc)
         return None
 
     @staticmethod
