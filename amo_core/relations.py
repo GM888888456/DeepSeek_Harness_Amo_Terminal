@@ -36,6 +36,44 @@ from .shared import *
 
 class RelationsMixin:
 
+    def _relationship_edges_legacy(self):
+        """统一把 Relationship 关系边映射成旧 UID 图格式，兼容既有算法。"""
+        store = getattr(self, "relationship_store", None)
+        if store is None:
+            return self.db.list_relations()
+        return [{
+            "a_uid": str(x.get("subject_id") or ""),
+            "b_uid": str(x.get("object_id") or ""),
+            "relation": str(x.get("relation_type") or "朋友"),
+            "note": str(x.get("note") or ""),
+            "status": str(x.get("status") or "active"),
+        } for x in store.list_relationships(include_inactive=False)]
+
+    def _relationship_write_edge(self, a_uid, b_uid, relation, note="", source="automatic"):
+        """统一关系写入口；AmoDB 仅保留为 Relationship 不可用时的回退。"""
+        store = getattr(self, "relationship_store", None)
+        if store is None:
+            return self.db.upsert_relation(a_uid, b_uid, relation, note)
+        profiles = {}
+        try:
+            profiles = {str(x.get("uid")): x for x in self.db.list_profiles(limit=500)}
+        except Exception:
+            pass
+        for pid in (str(a_uid), str(b_uid)):
+            if not store.get_person(pid):
+                p = profiles.get(pid) or {}
+                display = str(p.get("alias") or p.get("name") or pid)
+                store.upsert_person(display, person_id=pid,
+                                    aliases=[p.get("name"), p.get("alias")],
+                                    attributes={"legacy_uid": pid})
+        note_text = str(note or "")
+        actual_source = ("inference" if ("推测" in note_text or "推断" in note_text)
+                         else ("conversation" if note_text.startswith("对话：") else source))
+        store.set_relationship(str(a_uid), str(b_uid), str(relation or "朋友"),
+                                source=actual_source, note=note_text,
+                                confidence=0.55 if actual_source == "inference" else 0.85)
+        return True
+
     async def _self_identity(self, event):
         uid = ""
         try:
