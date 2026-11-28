@@ -61,8 +61,10 @@ class GoldenTest(unittest.TestCase):
     def test_typing_delay_is_bounded(self):
         """typing_delay_ms 自带 ±15~20% 随机（模拟真人手速），只能验区间和上限。"""
         for text in ("你好呀", "", "a" * 200, "这是一句比较长的话，用来看看打字延迟会不会到上限"):
-            clean = text.replace(" ", "")
-            nominal = min(700 + len(clean) * 400, 20000)
+            clean = "".join(text.split())
+            pauses = sum(clean.count(mark) for mark in ("。", "！", "？", "!", "?", "…"))
+            commas = sum(clean.count(mark) for mark in ("，", ",", "、"))
+            nominal = min(700 + len(clean) * 400 + pauses * 70 + commas * 35, 20000)
             value = TOOLS.typing_delay_ms(text)
             self.assertGreaterEqual(value, int(max(200, nominal * 0.85)), text[:16])
             self.assertLessEqual(value, int(max(200, nominal * 1.2)) + 1, text[:16])
