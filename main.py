@@ -2709,11 +2709,11 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 # 公司融资总线：模型只提出业务意图，Terminal 负责实际审批/放款/还款。
                 _finance_jobs = []
                 for _fm in _re_d.finditer(
-                        r"(?mi)^\s*\**\s*FINANCE\s*\**\s*[:：]?\s*(apply|loan|disburse|receive|repay|还款|申请|放款)\s*(.*?)\s*$",
+                        r"(?mi)^\s*\**\s*FINANCE\s*\**\s*[:：]?\s*(apply|loan_apply|receivable_apply|loan|disburse|receive|repay|还款|申请|放款)\s*(.*?)\s*$",
                         _raw2):
                     _op = (_fm.group(1) or "").lower()
                     _arg = (_fm.group(2) or "").strip()
-                    if _op in ("apply", "loan", "申请"):
+                    if _op in ("apply", "loan_apply", "receivable_apply", "loan", "申请"):
                         _finance_jobs.append(("loan_apply", _arg))
                     elif _op in ("disburse", "receive", "放款"):
                         _finance_jobs.append(("loan_disburse", _arg))
