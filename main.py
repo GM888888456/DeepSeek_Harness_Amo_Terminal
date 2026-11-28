@@ -879,10 +879,9 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
     )
 
     def _migrate_legacy_image_config(self):
-        """把旧相片插件自己的配置迁入 Terminal；只在新配置仍为 schema 默认值时补入。"""
+        """把旧相片插件配置/快照迁入 Terminal；只补新配置的默认值，不覆盖用户新设置。"""
         if getattr(self, "_image_config_migrated", False):
             return
-        self._image_config_migrated = True
         try:
             from astrbot.core.utils.astrbot_path import get_astrbot_data_path
             data_root = str(get_astrbot_data_path())
@@ -891,7 +890,18 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         if not data_root:
             return
         config_dir = os.path.join(data_root, "config")
-        legacy_paths = [
+        marker_dir = os.path.join(data_root, "plugin_data", "DeepSeek_Harness_Amo_Terminal")
+        marker_path = os.path.join(marker_dir, "image_config_migrated.json")
+        if os.path.isfile(marker_path):
+            self._image_config_migrated = True
+            return
+
+        # 先读旧插件的安全快照，再读旧配置文件；后者有值时优先。
+        legacy = {}
+        snapshot_path = os.path.join(
+            data_root, "plugin_data", "DeepSeek_Harness_Amo_Relationship", "config_snapshot.json"
+        )
+        source_paths = [snapshot_path] + [
             os.path.join(config_dir, name + "_config.json")
             for name in (
                 "DeepSeek_Harness_Amo_Relationship",
@@ -900,18 +910,17 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 "astrbot_plugin_amo_image",
             )
         ]
-        legacy_path = next((item for item in legacy_paths if os.path.isfile(item)), "")
-        marker_dir = os.path.join(data_root, "plugin_data", "DeepSeek_Harness_Amo_Terminal")
-        marker_path = os.path.join(marker_dir, "image_config_migrated.json")
-        if os.path.isfile(marker_path):
+        for source in source_paths:
+            try:
+                with open(source, "r", encoding="utf-8-sig") as fh:
+                    payload = json.load(fh)
+                if isinstance(payload, dict):
+                    legacy.update(payload)
+            except Exception:
+                continue
+        if not legacy:
             return
-        try:
-            with open(legacy_path, "r", encoding="utf-8-sig") as fh:
-                legacy = json.load(fh)
-            if not isinstance(legacy, dict):
-                return
-        except Exception:
-            return
+
         schema = {}
         try:
             with open(os.path.join(self.plugin_dir, "_conf_schema.json"), "r", encoding="utf-8-sig") as fh:
@@ -947,14 +956,16 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                     pass
                 os.replace(tmp, target)
                 saved = True
-                logger.info("[amo_image] 已将旧相片配置迁入 Terminal：%d 项" % len(changed))
+                logger.info("[amo_image] 已从旧配置/快照迁入 Terminal 相片设置：%d 项" % len(changed))
             except Exception as exc:
                 logger.warning("[amo_image] 相片配置迁移暂未落盘，下次启动会重试：%s" % exc)
         if saved:
             try:
                 os.makedirs(marker_dir, exist_ok=True)
                 with open(marker_path, "w", encoding="utf-8") as fh:
-                    json.dump({"migrated_at": int(time.time()), "keys": changed}, fh, ensure_ascii=False)
+                    json.dump({"migrated_at": int(time.time()), "keys": changed,
+                               "source": "relationship_config_or_snapshot"}, fh, ensure_ascii=False)
+                self._image_config_migrated = True
             except Exception:
                 pass
 
