@@ -32,6 +32,13 @@ except Exception:  # pragma: no cover
 
 from .shared import *
 
+try:
+    from .media_voice.main import SpeechSoundPlugin
+except Exception as _speech_import_error:  # pragma: no cover
+    SpeechSoundPlugin = None
+    logger.warning("[amo_voice] 终端内置语音模块导入失败: %s" % _speech_import_error)
+
+
 MODEL_LEAK_RE = re.compile(
     r"(?:deepseek|openai|anthropic|claude|gemini|chatgpt|gpt-?[0-9]|qwen|通义|千问|"
     r"glm|chatglm|智谱|moonshot|kimi|doubao|豆包|ernie|文心|hunyuan|混元|llama|mistral|"
@@ -80,6 +87,96 @@ def looks_like_model_leak(text):
 
 
 class MediaMixin:
+
+    # ------------------------------------------------------------------
+    # 语音：由 Terminal 持有实例与事件钩子，不再依赖 Relationship 插件代管。
+    # ------------------------------------------------------------------
+    VOICE_TUNING_KEYS = (
+        "group_enable", "auto_fallback", "daily_quota",
+        "private_cooldown_seconds", "max_chars", "max_segments",
+        "speak_threshold", "timeout", "speed",
+    )
+
+    def _speech_config(self):
+        """沿用旧语音配置文件与数据目录，迁移不丢 API Key、音色和额度。"""
+        names = (
+            "DeepSeek_Harness_Amo_Speech",
+            "Astrbot_Amo_Speechsound",
+            "deepseek_harness_amo_speech",
+            "deepseek_harness_amo_speechsound",
+        )
+        base = ""
+        try:
+            from astrbot.core.utils.astrbot_path import get_astrbot_data_path
+            base = os.path.join(str(get_astrbot_data_path()), "config")
+        except Exception:
+            base = ""
+        data = {}
+        if base:
+            for name in names:
+                try:
+                    with open(os.path.join(base, name + "_config.json"), "r", encoding="utf-8") as fh:
+                        loaded = json.load(fh)
+                except Exception:
+                    continue
+                if isinstance(loaded, dict) and loaded:
+                    data = dict(loaded)
+                    break
+        data["web_prefix"] = "/sp"
+        try:
+            panel = self.config if isinstance(self.config, dict) else {}
+            for key in self.VOICE_TUNING_KEYS:
+                if key in panel and panel[key] is not None:
+                    data[key] = panel[key]
+        except Exception as exc:
+            logger.debug("[amo_voice] 终端配置覆盖失败: %s" % exc)
+        return data
+
+    def _speech(self):
+        """惰性创建语音实例；重复调用复用同一实例。"""
+        cached = getattr(self, "_speech_instance", None)
+        if cached is not None:
+            return cached
+        if getattr(self, "_speech_failed", False) or SpeechSoundPlugin is None:
+            return None
+        try:
+            inst = SpeechSoundPlugin(self.context, self._speech_config())
+            self._speech_instance = inst
+            self.speech = inst
+            logger.info("[amo_voice] 语音引擎已由 Terminal 内置接管")
+            return inst
+        except Exception as exc:
+            self._speech_failed = True
+            logger.error("[amo_voice] 终端内置语音启动失败: %s" % exc)
+            return None
+
+    @filter.command("speak", alias={"语音"})
+    async def cmd_speak(self, event: AstrMessageEvent):
+        speech = self._speech()
+        if speech is None:
+            yield event.plain_result("语音模块没加载起来")
+            return
+        async for item in speech.cmd_speak(event):
+            yield item
+
+    @filter.on_llm_response()
+    async def on_media_llm_response(self, event: AstrMessageEvent, resp):
+        speech = self._speech()
+        if speech is not None:
+            await speech.on_llm_response(event, resp)
+
+    @filter.on_decorating_result()
+    async def on_media_decorating_result(self, event: AstrMessageEvent):
+        speech = self._speech()
+        if speech is not None:
+            await speech.on_decorating_result(event)
+
+    @filter.on_llm_request()
+    async def on_media_llm_request(self, event: AstrMessageEvent, req):
+        speech = self._speech()
+        if speech is not None:
+            await speech.on_llm_request(event, req)
+
 
     async def _send_to_umo(self, umo, text, quote_id=None, group=False):
         text = clean_reply(text, self.cfg_int("max_reply_chars", 220))
