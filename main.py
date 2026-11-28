@@ -896,12 +896,27 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             self._image_config_migrated = True
             return
 
-        # 先读旧插件的安全快照，再读旧配置文件；后者有值时优先。
-        legacy = {}
+        schema = {}
+        try:
+            with open(os.path.join(self.plugin_dir, "_conf_schema.json"), "r", encoding="utf-8-sig") as fh:
+                schema = json.load(fh)
+        except Exception:
+            schema = {}
+
+        # 先读旧插件的安全快照；旧配置文件中的非默认值优先。
+        snapshot = {}
         snapshot_path = os.path.join(
             data_root, "plugin_data", "DeepSeek_Harness_Amo_Relationship", "config_snapshot.json"
         )
-        source_paths = [snapshot_path] + [
+        try:
+            with open(snapshot_path, "r", encoding="utf-8-sig") as fh:
+                payload = json.load(fh)
+            if isinstance(payload, dict):
+                snapshot = payload
+        except Exception:
+            pass
+        legacy = dict(snapshot)
+        config_paths = [
             os.path.join(config_dir, name + "_config.json")
             for name in (
                 "DeepSeek_Harness_Amo_Relationship",
@@ -910,23 +925,20 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 "astrbot_plugin_amo_image",
             )
         ]
-        for source in source_paths:
+        for source in config_paths:
             try:
                 with open(source, "r", encoding="utf-8-sig") as fh:
                     payload = json.load(fh)
-                if isinstance(payload, dict):
-                    legacy.update(payload)
+                if not isinstance(payload, dict):
+                    continue
+                for key, value in payload.items():
+                    default = (schema.get(key) or {}).get("default", object()) if isinstance(schema, dict) else object()
+                    if key not in legacy or value != default:
+                        legacy[key] = value
             except Exception:
                 continue
         if not legacy:
             return
-
-        schema = {}
-        try:
-            with open(os.path.join(self.plugin_dir, "_conf_schema.json"), "r", encoding="utf-8-sig") as fh:
-                schema = json.load(fh)
-        except Exception:
-            schema = {}
         changed = []
         for key in self.IMAGE_ENGINE_CONFIG_KEYS:
             if key not in legacy:
