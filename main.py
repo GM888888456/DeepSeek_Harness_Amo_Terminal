@@ -845,15 +845,109 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         "astrbot_plugin_amo_image",
     )
 
-    def _image_plugin(self):
-        """解析真正提供 draw_for() 的媒体引擎；兼容旧 Image 插件名。
+    IMAGE_ENGINE_CONFIG_KEYS = (
+        "enable", "mount_only", "provider", "api_base", "api_key", "model",
+        "size", "aspect_ratio", "n", "quality", "style", "chat_modalities",
+        "timeout", "custom_url", "custom_body", "custom_response_path",
+        "character_appearance", "core_appearance", "self_face_max_distance",
+        "self_face_archive_max", "character_gender", "camera_mode",
+        "character_persona", "use_memory_context", "memory_context_limit",
+        "allow_private", "allow_group", "require_at_in_group", "quote_in_group",
+        "keywords", "cooldown_seconds", "safe_mode", "blocked_reply",
+        "private_daily_limit", "group_daily_limit", "reply_prefix", "error_reply",
+        "request_style", "photo_keywords", "photo_default_prompt",
+        "character_hairstyle", "character_outfits", "outfit_change_keywords",
+        "outfit_change_cooldown_minutes", "lock_scene_to_schedule",
+        "negative_prompt", "batch_max",
+    )
 
-        MediaMixin 只依赖 draw_for/quota/change_outfit_for 等公开接口，
-        不直接依赖具体插件类。实例失效时由调用方清空 _image_star 后重试。
-        """
-        cached = getattr(self, "_image_star", None)
+    def _migrate_legacy_image_config(self):
+        """把旧相片插件自己的配置迁入 Terminal；只在新配置仍为 schema 默认值时补入。"""
+        if getattr(self, "_image_config_migrated", False):
+            return
+        self._image_config_migrated = True
+        try:
+            from astrbot.core.utils.astrbot_path import get_astrbot_data_path
+            data_root = str(get_astrbot_data_path())
+        except Exception:
+            data_root = ""
+        if not data_root:
+            return
+        config_dir = os.path.join(data_root, "config")
+        legacy_path = os.path.join(config_dir, "DeepSeek_Harness_Amo_Relationship_config.json")
+        marker_dir = os.path.join(data_root, "plugin_data", "DeepSeek_Harness_Amo_Terminal")
+        marker_path = os.path.join(marker_dir, "image_config_migrated.json")
+        if os.path.isfile(marker_path):
+            return
+        try:
+            with open(legacy_path, "r", encoding="utf-8-sig") as fh:
+                legacy = json.load(fh)
+            if not isinstance(legacy, dict):
+                return
+        except Exception:
+            return
+        schema = {}
+        try:
+            with open(os.path.join(self.plugin_dir, "_conf_schema.json"), "r", encoding="utf-8-sig") as fh:
+                schema = json.load(fh)
+        except Exception:
+            schema = {}
+        changed = []
+        for key in self.IMAGE_ENGINE_CONFIG_KEYS:
+            if key not in legacy:
+                continue
+            default = (schema.get(key) or {}).get("default", object()) if isinstance(schema, dict) else object()
+            try:
+                current = self.config.get(key, default)
+                if current == default or current is None or current == "":
+                    self.config[key] = legacy[key]
+                    changed.append(key)
+            except Exception:
+                continue
+        saved = not changed
+        if changed:
+            try:
+                target = str(getattr(self.config, "config_path", "") or "")
+                if not target:
+                    target = os.path.join(config_dir, "DeepSeek_Harness_Amo_Terminal_config.json")
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                payload = dict(self.config)
+                tmp = target + ".image-migrate.tmp"
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    json.dump(payload, fh, ensure_ascii=False, indent=2)
+                try:
+                    os.chmod(tmp, 0o600)
+                except Exception:
+                    pass
+                os.replace(tmp, target)
+                saved = True
+                logger.info("[amo_image] 已将旧相片配置迁入 Terminal：%d 项" % len(changed))
+            except Exception as exc:
+                logger.warning("[amo_image] 相片配置迁移暂未落盘，下次启动会重试：%s" % exc)
+        if saved:
+            try:
+                os.makedirs(marker_dir, exist_ok=True)
+                with open(marker_path, "w", encoding="utf-8") as fh:
+                    json.dump({"migrated_at": int(time.time()), "keys": changed}, fh, ensure_ascii=False)
+            except Exception:
+                pass
+
+    def _image_plugin(self):
+        """Terminal 自己持有生图引擎；旧 Relationship 插件只作为迁移期回退。"""
+        cached = getattr(self, "_image_engine", None)
         if cached is not None and callable(getattr(cached, "draw_for", None)):
             return cached
+        try:
+            self._migrate_legacy_image_config()
+            if AmoImageEngine is not None:
+                engine = AmoImageEngine(self.context, self.config)
+                self._image_engine = engine
+                self._image_star = engine
+                logger.info("[amo_image] 生图、自拍与自我形象档案已由 Terminal 内置接管")
+                return engine
+        except Exception as exc:
+            logger.error("[amo_image] Terminal 内置图片引擎启动失败：%s" % exc)
+        # 回退只为避免升级窗口内立即断图；正常运行不应走到这里。
         try:
             for name in self.IMAGE_PLUGIN_NAMES:
                 try:
@@ -865,24 +959,8 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                     self._image_star = plugin
                     return plugin
         except Exception as exc:
-            logger.debug("[amo] 按插件名解析生图引擎失败: %s" % exc)
-        try:
-            for meta in self.context.get_all_stars():
-                plugin = self._image_instance(meta)
-                if plugin is None:
-                    continue
-                marker = (
-                    str(getattr(meta, "name", "") or "") + " " +
-                    str(getattr(meta, "module_path", "") or "")
-                ).lower()
-                if "amo_image" in marker or "amo_relationship" in marker:
-                    self._image_star = plugin
-                    return plugin
-        except Exception as exc:
-            logger.debug("[amo] 扫描已加载插件寻找生图引擎失败: %s" % exc)
+            logger.debug("[amo] 旧生图插件回退解析失败: %s" % exc)
         return None
-
-
 
     #: 活动 → 发图概率桶（对应配置 image_share_prob_<桶>）
     SHARE_BUCKET_WORDS = {
