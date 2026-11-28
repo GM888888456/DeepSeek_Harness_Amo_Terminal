@@ -70,6 +70,25 @@ class LearnMixin:
         profile = self.db.touch_profile(
             uid, name, event.get_platform_name(), umo, group_id, private
         )
+        # 每次真实用户消息沉淀为 Relationship 互动记录；不迁移亲密阶段/好感数值。
+        try:
+            _relationship = getattr(self, "relationship_store", None)
+            if _relationship is not None and uid:
+                if not _relationship.get_person(uid):
+                    _relationship.upsert_person(
+                        str(name or uid), person_id=str(uid),
+                        aliases=[str(name)] if name else [],
+                        attributes={"platform": str(event.get_platform_name() or "")},
+                    )
+                _message_id = str(self._event_message_id(event) or "").strip()
+                _source_id = (str(event.get_platform_name() or "") + ":" + _message_id) if _message_id else None
+                _relationship.record_interaction(
+                    str(uid), summary=truncate(str(text or ""), 160),
+                    channel=str(event.get_platform_name() or ""),
+                    kind="conversation", source_event_id=_source_id,
+                )
+        except Exception as _interaction_exc:
+            logger.debug("[relationship] 互动记录失败: %s", _interaction_exc)
         if private and umo:
             self._record_channel(uid, umo, event.get_platform_name())
         if profile and not profile.get("is_admin") and uid in self.admin_uids:
