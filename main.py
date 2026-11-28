@@ -756,6 +756,13 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
 
     async def terminate(self):
         self._running = False
+        # 语音实例不是独立 Star，由 Terminal 负责在卸载时落盘。
+        try:
+            speech = getattr(self, "_speech_instance", None)
+            if speech is not None:
+                await speech.terminate()
+        except Exception as exc:
+            logger.debug("[amo_voice] 退出保存失败: %s" % exc)
         for task in list(self._tasks):
             try:
                 task.cancel()
