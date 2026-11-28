@@ -1,7 +1,7 @@
 name: DeepSeek_Harness_Amo_Terminal
 display_name: DeepSeek Harness Amo Terminal
 plugin_order: 10
-desc: 我想永远陪着你-终端：人格与聊天本体、守护心跳、记忆（跨对话/思维图/用户画像）、动态日程、心流判定、七情六欲、影像与语音入口
+desc: 我想永远陪着你-终端：人格与聊天本体、守护心跳、记忆（跨对话/思维图/用户画像）、动态日程、心流判定、七情六欲、影像（生图、图片理解、自拍档案）与语音运行时
 short_desc: 我想永远陪着你-终端
 version: 1.1.7
 author: 墨辞烟
