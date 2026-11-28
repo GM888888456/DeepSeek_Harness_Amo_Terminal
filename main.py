@@ -160,6 +160,8 @@ except Exception:
 
 
 
+PLUGIN_VERSION = "1.1.7"  # tools/check_version.py 静态校验入口
+
 try:  # 版本号以 metadata.yaml 为准，避免两处不一致
     import yaml as _amo_meta_yaml
     with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "metadata.yaml"),
