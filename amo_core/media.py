@@ -633,4 +633,5 @@ __all__ = [
     "leak_deflect_text",
     "looks_like_model_leak",
     "MediaMixin",
+    "AmoImageEngine",
 ]
