@@ -3838,19 +3838,19 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
     # 语音插件（我想永远陪着你-语音）的设置：key, 类型, 标题, 说明, 默认值
     # 只放行为类开关；后端 / key / 音色仍然在语音插件自己的配置页填。
     VOICE_SETTING_KEYS = (
-        ("enable", "bool", "启用语音", "总开关：关掉后她发不了语音，也不会有兜底转语音。", True),
-        ("group_enable", "bool", "允许群聊发语音", "默认关。群聊里还受下面的「每天条数」和「最小间隔」限制。", False),
-        ("auto_fallback", "bool", "兜底转语音", "你明说要语音、她只回了文字时，补一条语音。", True),
-        ("read_relation", "bool", "参考关系度决定语气", "从陪伴这边读关系阶段，越亲近越容易开口、语气越软。", True),
-        ("schedule_aware", "bool", "参考日程决定场景", "按在家里 / 在外面 / 在睡觉切到对应场景音色。", True),
-        ("speak_threshold", "float", "开口阈值（0-1，越高越少开口）", "兜底规则用的及格线。她主动调工具发语音时不受这个限制。", 0.6),
-        ("daily_quota", "int", "群聊每天语音条数上限", "所有群共用这一份额度，0 = 不限。私聊不占这个额度。", 10),
-        ("cooldown_seconds", "int", "群聊两条语音最小间隔（秒）", "只管群聊，防刷屏。", 240),
-        ("private_cooldown_seconds", "int", "私聊两条语音最小间隔（秒）", "0 = 私聊不冷却（推荐）。", 0),
-        ("max_chars", "int", "每段字数上限", "整条语音总长 = 这个数 × 最多分段数，超过就退回文字。", 80),
-        ("max_segments", "int", "最多分段数", "长句按标点切段，最多切几段。", 2),
-        ("speed", "float", "语速（0.5-2.0）", "1.0 是正常语速。", 1.0),
-        ("volume", "float", "音量（0.1-2.0）", "", 1.0),
+        ("voice_enable", "bool", "启用语音", "语音总开关；不影响图片生成。", True),
+        ("voice_group_enable", "bool", "允许群聊发语音", "默认关闭；群聊还受每天条数和最小间隔限制。", False),
+        ("voice_auto_fallback", "bool", "兜底转语音", "明确要求语音但只收到文字时，补发语音。", True),
+        ("voice_read_relation", "bool", "参考关系度决定语气", "参考终端内的关系阶段调整开口与语气。", True),
+        ("voice_schedule_aware", "bool", "参考日程决定场景", "按在家、外出、睡觉等场景选择音色。", True),
+        ("voice_speak_threshold", "float", "语音开口阈值（0-1）", "兜底规则使用；越高越少自动开口。", 0.6),
+        ("voice_daily_quota", "int", "群聊每天语音条数上限", "所有群共用；0 表示不限，私聊不占额度。", 10),
+        ("voice_cooldown_seconds", "int", "群聊语音最小间隔（秒）", "只限制群聊，防止连续刷屏。", 240),
+        ("voice_private_cooldown_seconds", "int", "私聊语音最小间隔（秒）", "0 表示私聊不冷却。", 0),
+        ("voice_max_chars", "int", "每段语音字数上限", "整条语音总长约为该值乘最多分段数。", 80),
+        ("voice_max_segments", "int", "最多语音分段数", "长句按标点切分，最多分几段。", 2),
+        ("voice_speed", "float", "语音语速（0.5-2.0）", "1.0 为正常语速。", 1.0),
+        ("voice_volume", "float", "语音音量（0.1-2.0）", "1.0 为正常音量。", 1.0),
     )
 
 
