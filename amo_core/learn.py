@@ -240,7 +240,7 @@ class LearnMixin:
             return
         existing = set()
         try:
-            for edge in self.db.list_relations():
+            for edge in self._relationship_edges_legacy():
                 existing.add(tuple(sorted([str(edge.get("a_uid") or ""), str(edge.get("b_uid") or "")])))
         except Exception:
             pass
@@ -265,7 +265,7 @@ class LearnMixin:
             return
         for a, b, relation, note in writes:
             try:
-                if not self.db.upsert_relation(a, b, relation, note):
+                if not self._relationship_write_edge(a, b, relation, note):
                     continue
                 await self._push_relation_to_data(a, b, relation, note)
                 logger.debug("[amo] 推测关系：%s ↔ %s（%s）" % (a, b, note))
@@ -325,7 +325,7 @@ class LearnMixin:
 
         existing = {}
         try:
-            for edge in self.db.list_relations():
+            for edge in self._relationship_edges_legacy():
                 pair = tuple(sorted([str(edge.get("a_uid") or ""), str(edge.get("b_uid") or "")]))
                 existing[pair] = (str(edge.get("relation") or ""), str(edge.get("note") or ""))
         except Exception as exc:
@@ -341,7 +341,7 @@ class LearnMixin:
         # 一次最多写 300 条，人物很多时分成几轮补齐，别把 tick 卡太久
         for a_uid, b_uid, relation, note in plan[:300]:
             try:
-                if not self.db.upsert_relation(a_uid, b_uid, relation, note):
+                if not self._relationship_write_edge(a_uid, b_uid, relation, note):
                     continue
                 await self._push_relation_to_data(a_uid, b_uid, relation, note)
             except Exception as exc:
