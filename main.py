@@ -3888,7 +3888,7 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
 
 
     def _company_bank_action(self, action: str, target: str = "") -> dict:
-        """公司↔银行窄桥：Terminal 是唯一协调者，Market/Finance 不互相 import。"""
+        """公司↔银行窄桥：Terminal 是唯一协调者；应收融资也必须经过这里。"""
         mk = self._market_plugin() if hasattr(self, "_market_plugin") else None
         fin = self._finance() if hasattr(self, "_finance") else None
         if mk is None or fin is None:
@@ -3908,19 +3908,77 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
         nums = re.findall(r"(?<![A-Za-z])(?:\d+(?:\.\d+)?)", text_value)
         amount = float(nums[0]) if nums else 0.0
         months = int(float(nums[1])) if len(nums) > 1 else 12
+        ref_match = re.search(r"\b(?:CTR|INV)-\d+\b", text_value, re.I)
+        collateral_ref = ref_match.group(0) if ref_match else ""
+        contract_id = collateral_ref if collateral_ref.upper().startswith("CTR-") else ""
+        invoice_id = collateral_ref if collateral_ref.upper().startswith("INV-") else ""
 
         if action in ("loan_apply", "loan"):
             if amount <= 0:
                 return {"ok": False, "reason": "请给出贷款金额（万元）"}
+
+            # 普通流贷仍走原授信；带合同/发票编号时，切换为真实应收质押融资。
+            collateral_type = ""
+            collateral_amount = 0.0
+            eligible_amount = 0.0
+            if invoice_id:
+                inv = next((x for x in snap.get("invoices", []) if str(x.get("id")) == invoice_id), None)
+                if not inv:
+                    return {"ok": False, "reason": "找不到这张发票"}
+                contract_id = str(inv.get("contract") or "")
+            if contract_id:
+                contracts = snap.get("contracts") or []
+                contract = next((x for x in contracts if str(x.get("id")) == contract_id), None)
+                if not contract:
+                    return {"ok": False, "reason": "找不到这份合同"}
+                remaining = max(0.0, float(contract.get("amount") or 0) - float(contract.get("received") or 0))
+                pledged = sum(
+                    max(0.0, float(x.get("pledged_amount") or 0) - float(x.get("released_amount") or 0))
+                    for x in (snap.get("pledged_receivables") or [])
+                    if str(x.get("contract_id")) == contract_id and x.get("status") == "active"
+                )
+                available = max(0.0, remaining - pledged)
+                # 第一版按合格应收 70% 的融资率计算可融资额。
+                eligible_amount = round(available * 0.70, 2)
+                if amount > eligible_amount + 0.01:
+                    return {"ok": False, "stage": "collateral",
+                            "reason": "应收可融资额度不足：可用应收 %.2f 万，70%% 融资上限 %.2f 万，本次申请 %.2f 万"
+                                      % (available, eligible_amount, amount)}
+                collateral_amount = round(amount / 0.70, 2)
+                collateral_type = "receivable"
+
             cash = float(snap.get("operating_cash") or 0)
             receivable = float(snap.get("receivable") or 0)
             debt = float(snap.get("debt") or 0)
             asset_base = max(1.0, cash + receivable)
             debt_ratio = min(95.0, max(0.0, debt / (asset_base + debt) * 100.0))
-            collateral = max(1.2, receivable / amount if amount else 1.2)
-            res = bl.apply_loan(bank_dir, "中国计算智脑集团", amount, months,
-                                "流动资金贷款", debt_ratio, collateral)
-            return {"ok": bool(res.get("ok")), "stage": "approval", "data": res,
+            collateral_cover = max(1.2, collateral_amount / amount if collateral_amount else receivable / amount if amount else 1.2)
+            res = bl.apply_loan(
+                bank_dir, "中国计算智脑集团", amount, months, "流动资金贷款",
+                debt_ratio, collateral_cover,
+                collateral_type=collateral_type,
+                collateral_amount=collateral_amount,
+                eligible_amount=eligible_amount,
+                collateral_ref=contract_id or invoice_id,
+            )
+            if not res.get("ok"):
+                return {"ok": False, "stage": "approval", "data": res,
+                        "company": cl.snapshot(company_dir)}
+            loan = res.get("loan") or {}
+            loan_id = str(loan.get("id") or "")
+            if collateral_type:
+                pledge = cl.pledge_receivable(company_dir, loan_id, contract_id,
+                                              collateral_amount, invoice_id)
+                if not pledge.get("ok"):
+                    bl.cancel_loan(bank_dir, loan_id, "应收质押建立失败")
+                    return {"ok": False, "stage": "collateral", "data": pledge}
+                confirmed = bl.confirm_collateral(bank_dir, loan_id)
+                if not confirmed.get("ok"):
+                    cl.release_receivable(company_dir, loan_id, reason="银行质押确认失败")
+                    bl.cancel_loan(bank_dir, loan_id, "银行质押确认失败")
+                    return {"ok": False, "stage": "collateral", "data": confirmed}
+                loan = confirmed.get("loan") or loan
+            return {"ok": True, "stage": "approval", "data": {"ok": True, "loan": loan, "plan": res.get("plan")},
                     "company": cl.snapshot(company_dir)}
 
         if action in ("loan_disburse", "loan_receive"):
@@ -3929,16 +3987,17 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
                 return {"ok": False, "reason": "缺少 loan_id"}
             res = bl.disburse(bank_dir, loan_id)
             if not res.get("ok"):
+                # 审批成功但放款失败时，不能留下孤儿质押/授信占用。
+                cl.release_receivable(company_dir, loan_id, reason="放款失败")
+                bl.cancel_loan(bank_dir, loan_id, "放款失败")
                 return {"ok": False, "stage": "disbursement", "data": res}
             loan = res.get("loan") or {}
             received = cl.loan_received(company_dir, loan_id, float(loan.get("principal") or 0),
                                         int(loan.get("months") or 12), float(loan.get("rate") or 0),
                                         "邮储银行")
             if not received.get("ok"):
-                return {"ok": False, "stage": "company_posting", "data": received,
-                        "loan": loan}
-            return {"ok": True, "stage": "disbursement", "loan": loan,
-                    "company": received}
+                return {"ok": False, "stage": "company_posting", "data": received, "loan": loan}
+            return {"ok": True, "stage": "disbursement", "loan": loan, "company": received}
 
         if action in ("loan_repay", "repay_loan"):
             parts = text_value.split()
@@ -3961,6 +4020,9 @@ class HumanCorePlugin(WebApiMixin, ContextMixin, CommandMixin, TickerMixin, Repl
             posted = cl.loan_repaid(company_dir, loan_id, paid, principal_paid, interest_paid)
             if not posted.get("ok"):
                 return {"ok": False, "stage": "company_posting", "data": posted}
+            # 贷款结清才释放剩余质押；客户回款则由 Market 自己按应收比例释放。
+            if float((res.get("loan") or {}).get("outstanding") or 0) <= 0.01:
+                cl.release_receivable(company_dir, loan_id, reason="贷款结清")
             return {"ok": True, "stage": "repayment", "bank": res, "company": posted}
 
         return {"ok": False, "reason": "不认识的融资动作：" + action}
