@@ -1334,19 +1334,32 @@ class AmoImageEngine:
     # ---------- 手动换装（/换一套衣服）----------
 
     def _plugin_data_dir(self):
-        """媒体资产兼容目录：沿用旧 Relationship 数据目录，避免参考图/自拍档案丢失。"""
+        """Terminal 媒体资产目录；首次启动只迁移旧图片资产，不碰关系数据库。"""
         try:
             from astrbot.core.utils.astrbot_path import get_astrbot_data_path
             data_root = str(get_astrbot_data_path())
         except Exception:
-            data_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            plugins_root = os.path.dirname(str(getattr(self, "plugin_dir", "") or ""))
+            data_root = os.path.dirname(plugins_root) if plugins_root else os.getcwd()
         legacy = os.path.join(data_root, "plugin_data", "DeepSeek_Harness_Amo_Relationship")
-        terminal = os.path.join(data_root, "plugin_data", "DeepSeek_Harness_Amo_Terminal")
-        target = legacy if os.path.isdir(legacy) else os.path.join(terminal, "media_image")
-        try:
-            os.makedirs(target, exist_ok=True)
-        except Exception:
-            pass
+        target = os.path.join(data_root, "plugin_data", "DeepSeek_Harness_Amo_Terminal", "media_image")
+        os.makedirs(target, exist_ok=True)
+        marker = os.path.join(target, ".legacy_assets_migrated")
+        if os.path.isdir(legacy) and not os.path.exists(marker):
+            try:
+                import shutil
+                for name in ("ref_body.png", "look_state.json", "face_lock.json", "scene_lock.json"):
+                    src, dst = os.path.join(legacy, name), os.path.join(target, name)
+                    if os.path.isfile(src) and not os.path.exists(dst):
+                        shutil.copy2(src, dst)
+                src_dir, dst_dir = os.path.join(legacy, "photo_cache"), os.path.join(target, "photo_cache")
+                if os.path.isdir(src_dir) and not os.path.exists(dst_dir):
+                    shutil.copytree(src_dir, dst_dir)
+                with open(marker, "w", encoding="utf-8") as fh:
+                    fh.write(str(int(time.time())))
+                logger.info("[amo_image] 已迁移旧自拍/参考图资产到 Terminal 媒体目录")
+            except Exception as exc:
+                logger.warning("[amo_image] 旧媒体资产迁移未完成，下次启动会重试：%s" % exc)
         return target
 
     def _look_state_path(self):
