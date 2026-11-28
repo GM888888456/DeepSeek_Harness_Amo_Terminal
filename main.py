@@ -36,7 +36,6 @@ try:
     from .amo_core.vitals import *  # noqa: F401,F403
     from .amo_core.memory_ops import *  # noqa: F401,F403
     from .amo_core.media import *  # noqa: F401,F403
-    from .amo_core.media_image import AmoImageEngine  # noqa: F401
     from .amo_core.shared import *  # noqa: F401,F403
     from .amo_core.relations import *  # noqa: F401,F403
     from .amo_core.relationship_store import RelationshipStore  # noqa: F401
@@ -74,7 +73,6 @@ except ImportError:  # 非包方式加载时的回退
     from amo_core.vitals import *  # noqa: F401,F403
     from amo_core.memory_ops import *  # noqa: F401,F403
     from amo_core.media import *  # noqa: F401,F403
-    from amo_core.media_image import AmoImageEngine  # noqa: F401
     from amo_core.shared import *  # noqa: F401,F403
     from amo_core.relations import *  # noqa: F401,F403
     from amo_core.relationship_store import RelationshipStore  # noqa: F401
